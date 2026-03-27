@@ -1,0 +1,22 @@
+# Binaries
+bin/
+api
+worker
+*.exe
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Exports
+exports/
+
+# Test
+coverage.out
