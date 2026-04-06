@@ -244,12 +244,15 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 			return nil, fmt.Errorf("sync service is not configured")
 		}
 
+		p.logger.Info().Str("workspace_id", workspaceID.String()).Msg("sync workspace started")
+
 		// If metadata contains seller_cabinet_id, sync only that cabinet
 		if payload.Metadata != nil {
 			if meta, ok := payload.Metadata.(map[string]any); ok {
 				if cabIDStr, ok := meta["seller_cabinet_id"].(string); ok && cabIDStr != "" {
 					cabinetID, parseErr := uuid.Parse(cabIDStr)
 					if parseErr == nil {
+						p.logger.Info().Str("cabinet_id", cabIDStr).Msg("starting single cabinet sync")
 						summary, syncErr := p.syncService.SyncSingleCabinet(ctx, workspaceID, cabinetID)
 						result := map[string]any{
 							"cabinets":       1,

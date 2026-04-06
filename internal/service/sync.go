@@ -24,7 +24,9 @@ type WBSyncClient interface {
 	ListCampaigns(ctx context.Context, token string) ([]wb.WBCampaignDTO, error)
 	GetCampaignStats(ctx context.Context, token string, campaignIDs []int, dateFrom, dateTo string) ([]wb.WBCampaignStatDTO, error)
 	ListSearchClusters(ctx context.Context, token string, campaignID int) ([]wb.WBSearchClusterDTO, error)
+	ListSearchClustersWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]wb.WBSearchClusterDTO, error)
 	GetSearchClusterStats(ctx context.Context, token string, campaignID int) ([]wb.WBSearchClusterStatDTO, error)
+	GetSearchClusterStatsWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]wb.WBSearchClusterStatDTO, error)
 	ListProducts(ctx context.Context, token string) ([]wb.WBProductDTO, error)
 }
 
@@ -103,13 +105,17 @@ func NewSyncService(queries *sqlcgen.Queries, wbClient WBSyncClient, encryptionK
 
 // SyncSingleCabinet syncs campaigns, stats, phrases, products for ONE specific cabinet.
 func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (SyncSummary, error) {
+	s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("[sync] loading cabinet token")
 	cabinets, err := s.listSingleCabinet(ctx, cabinetID)
 	if err != nil {
+		s.logger.Error().Err(err).Str("cabinet_id", cabinetID.String()).Msg("[sync] failed to load cabinet")
 		return SyncSummary{}, err
 	}
 	if len(cabinets) == 0 {
+		s.logger.Warn().Str("cabinet_id", cabinetID.String()).Msg("[sync] no cabinets found")
 		return SyncSummary{}, nil
 	}
+	s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("[sync] cabinet token loaded, starting sync")
 
 	summary := SyncSummary{Cabinets: 1}
 
@@ -151,26 +157,48 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID))
 	}
 
-	// Stats — scoped to single cabinet (fix: audit CRITICAL #1)
+	// Stats — scoped to single cabinet
+	s.logger.Info().Str("cabinet_id", cabinetID.String()).Int("campaigns", summary.Campaigns).Msg("[sync] phase 2: syncing stats")
 	statsSummary, statsErr := s.syncCampaignStatsForCabinet(ctx, workspaceID, cabinetID, cabinets[0].token)
 	if statsErr != nil {
+		s.logger.Error().Err(statsErr).Msg("[sync] stats failed")
 		summary.addIssue("stats", cabinetID.String(), "sync stats: %v", statsErr)
 	}
 	summary.CampaignStats = statsSummary.CampaignStats
+	s.logger.Info().Int("campaign_stats", summary.CampaignStats).Msg("[sync] phase 2 done")
 
-	// Phrases — scoped to single cabinet
-	phrasesSummary, phrasesErr := s.syncPhrasesForCabinet(ctx, workspaceID, cabinetID, cabinets[0].token)
+	// Phrases + Products — run in PARALLEL (different WB APIs, no rate conflict)
+	s.logger.Info().Msg("[sync] phase 3+4: syncing phrases and products in parallel")
+	var phrasesSummary, productsSummary SyncSummary
+	var phrasesErr, productsErr error
+
+	syncWg := make(chan struct{}, 2)
+	go func() {
+		phrasesSummary, phrasesErr = s.syncPhrasesForCabinet(ctx, workspaceID, cabinetID, cabinets[0].token)
+		if phrasesErr != nil {
+			s.logger.Error().Err(phrasesErr).Msg("[sync] phrases failed")
+		}
+		syncWg <- struct{}{}
+	}()
+	go func() {
+		productsSummary, productsErr = s.syncProductsForCabinet(ctx, workspaceID, cabinetID, cabinets[0].token)
+		if productsErr != nil {
+			s.logger.Error().Err(productsErr).Msg("[sync] products failed")
+		}
+		syncWg <- struct{}{}
+	}()
+	<-syncWg
+	<-syncWg
+
 	if phrasesErr != nil {
 		summary.addIssue("phrases", cabinetID.String(), "sync phrases: %v", phrasesErr)
 	}
 	summary.Phrases = phrasesSummary.Phrases
-
-	// Products — scoped to single cabinet
-	productsSummary, productsErr := s.syncProductsForCabinet(ctx, workspaceID, cabinetID, cabinets[0].token)
 	if productsErr != nil {
 		summary.addIssue("products", cabinetID.String(), "sync products: %v", productsErr)
 	}
 	summary.Products = productsSummary.Products
+	s.logger.Info().Int("phrases", summary.Phrases).Int("products", summary.Products).Msg("[sync] phase 3+4 done")
 
 	s.logger.Info().
 		Str("workspace_id", workspaceID.String()).
@@ -269,6 +297,10 @@ func (s *SyncService) SyncCampaignStats(ctx context.Context, workspaceID uuid.UU
 		wbIDs := make([]int, 0, len(campaigns))
 		campaignByWBID := make(map[int]sqlcgen.Campaign, len(campaigns))
 		for _, campaign := range campaigns {
+			// Only active/paused — skip 90% of inactive campaigns to avoid rate limits
+			if campaign.Status != "active" && campaign.Status != "paused" {
+				continue
+			}
 			wbIDs = append(wbIDs, int(campaign.WbCampaignID))
 			campaignByWBID[int(campaign.WbCampaignID)] = campaign
 		}
@@ -330,12 +362,24 @@ func (s *SyncService) SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (S
 			return summary, apperror.New(apperror.ErrInternal, "failed to list campaigns for cabinet")
 		}
 
+		// Fetch WB campaigns ONCE per cabinet to get NMIDs
+		wbCampaigns, wbErr := s.wbClient.ListCampaigns(ctx, cabinet.token)
+		nmIDMap := make(map[int][]int64)
+		if wbErr == nil {
+			for _, wbCamp := range wbCampaigns {
+				nmIDMap[wbCamp.AdvertID] = wbCamp.NMIDs
+			}
+		}
+
 		for _, campaign := range campaigns {
-			// Skip non-active campaigns to avoid hitting WB rate limits (673 campaigns × 2 API calls each = 1346 calls)
 			if campaign.Status != "active" && campaign.Status != "paused" {
 				continue
 			}
-			clusters, clusterErr := s.wbClient.ListSearchClusters(ctx, cabinet.token, int(campaign.WbCampaignID))
+			nmIDs := nmIDMap[int(campaign.WbCampaignID)]
+			if len(nmIDs) == 0 {
+				continue
+			}
+			clusters, clusterErr := s.wbClient.ListSearchClustersWithNMIDs(ctx, cabinet.token, int(campaign.WbCampaignID), nmIDs)
 			if clusterErr != nil {
 				summary.addIssue("phrases.list_clusters", fmt.Sprintf("%d", campaign.WbCampaignID), "list search clusters: %v", clusterErr)
 				continue
@@ -520,6 +564,15 @@ func stringPtrToPgText(value *string) pgtype.Text {
 	return pgtype.Text{String: *value, Valid: true}
 }
 
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -540,13 +593,17 @@ func (s *SyncService) syncCampaignStatsForCabinet(ctx context.Context, workspace
 
 	summary := SyncSummary{Cabinets: 1}
 
-	// Collect campaign WB IDs for batch stats request
+	// Only fetch stats for active/paused campaigns (673 → ~83, saves 90% API calls)
 	campaignIDs := make([]int, 0, len(campaigns))
 	campaignMap := make(map[int]sqlcgen.Campaign)
 	for _, c := range campaigns {
+		if c.Status != "active" && c.Status != "paused" {
+			continue
+		}
 		campaignIDs = append(campaignIDs, int(c.WbCampaignID))
 		campaignMap[int(c.WbCampaignID)] = c
 	}
+	s.logger.Info().Int("active_campaigns", len(campaignIDs)).Int("total_campaigns", len(campaigns)).Msg("[sync] stats: filtered to active campaigns")
 
 	dateFrom := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
 	dateTo := time.Now().Format("2006-01-02")
@@ -583,6 +640,7 @@ func (s *SyncService) syncCampaignStatsForCabinet(ctx context.Context, workspace
 }
 
 // syncPhrasesForCabinet syncs phrases only for campaigns belonging to a specific cabinet.
+// Optimized: fetches ListCampaigns ONCE to get all NMIDs, then uses WithNMIDs methods.
 func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) (SyncSummary, error) {
 	campaigns, err := s.queries.ListCampaignsBySellerCabinet(ctx, sqlcgen.ListCampaignsBySellerCabinetParams{
 		SellerCabinetID: uuidToPgtype(cabinetID),
@@ -593,32 +651,92 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 		return SyncSummary{}, err
 	}
 
+	// Fetch all WB campaigns ONCE to get NMIDs mapping (saves N extra API calls)
+	wbCampaigns, wbErr := s.wbClient.ListCampaigns(ctx, token)
+	nmIDMap := make(map[int][]int64)
+	if wbErr == nil {
+		for _, wbCamp := range wbCampaigns {
+			nmIDMap[wbCamp.AdvertID] = wbCamp.NMIDs
+		}
+	} else {
+		s.logger.Warn().Err(wbErr).Msg("[sync] failed to fetch WB campaigns for NMIDs, will skip normquery")
+	}
+
 	summary := SyncSummary{Cabinets: 1}
 	for _, campaign := range campaigns {
 		// Skip non-active campaigns to avoid rate limits
 		if campaign.Status != "active" && campaign.Status != "paused" {
 			continue
 		}
-		clusters, fetchErr := s.wbClient.ListSearchClusters(ctx, token, int(campaign.WbCampaignID))
+		wbCampaignID := int(campaign.WbCampaignID)
+		campaignID := uuidFromPgtype(campaign.ID)
+		nmIDs := nmIDMap[wbCampaignID]
+		if len(nmIDs) == 0 {
+			continue // No products linked — skip
+		}
+
+		// Rate-limit delay between campaigns (normquery API shares fullstats limit)
+		if summary.Phrases > 0 {
+			if err := sleepWithContext(ctx, time.Second); err != nil {
+				return summary, err
+			}
+		}
+
+		clusters, fetchErr := s.wbClient.ListSearchClustersWithNMIDs(ctx, token, wbCampaignID, nmIDs)
 		if fetchErr != nil {
-			summary.addIssue("phrases.fetch", fmt.Sprintf("%d", campaign.WbCampaignID), "fetch: %v", fetchErr)
+			summary.addIssue("phrases.fetch", fmt.Sprintf("%d", wbCampaignID), "fetch: %v", fetchErr)
 			continue
 		}
+
+		phraseIDsByCluster := make(map[int64]uuid.UUID, len(clusters))
 		for _, clusterDTO := range clusters {
-			phrase := wb.MapSearchClusterDTO(clusterDTO, workspaceID, uuidFromPgtype(campaign.ID))
-			if _, upsertErr := s.queries.UpsertPhrase(ctx, sqlcgen.UpsertPhraseParams{
+			// FIX: correct argument order — (dto, campaignID, workspaceID)
+			phrase := wb.MapSearchClusterDTO(clusterDTO, campaignID, workspaceID)
+			row, upsertErr := s.queries.UpsertPhrase(ctx, sqlcgen.UpsertPhraseParams{
 				WorkspaceID: uuidToPgtype(workspaceID),
-				CampaignID:  uuidToPgtype(phrase.CampaignID),
+				CampaignID:  uuidToPgtype(campaignID),
 				WbClusterID: phrase.WBClusterID,
 				Keyword:     phrase.Keyword,
 				CurrentBid:  int64PtrToPgInt8(phrase.CurrentBid),
 				Count:       int32PtrToPgInt4(phrase.Count),
+			})
+			if upsertErr != nil {
+				s.logger.Warn().Err(upsertErr).Int64("cluster_id", clusterDTO.ClusterID).Msg("upsert phrase failed")
+				continue
+			}
+			phraseIDsByCluster[clusterDTO.ClusterID] = uuidFromPgtype(row.ID)
+			summary.Phrases++
+		}
+
+		// Sync phrase stats — uses WithNMIDs to avoid extra ListCampaigns call
+		clusterStats, statsErr := s.wbClient.GetSearchClusterStatsWithNMIDs(ctx, token, wbCampaignID, nmIDs)
+		if statsErr != nil {
+			summary.addIssue("phrase_stats.fetch", fmt.Sprintf("%d", wbCampaignID), "stats: %v", statsErr)
+			continue
+		}
+		for _, statDTO := range clusterStats {
+			phraseID, ok := phraseIDsByCluster[statDTO.ClusterID]
+			if !ok {
+				continue
+			}
+			stat, mapErr := wb.MapSearchClusterStatDTO(statDTO, phraseID)
+			if mapErr != nil {
+				continue
+			}
+			if _, upsertErr := s.queries.UpsertPhraseStat(ctx, sqlcgen.UpsertPhraseStatParams{
+				PhraseID:    uuidToPgtype(stat.PhraseID),
+				Date:        pgtype.Date{Time: stat.Date, Valid: true},
+				Impressions: stat.Impressions,
+				Clicks:      stat.Clicks,
+				Spend:       stat.Spend,
 			}); upsertErr != nil {
 				continue
 			}
-			summary.Phrases++
+			summary.PhraseStats++
 		}
 	}
+
+	s.logger.Info().Int("phrases", summary.Phrases).Int("phrase_stats", summary.PhraseStats).Msg("[sync] phrases+stats done for cabinet")
 	return summary, summary.Error()
 }
 

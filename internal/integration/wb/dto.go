@@ -27,6 +27,19 @@ type WBCampaignStatDTO struct {
 	Orders       *int64   `json:"orders,omitempty"`
 	OrderedItems *int64   `json:"ordered_items,omitempty"`
 	Revenue      *float64 `json:"revenue,omitempty"`
+	Atbs         *int64   `json:"atbs,omitempty"`     // Добавления в корзину
+	Canceled     *int64   `json:"canceled,omitempty"`  // Технические отмены
+	CR           *float64 `json:"cr,omitempty"`        // Конверсия
+	CPC          *float64 `json:"cpc,omitempty"`       // Стоимость клика (коп)
+	CTR          *float64 `json:"ctr,omitempty"`       // Кликабельность
+}
+
+// WBSearchClusterStatDTOExtended has additional fields from normquery v1.
+type WBSearchClusterStatDTOExtended struct {
+	WBSearchClusterStatDTO
+	AvgPos *float64 `json:"avg_pos,omitempty"` // Средняя позиция
+	Atbs   *int64   `json:"atbs,omitempty"`    // Добавления в корзину
+	Orders *int64   `json:"orders,omitempty"`  // Заказы
 }
 
 // WBSearchClusterDTO represents a Search Cluster from the WB Advertising API.

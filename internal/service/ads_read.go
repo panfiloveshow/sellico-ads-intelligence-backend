@@ -447,6 +447,19 @@ func (s *AdsReadService) buildProductSummaries(data *adsWorkspaceData, dateFrom,
 
 		cabinet := data.cabinets[product.SellerCabinetID]
 		campaigns := dedupeCampaigns(data.productCampaigns[product.ID])
+
+		// Скрываем товары без связанных кампаний с данными за период
+		hasAnyStats := false
+		for _, c := range campaigns {
+			if len(data.campaignStatsByID[c.ID]) > 0 || c.Status == "active" || c.Status == "paused" {
+				hasAnyStats = true
+				break
+			}
+		}
+		if len(campaigns) > 0 && !hasAnyStats {
+			continue
+		}
+
 		queries := s.queriesForCampaigns(data, campaigns)
 		querySummaries := s.querySummariesForPhrases(data, queries, dateFrom, dateTo)
 		metrics, note := s.aggregateProductMetrics(data, product.ID, campaigns, dateFrom, dateTo)
@@ -504,6 +517,12 @@ func (s *AdsReadService) buildCampaignSummaries(data *adsWorkspaceData, dateFrom
 			continue
 		}
 		if filter.Name != "" && !strings.Contains(strings.ToLower(campaign.Name), strings.ToLower(filter.Name)) {
+			continue
+		}
+
+		// Скрываем кампании без данных за период (кроме active/paused)
+		hasStats := len(data.campaignStatsByID[campaign.ID]) > 0
+		if !hasStats && campaign.Status != "active" && campaign.Status != "paused" {
 			continue
 		}
 
@@ -793,6 +812,12 @@ func aggregateCampaignStats(stats []domain.CampaignStat, _, _ time.Time) domain.
 		if stat.Revenue != nil {
 			result.Revenue += *stat.Revenue
 		}
+		if stat.Atbs != nil {
+			result.Atbs += *stat.Atbs
+		}
+		if stat.Canceled != nil {
+			result.Canceled += *stat.Canceled
+		}
 	}
 	return finalizeMetrics(result, "exact")
 }
@@ -856,6 +881,9 @@ func finalizeMetrics(metrics domain.AdsMetricsSummary, mode string) domain.AdsMe
 	}
 	if metrics.Revenue > 0 {
 		metrics.DRR = float64(metrics.Spend) / float64(metrics.Revenue) * 100
+	}
+	if metrics.Clicks > 0 && metrics.Atbs > 0 {
+		metrics.CartRate = float64(metrics.Atbs) / float64(metrics.Clicks)
 	}
 	return metrics
 }

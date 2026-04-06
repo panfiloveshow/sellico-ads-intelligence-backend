@@ -96,6 +96,8 @@ func MapCampaignStatDTO(dto WBCampaignStatDTO, campaignID uuid.UUID) (domain.Cam
 		Spend:       roundRubles(dto.Sum),
 		Orders:      orders,
 		Revenue:     revenue,
+		Atbs:        dto.Atbs,
+		Canceled:    dto.Canceled,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil

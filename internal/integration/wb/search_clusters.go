@@ -84,6 +84,105 @@ func (c *Client) GetSearchClusterStats(ctx context.Context, token string, campai
 	return aggregatedToClusterStats(campaignID, dateTo, aggregated), nil
 }
 
+// ListSearchClustersWithNMIDs fetches search clusters without calling ListCampaigns internally.
+// Caller provides nmIDs directly (from DB or pre-fetched campaign data).
+func (c *Client) ListSearchClustersWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]WBSearchClusterDTO, error) {
+	aggregated, _, err := c.loadNormQueryAggregatesWithNMIDs(ctx, token, campaignID, nmIDs)
+	if err != nil {
+		return nil, err
+	}
+	return aggregatedToClusters(campaignID, aggregated), nil
+}
+
+// GetSearchClusterStatsWithNMIDs fetches phrase stats without calling ListCampaigns internally.
+func (c *Client) GetSearchClusterStatsWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]WBSearchClusterStatDTO, error) {
+	aggregated, dateTo, err := c.loadNormQueryAggregatesWithNMIDs(ctx, token, campaignID, nmIDs)
+	if err != nil {
+		return nil, err
+	}
+	return aggregatedToClusterStats(campaignID, dateTo, aggregated), nil
+}
+
+// loadNormQueryAggregatesWithNMIDs is the optimized version that doesn't call ListCampaigns.
+func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) (map[string]*aggregatedNormQuery, string, error) {
+	if len(nmIDs) == 0 {
+		return map[string]*aggregatedNormQuery{}, time.Now().UTC().Format(dateFmt), nil
+	}
+
+	dateTo := time.Now().UTC().Format(dateFmt)
+	dateFrom := time.Now().UTC().AddDate(0, 0, -30).Format(dateFmt)
+
+	statsBody, err := json.Marshal(buildNormQueryStatsRequest(campaignID, nmIDs, dateFrom, dateTo))
+	if err != nil {
+		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery stats request: %v", err))
+	}
+
+	// Use v1 endpoint — supports CPC campaigns (WB API 2026-04 update)
+	_, statsRaw, err := c.doRequest(ctx, "POST", "/adv/v1/normquery/stats", token, bytes.NewReader(statsBody))
+	if err != nil {
+		return nil, "", err
+	}
+
+	var statsResponse normQueryStatsResponse
+	if err := json.Unmarshal(statsRaw, &statsResponse); err != nil {
+		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal normquery stats: %v", err))
+	}
+
+	bidsBody, err := json.Marshal(buildNormQueryRequest(campaignID, nmIDs))
+	if err != nil {
+		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery bids request: %v", err))
+	}
+
+	_, bidsRaw, err := c.doRequest(ctx, "POST", "/adv/v0/normquery/get-bids", token, bytes.NewReader(bidsBody))
+	if err != nil {
+		c.logger.Warn().Err(err).Int("campaign_id", campaignID).Msg("normquery get-bids failed, falling back without explicit bids")
+	}
+
+	bidsByQuery := make(map[string]int64)
+	if len(bidsRaw) > 0 {
+		var bidsResponse normQueryBidsResponse
+		if err := json.Unmarshal(bidsRaw, &bidsResponse); err == nil {
+			for _, bid := range bidsResponse.Bids {
+				if bid.NormQuery == "" {
+					continue
+				}
+				if bid.Bid > bidsByQuery[bid.NormQuery] {
+					bidsByQuery[bid.NormQuery] = bid.Bid
+				}
+			}
+		}
+	}
+
+	aggregated := make(map[string]*aggregatedNormQuery)
+	for _, item := range statsResponse.Stats {
+		for _, stat := range item.Stats {
+			keyword := stat.NormQuery
+			if keyword == "" {
+				continue
+			}
+			entry, ok := aggregated[keyword]
+			if !ok {
+				entry = &aggregatedNormQuery{keyword: keyword}
+				aggregated[keyword] = entry
+			}
+			entry.views += stat.Views
+			entry.clicks += stat.Clicks
+			entry.orders += stat.Orders
+			if entry.bid == 0 {
+				entry.bid = bidsByQuery[keyword]
+			}
+			// WB API 2026-04: CPC campaigns return sum directly, views/cpm are 0
+			if stat.Sum > 0 {
+				entry.spend += stat.Sum / 100
+			} else {
+				entry.spend += normQuerySpend(stat.Views, stat.Clicks, stat.CPC, stat.CPM)
+			}
+		}
+	}
+
+	return aggregated, dateTo, nil
+}
+
 func (c *Client) loadNormQueryAggregates(ctx context.Context, token string, campaignID int) (map[string]*aggregatedNormQuery, string, error) {
 	campaigns, err := c.ListCampaigns(ctx, token)
 	if err != nil {

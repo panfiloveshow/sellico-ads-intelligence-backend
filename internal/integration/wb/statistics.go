@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 )
@@ -25,6 +26,11 @@ type wbFullStatsResponse []struct {
 		SumPrice     *float64 `json:"sum_price"`
 		SumPriceAlt  *float64 `json:"sumPrice"`
 		OrdersSumAlt *float64 `json:"ordersSum"`
+		Atbs         *int64   `json:"atbs"`     // Добавления в корзину
+		Canceled     *int64   `json:"canceled"`  // Технические отмены
+		CPC          *float64 `json:"cpc"`       // Стоимость клика
+		CTR          *float64 `json:"ctr"`       // Кликабельность
+		CR           *float64 `json:"cr"`        // Конверсия
 	} `json:"days"`
 }
 
@@ -43,6 +49,13 @@ func (c *Client) GetCampaignStats(ctx context.Context, token string, campaignIDs
 			end = len(campaignIDs)
 		}
 
+		// Delay between batches to avoid WB 429 rate limit (max ~1 req/sec for fullstats)
+		if start > 0 {
+			if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+				return result, err
+			}
+		}
+
 		batch, err := c.getCampaignStatsBatch(ctx, token, campaignIDs[start:end], dateFrom, dateTo)
 		if err != nil {
 			return nil, err
@@ -59,6 +72,11 @@ func (c *Client) GetCampaignStats(ctx context.Context, token string, campaignIDs
 					Orders:       day.Orders,
 					OrderedItems: firstInt64Ptr(day.SHKs, day.Orders),
 					Revenue:      firstFloat64Ptr(day.SumPrice, day.SumPriceAlt, day.OrdersSumAlt),
+					Atbs:         day.Atbs,
+					Canceled:     day.Canceled,
+					CPC:          day.CPC,
+					CTR:          day.CTR,
+					CR:           day.CR,
 				})
 			}
 		}

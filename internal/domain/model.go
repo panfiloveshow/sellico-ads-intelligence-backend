@@ -211,6 +211,8 @@ type CampaignStat struct {
 	Spend       int64     `json:"spend"`
 	Orders      *int64    `json:"orders,omitempty"`
 	Revenue     *int64    `json:"revenue,omitempty"`
+	Atbs        *int64    `json:"atbs,omitempty"`     // Добавления в корзину
+	Canceled    *int64    `json:"canceled,omitempty"`  // Технические отмены
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -562,12 +564,15 @@ type AdsMetricsSummary struct {
 	Spend          int64   `json:"spend"`
 	Orders         int64   `json:"orders"`
 	Revenue        int64   `json:"revenue"`
+	Atbs           int64   `json:"atbs"`              // Добавления в корзину
+	Canceled       int64   `json:"canceled"`           // Технические отмены
 	CTR            float64 `json:"ctr"`
 	CPC            float64 `json:"cpc"`
 	CPO            float64 `json:"cpo"`
 	ROAS           float64 `json:"roas"`
-	DRR            float64 `json:"drr"` // ДРР = Spend/Revenue × 100%
+	DRR            float64 `json:"drr"`                // ДРР = Spend/Revenue × 100%
 	ConversionRate float64 `json:"conversion_rate"`
+	CartRate       float64 `json:"cart_rate"`          // Корзина = Atbs/Clicks
 	DataMode       string  `json:"data_mode"`
 }
 
