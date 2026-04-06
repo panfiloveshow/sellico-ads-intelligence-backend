@@ -6,17 +6,25 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
 )
 
 const (
-	argon2Memory      = 64 * 1024
-	argon2Iterations  = 3
-	argon2Parallelism = 2
-	argon2SaltLength  = 16
-	argon2KeyLength   = 32
+	argon2SaltLength = 16
+	argon2KeyLength  = 32
+)
+
+const (
+	defaultArgon2Memory      = 64 * 1024
+	defaultArgon2Iterations  = 3
+	defaultArgon2Parallelism = 2
+
+	testArgon2Memory      = 8 * 1024
+	testArgon2Iterations  = 1
+	testArgon2Parallelism = 1
 )
 
 var (
@@ -27,18 +35,20 @@ var (
 // HashPassword hashes a password using argon2id and returns an encoded hash string
 // in the format: $argon2id$v=19$m=65536,t=3,p=2$<base64-salt>$<base64-hash>
 func HashPassword(password string) (string, error) {
+	params := currentArgon2Params()
+
 	salt := make([]byte, argon2SaltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("crypto: failed to generate salt: %w", err)
 	}
 
-	hash := argon2.IDKey([]byte(password), salt, argon2Iterations, argon2Memory, argon2Parallelism, argon2KeyLength)
+	hash := argon2.IDKey([]byte(password), salt, params.iterations, params.memory, params.parallelism, argon2KeyLength)
 
 	encodedSalt := base64.RawStdEncoding.EncodeToString(salt)
 	encodedHash := base64.RawStdEncoding.EncodeToString(hash)
 
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argon2Memory, argon2Iterations, argon2Parallelism,
+		argon2.Version, params.memory, params.iterations, params.parallelism,
 		encodedSalt, encodedHash), nil
 }
 
@@ -58,6 +68,21 @@ type argon2Params struct {
 	memory      uint32
 	iterations  uint32
 	parallelism uint8
+}
+
+func currentArgon2Params() *argon2Params {
+	if os.Getenv("FAST_ARGON2") == "1" {
+		return &argon2Params{
+			memory:      testArgon2Memory,
+			iterations:  testArgon2Iterations,
+			parallelism: testArgon2Parallelism,
+		}
+	}
+	return &argon2Params{
+		memory:      defaultArgon2Memory,
+		iterations:  defaultArgon2Iterations,
+		parallelism: defaultArgon2Parallelism,
+	}
 }
 
 func decodeHash(encodedHash string) (salt, hash []byte, params *argon2Params, err error) {

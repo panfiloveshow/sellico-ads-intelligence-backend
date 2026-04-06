@@ -6,6 +6,11 @@ RETURNING *;
 -- name: GetCampaignByID :one
 SELECT * FROM campaigns WHERE id = $1;
 
+-- name: GetCampaignByWBCampaignID :one
+SELECT * FROM campaigns
+WHERE workspace_id = $1 AND wb_campaign_id = $2
+LIMIT 1;
+
 -- name: UpsertCampaign :one
 INSERT INTO campaigns (workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -22,6 +27,9 @@ RETURNING *;
 -- name: ListCampaignsByWorkspace :many
 SELECT * FROM campaigns
 WHERE workspace_id = $1
+  AND (sqlc.narg('seller_cabinet_id_filter')::uuid IS NULL OR seller_cabinet_id = sqlc.narg('seller_cabinet_id_filter')::uuid)
+  AND (sqlc.narg('status_filter')::text IS NULL OR status = sqlc.narg('status_filter')::text)
+  AND (sqlc.narg('name_filter')::text IS NULL OR name ILIKE '%' || sqlc.narg('name_filter')::text || '%')
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 

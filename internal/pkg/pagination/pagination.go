@@ -8,7 +8,7 @@ import (
 const (
 	DefaultPage    = 1
 	DefaultPerPage = 20
-	MaxPerPage     = 100
+	MaxPerPage     = 5000
 )
 
 // Params holds parsed pagination parameters.

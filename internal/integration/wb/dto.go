@@ -7,22 +7,26 @@ package wb
 
 // WBCampaignDTO represents a campaign from the WB Advertising API.
 type WBCampaignDTO struct {
-	AdvertID    int    `json:"advertId"`
-	Name        string `json:"name"`
-	Status      int    `json:"status"`
-	Type        int    `json:"type"`
-	DailyBudget *int64 `json:"dailyBudget"`
-	BidType     int    `json:"bidType"`
-	PaymentType string `json:"paymentType"`
+	AdvertID    int     `json:"advertId"`
+	Name        string  `json:"name"`
+	Status      int     `json:"status"`
+	Type        int     `json:"type"`
+	DailyBudget *int64  `json:"dailyBudget"`
+	BidType     int     `json:"bidType"`
+	PaymentType string  `json:"paymentType"`
+	NMIDs       []int64 `json:"-"`
 }
 
 // WBCampaignStatDTO represents campaign statistics from the WB Advertising API.
 type WBCampaignStatDTO struct {
-	AdvertID int     `json:"advertId"`
-	Date     string  `json:"date"`
-	Views    int64   `json:"views"`
-	Clicks   int64   `json:"clicks"`
-	Sum      float64 `json:"sum"`
+	AdvertID     int      `json:"advertId"`
+	Date         string   `json:"date"`
+	Views        int64    `json:"views"`
+	Clicks       int64    `json:"clicks"`
+	Sum          float64  `json:"sum"`
+	Orders       *int64   `json:"orders,omitempty"`
+	OrderedItems *int64   `json:"ordered_items,omitempty"`
+	Revenue      *float64 `json:"revenue,omitempty"`
 }
 
 // WBSearchClusterDTO represents a Search Cluster from the WB Advertising API.
@@ -63,6 +67,9 @@ type WBProductDTO struct {
 	Title      string `json:"title"`
 	Brand      string `json:"brand"`
 	ChrtID     int64  `json:"chrtId"`
+	Category   string `json:"category,omitempty"`
+	ImageURL   string `json:"imageUrl,omitempty"`
+	Price      *int64 `json:"price,omitempty"`
 }
 
 // WBSalesFunnelDTO represents Sales Funnel data from the WB Analytics API.

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,10 @@ import (
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 	"pgregory.net/rapid"
 )
+
+func init() {
+	_ = os.Setenv("FAST_ARGON2", "1")
+}
 
 // Feature: sellico-ads-intelligence-backend, Property 1: Аутентификация — round-trip регистрации и логина
 // Проверяет: Требования 1.1, 1.2, 19.4

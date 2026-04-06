@@ -3,6 +3,7 @@ package wb
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,9 +42,9 @@ func mapBidType(bt int) string {
 	}
 }
 
-// rublesToKopecks converts a float64 ruble amount to int64 kopecks.
-func rublesToKopecks(rubles float64) int64 {
-	return int64(math.Round(rubles * 100))
+// roundRubles converts a float64 ruble amount to rounded int64 rubles.
+func roundRubles(rubles float64) int64 {
+	return int64(math.Round(rubles))
 }
 
 // MapCampaignDTO converts a WBCampaignDTO to a domain Campaign.
@@ -67,19 +68,34 @@ func MapCampaignDTO(dto WBCampaignDTO, workspaceID, sellerCabinetID uuid.UUID) d
 
 // MapCampaignStatDTO converts a WBCampaignStatDTO to a domain CampaignStat.
 func MapCampaignStatDTO(dto WBCampaignStatDTO, campaignID uuid.UUID) (domain.CampaignStat, error) {
-	date, err := time.Parse(dateFmt, dto.Date)
+	date, err := parseWBDate(dto.Date)
 	if err != nil {
 		return domain.CampaignStat{}, fmt.Errorf("parse campaign stat date %q: %w", dto.Date, err)
 	}
 
 	now := time.Now()
+	var orders *int64
+	if dto.OrderedItems != nil {
+		value := *dto.OrderedItems
+		orders = &value
+	} else if dto.Orders != nil {
+		value := *dto.Orders
+		orders = &value
+	}
+	var revenue *int64
+	if dto.Revenue != nil {
+		value := roundRubles(*dto.Revenue)
+		revenue = &value
+	}
 	return domain.CampaignStat{
 		ID:          uuid.New(),
 		CampaignID:  campaignID,
 		Date:        date,
 		Impressions: dto.Views,
 		Clicks:      dto.Clicks,
-		Spend:       rublesToKopecks(dto.Sum),
+		Spend:       roundRubles(dto.Sum),
+		Orders:      orders,
+		Revenue:     revenue,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
@@ -112,7 +128,7 @@ func MapSearchClusterDTO(dto WBSearchClusterDTO, campaignID, workspaceID uuid.UU
 
 // MapSearchClusterStatDTO converts a WBSearchClusterStatDTO to a domain PhraseStat.
 func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (domain.PhraseStat, error) {
-	date, err := time.Parse(dateFmt, dto.Date)
+	date, err := parseWBDate(dto.Date)
 	if err != nil {
 		return domain.PhraseStat{}, fmt.Errorf("parse cluster stat date %q: %w", dto.Date, err)
 	}
@@ -124,7 +140,7 @@ func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (do
 		Date:        date,
 		Impressions: dto.Views,
 		Clicks:      dto.Clicks,
-		Spend:       rublesToKopecks(dto.Sum),
+		Spend:       roundRubles(dto.Sum),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
@@ -134,6 +150,8 @@ func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (do
 func MapProductDTO(dto WBProductDTO, workspaceID, sellerCabinetID uuid.UUID) domain.Product {
 	now := time.Now()
 	brand := dto.Brand
+	category := dto.Category
+	imageURL := dto.ImageURL
 	return domain.Product{
 		ID:              uuid.New(),
 		WorkspaceID:     workspaceID,
@@ -141,23 +159,33 @@ func MapProductDTO(dto WBProductDTO, workspaceID, sellerCabinetID uuid.UUID) dom
 		WBProductID:     dto.NmID,
 		Title:           dto.Title,
 		Brand:           &brand,
+		Category:        stringPtr(category),
+		ImageURL:        stringPtr(imageURL),
+		Price:           dto.Price,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+}
+
+func stringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // MapSalesFunnelDTO converts a WBSalesFunnelDTO to a domain CampaignStat,
 // populating the Orders and Revenue fields. Other stat fields (Impressions,
 // Clicks, Spend) are left at zero — they come from the campaign stats import.
 func MapSalesFunnelDTO(dto WBSalesFunnelDTO, campaignID uuid.UUID) (domain.CampaignStat, error) {
-	date, err := time.Parse(dateFmt, dto.Date)
+	date, err := parseWBDate(dto.Date)
 	if err != nil {
 		return domain.CampaignStat{}, fmt.Errorf("parse sales funnel date %q: %w", dto.Date, err)
 	}
 
 	now := time.Now()
 	orders := dto.Orders
-	revenue := rublesToKopecks(dto.OrdersSum)
+	revenue := roundRubles(dto.OrdersSum)
 
 	return domain.CampaignStat{
 		ID:         uuid.New(),
@@ -168,4 +196,23 @@ func MapSalesFunnelDTO(dto WBSalesFunnelDTO, campaignID uuid.UUID) (domain.Campa
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}, nil
+}
+
+func parseWBDate(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty date")
+	}
+	if parsed, err := time.Parse(dateFmt, value); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC().Truncate(24 * time.Hour), nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC().Truncate(24 * time.Hour), nil
+	}
+	if idx := strings.IndexByte(value, 'T'); idx > 0 {
+		return time.Parse(dateFmt, value[:idx])
+	}
+	return time.Time{}, fmt.Errorf("unsupported date format")
 }

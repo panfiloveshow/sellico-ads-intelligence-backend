@@ -1,0 +1,17 @@
+.git
+.github
+.codex
+.kiro
+.vscode
+bin
+exports
+.env
+.env.*
+*.log
+coverage.out
+tmp
+.DS_Store
+internal/service/testdata
+monitoring
+nginx
+extension

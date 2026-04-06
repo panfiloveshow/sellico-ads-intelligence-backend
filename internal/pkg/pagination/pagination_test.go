@@ -26,7 +26,7 @@ func TestParse_CustomValues(t *testing.T) {
 }
 
 func TestParse_MaxPerPageClamping(t *testing.T) {
-	p := Parse(newRequest("per_page=500"))
+	p := Parse(newRequest("per_page=9999"))
 	assert.Equal(t, MaxPerPage, p.PerPage)
 }
 

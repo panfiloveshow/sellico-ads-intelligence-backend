@@ -120,7 +120,7 @@ var testEncryptionKey = []byte("01234567890123456789012345678901")
 
 func newTestSellerCabinetService(db *scInMemDB, validator WBTokenValidator) *SellerCabinetService {
 	queries := sqlcgen.New(db)
-	return NewSellerCabinetService(queries, testEncryptionKey, validator)
+	return NewSellerCabinetService(queries, testEncryptionKey, validator, nil)
 }
 
 // --- Property Tests ---

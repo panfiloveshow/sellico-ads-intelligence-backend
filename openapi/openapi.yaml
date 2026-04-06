@@ -1,0 +1,2770 @@
+openapi: 3.0.3
+info:
+  title: Sellico Ads Intelligence Backend API
+  version: 0.1.0
+  description: |
+    Baseline OpenAPI contract for the Sellico Ads Intelligence Backend MVP.
+    The spec documents canonical routes only. Compatibility aliases implemented
+    in the router are intentionally omitted from this file.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: Health
+  - name: Auth
+  - name: Workspaces
+  - name: Seller Cabinets
+  - name: Campaigns
+  - name: Phrases
+  - name: Bids
+  - name: Products
+  - name: Positions
+  - name: SERP
+  - name: Recommendations
+  - name: Exports
+  - name: Audit Logs
+  - name: Job Runs
+  - name: Extension
+  - name: Settings
+  - name: Events
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusEnvelope"
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Critical dependencies are ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyEnvelope"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh auth tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Token pair refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Return authenticated user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/workspaces:
+    get:
+      tags: [Workspaces]
+      summary: List current user's workspaces
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Workspace page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceListEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Workspaces]
+      summary: Create a workspace
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/workspaces/{workspaceId}/:
+    get:
+      tags: [Workspaces]
+      summary: Get a workspace by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/workspaces/{workspaceId}/members/:
+    get:
+      tags: [Workspaces]
+      summary: List workspace members
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Member page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMemberListEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Workspaces]
+      summary: Invite a workspace member
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteMemberRequest"
+      responses:
+        "201":
+          description: Member invited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMemberEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/workspaces/{workspaceId}/members/{memberId}:
+    patch:
+      tags: [Workspaces]
+      summary: Update member role
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/MemberId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMemberRoleRequest"
+      responses:
+        "200":
+          description: Member role updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMemberEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags: [Workspaces]
+      summary: Remove member from workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/MemberId"
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/seller-cabinets/:
+    get:
+      tags: [Seller Cabinets]
+      summary: List seller cabinets in current workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cabinet page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCabinetListEnvelope"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Seller Cabinets]
+      summary: Create a seller cabinet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSellerCabinetRequest"
+      responses:
+        "201":
+          description: Cabinet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCabinetEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/seller-cabinets/{id}:
+    get:
+      tags: [Seller Cabinets]
+      summary: Get a seller cabinet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Cabinet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCabinetEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags: [Seller Cabinets]
+      summary: Delete a seller cabinet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Cabinet deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/seller-cabinets/{id}/campaigns:
+    get:
+      tags: [Seller Cabinets]
+      summary: List campaigns for a cabinet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Campaign page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/seller-cabinets/{id}/products:
+    get:
+      tags: [Seller Cabinets]
+      summary: List products for a cabinet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Product page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/seller-cabinets/{id}/sync:
+    post:
+      tags: [Seller Cabinets]
+      summary: Trigger workspace sync for a seller cabinet
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "202":
+          description: Sync job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncTriggerEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/campaigns/:
+    get:
+      tags: [Campaigns]
+      summary: List campaigns
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: seller_cabinet_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: name
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Campaign page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/campaigns/{id}:
+    get:
+      tags: [Campaigns]
+      summary: Get campaign by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Campaign
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/campaigns/{id}/stats:
+    get:
+      tags: [Campaigns]
+      summary: List campaign stats
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Campaign stat page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignStatListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/campaigns/{id}/phrases:
+    get:
+      tags: [Campaigns]
+      summary: List phrases for campaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Phrase page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhraseListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/campaigns/{id}/recommendations:
+    get:
+      tags: [Campaigns]
+      summary: List recommendations for campaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/RecommendationType"
+        - $ref: "#/components/parameters/RecommendationSeverity"
+        - $ref: "#/components/parameters/RecommendationStatus"
+      responses:
+        "200":
+          description: Recommendation page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/phrases/:
+    get:
+      tags: [Phrases]
+      summary: List phrases
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: campaign_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Phrase page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhraseListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/phrases/{id}:
+    get:
+      tags: [Phrases]
+      summary: Get phrase by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Phrase
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhraseEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/phrases/{id}/stats:
+    get:
+      tags: [Phrases]
+      summary: List phrase stats
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Phrase stat page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhraseStatListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/phrases/{id}/bids:
+    get:
+      tags: [Phrases]
+      summary: List phrase bid history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Bid snapshot page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidSnapshotListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/phrases/{id}/recommendations:
+    get:
+      tags: [Phrases]
+      summary: List recommendations for phrase
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/RecommendationType"
+        - $ref: "#/components/parameters/RecommendationSeverity"
+        - $ref: "#/components/parameters/RecommendationStatus"
+      responses:
+        "200":
+          description: Recommendation page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/bids/history:
+    get:
+      tags: [Bids]
+      summary: List bid snapshot history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: phrase_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Bid history page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidSnapshotListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Bids]
+      summary: Create bid snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBidSnapshotRequest"
+      responses:
+        "201":
+          description: Bid snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidSnapshotEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/bids/estimates:
+    get:
+      tags: [Bids]
+      summary: Get latest bid estimate for a phrase
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: phrase_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current bid estimate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidEstimateEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/products/:
+    get:
+      tags: [Products]
+      summary: List products
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: seller_cabinet_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: title
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Product page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/products/{id}:
+    get:
+      tags: [Products]
+      summary: Get product by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/products/{id}/positions:
+    get:
+      tags: [Products]
+      summary: List positions for product
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Position page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/products/{id}/recommendations:
+    get:
+      tags: [Products]
+      summary: List recommendations for product
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/RecommendationType"
+        - $ref: "#/components/parameters/RecommendationSeverity"
+        - $ref: "#/components/parameters/RecommendationStatus"
+      responses:
+        "200":
+          description: Recommendation page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/positions/:
+    get:
+      tags: [Positions]
+      summary: List position history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: product_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: region
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Position page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Positions]
+      summary: Ingest a position snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePositionRequest"
+      responses:
+        "201":
+          description: Position snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/positions/aggregate:
+    get:
+      tags: [Positions]
+      summary: Aggregate position history for product-query-region
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: product_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: region
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Aggregated position metric
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionAggregateEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/serp-snapshots/:
+    get:
+      tags: [SERP]
+      summary: List SERP snapshots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: region
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: SERP snapshot page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SERPSnapshotListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [SERP]
+      summary: Ingest a SERP snapshot with items
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSERPSnapshotRequest"
+      responses:
+        "201":
+          description: SERP snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SERPSnapshotDetailEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/serp-snapshots/{id}:
+    get:
+      tags: [SERP]
+      summary: Get SERP snapshot with items
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: SERP snapshot detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SERPSnapshotDetailEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/recommendations/:
+    get:
+      tags: [Recommendations]
+      summary: List recommendations
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: campaign_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: phrase_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: product_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/RecommendationType"
+        - $ref: "#/components/parameters/RecommendationSeverity"
+        - $ref: "#/components/parameters/RecommendationStatus"
+      responses:
+        "200":
+          description: Recommendation page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/recommendations/generate:
+    post:
+      tags: [Recommendations]
+      summary: Trigger recommendation generation for workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "202":
+          description: Recommendation job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceTaskTriggerEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/recommendations/{id}:
+    patch:
+      tags: [Recommendations]
+      summary: Update recommendation status
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRecommendationStatusRequest"
+      responses:
+        "200":
+          description: Recommendation updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/recommendations/{id}/resolve:
+    post:
+      tags: [Recommendations]
+      summary: Mark recommendation as completed
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Recommendation resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/recommendations/{id}/dismiss:
+    post:
+      tags: [Recommendations]
+      summary: Mark recommendation as dismissed
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Recommendation dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/exports/:
+    get:
+      tags: [Exports]
+      summary: List export jobs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: entity_type
+          in: query
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, xlsx]
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Export page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Exports]
+      summary: Create export job
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExportRequest"
+      responses:
+        "201":
+          description: Export job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/exports/{id}:
+    get:
+      tags: [Exports]
+      summary: Get export job
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Export job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/exports/{id}/download:
+    get:
+      tags: [Exports]
+      summary: Download generated export file
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Export file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/audit-logs:
+    get:
+      tags: [Audit Logs]
+      summary: List audit log entries
+      description: Available to workspace owner and manager roles.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: entity_type
+          in: query
+          schema:
+            type: string
+        - name: user_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Audit log page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/job-runs/:
+    get:
+      tags: [Job Runs]
+      summary: List background job runs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: task_type
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job run page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRunListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/job-runs/{id}:
+    get:
+      tags: [Job Runs]
+      summary: Get job run by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Job run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRunEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Job Runs]
+      summary: Unsupported on canonical resource path
+      deprecated: true
+      responses:
+        "405":
+          description: Use /retry sub-resource
+  /api/v1/job-runs/{id}/retry:
+    post:
+      tags: [Job Runs]
+      summary: Retry a supported job run
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "202":
+          description: Retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRunRetryEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/extension/sessions:
+    post:
+      tags: [Extension]
+      summary: Upsert extension session
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExtensionSessionRequest"
+      responses:
+        "201":
+          description: Session created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionSessionEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/extension/context:
+    post:
+      tags: [Extension]
+      summary: Store extension context event
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExtensionContextRequest"
+      responses:
+        "201":
+          description: Context event stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/extension/version:
+    get:
+      tags: [Extension]
+      summary: Get current backend/extension version
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Current version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionVersionEnvelope"
+
+  # --- Workspace Settings ---
+  /api/v1/settings:
+    get:
+      tags: [Settings]
+      summary: Get workspace settings
+      description: Returns the current workspace settings including recommendation thresholds and notification config. Requires owner or manager role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Workspace settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSettingsEnvelope"
+    put:
+      tags: [Settings]
+      summary: Update workspace settings
+      description: Merges provided settings into workspace config. Supports partial updates — only non-null fields are overwritten. Requires owner or manager role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceSettingsInput"
+      responses:
+        "200":
+          description: Updated workspace settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSettingsEnvelope"
+
+  /api/v1/settings/thresholds:
+    get:
+      tags: [Settings]
+      summary: Get effective recommendation thresholds
+      description: Returns recommendation thresholds with defaults applied for any unset values.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Effective thresholds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThresholdsEnvelope"
+
+  # --- SSE Events ---
+  /api/v1/events:
+    get:
+      tags: [Events]
+      summary: Server-Sent Events stream
+      description: |
+        Real-time workspace event stream via SSE. Events include sync_complete,
+        recommendation_new, export_ready. Requires auth + workspace header.
+        Connection stays open until client disconnects.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE event stream (event: type\\ndata: JSON\\n\\n)"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    WorkspaceHeader:
+      name: X-Workspace-ID
+      in: header
+      required: true
+      description: Active workspace for tenant-scoped endpoints.
+      schema:
+        type: string
+        format: uuid
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PerPage:
+      name: per_page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    DateFrom:
+      name: date_from
+      in: query
+      schema:
+        type: string
+        format: date
+    DateTo:
+      name: date_to
+      in: query
+      schema:
+        type: string
+        format: date
+    RecommendationType:
+      name: type
+      in: query
+      schema:
+        type: string
+    RecommendationSeverity:
+      name: severity
+      in: query
+      schema:
+        type: string
+    RecommendationStatus:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [active, completed, dismissed]
+  responses:
+    ErrorResponse:
+      description: API error envelope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    Meta:
+      type: object
+      required: [page, per_page, total]
+      properties:
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+          format: int64
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        field:
+          type: string
+    ErrorEnvelope:
+      type: object
+      required: [errors]
+      properties:
+        data:
+          nullable: true
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/Error"
+    EmptyEnvelope:
+      type: object
+      properties:
+        data:
+          nullable: true
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/Error"
+    StatusPayload:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+    StatusEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/StatusPayload"
+    ReadyPayload:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ready
+    ReadyEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/ReadyPayload"
+
+    AuthTokens:
+      type: object
+      required: [access_token, refresh_token]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+    User:
+      type: object
+      required: [id, email, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Workspace:
+      type: object
+      required: [id, name, slug, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+    WorkspaceMember:
+      type: object
+      required: [id, workspace_id, user_id, role, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [owner, manager, analyst, viewer]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SellerCabinet:
+      type: object
+      required: [id, workspace_id, name, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Campaign:
+      type: object
+      required:
+        [id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        seller_cabinet_id:
+          type: string
+          format: uuid
+        wb_campaign_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        status:
+          type: string
+        campaign_type:
+          type: integer
+        bid_type:
+          type: string
+        payment_type:
+          type: string
+        daily_budget:
+          type: integer
+          format: int64
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CampaignStat:
+      type: object
+      required: [id, campaign_id, date, impressions, clicks, spend, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date-time
+        impressions:
+          type: integer
+          format: int64
+        clicks:
+          type: integer
+          format: int64
+        spend:
+          type: integer
+          format: int64
+        orders:
+          type: integer
+          format: int64
+          nullable: true
+        revenue:
+          type: integer
+          format: int64
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Phrase:
+      type: object
+      required: [id, campaign_id, workspace_id, wb_cluster_id, keyword, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        wb_cluster_id:
+          type: integer
+          format: int64
+        keyword:
+          type: string
+        count:
+          type: integer
+          nullable: true
+        current_bid:
+          type: integer
+          format: int64
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PhraseStat:
+      type: object
+      required: [id, phrase_id, date, impressions, clicks, spend, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        phrase_id:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date-time
+        impressions:
+          type: integer
+          format: int64
+        clicks:
+          type: integer
+          format: int64
+        spend:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Product:
+      type: object
+      required: [id, workspace_id, seller_cabinet_id, wb_product_id, title, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        seller_cabinet_id:
+          type: string
+          format: uuid
+        wb_product_id:
+          type: integer
+          format: int64
+        title:
+          type: string
+        brand:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          nullable: true
+        price:
+          type: integer
+          format: int64
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Position:
+      type: object
+      required: [id, workspace_id, product_id, query, region, position, page, source, checked_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        region:
+          type: string
+        position:
+          type: integer
+        page:
+          type: integer
+        source:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    PositionAggregate:
+      type: object
+      required: [product_id, query, region, average, date_from, date_to, sample_count]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        region:
+          type: string
+        average:
+          type: number
+          format: double
+        date_from:
+          type: string
+          format: date-time
+        date_to:
+          type: string
+          format: date-time
+        sample_count:
+          type: integer
+    SERPResultItem:
+      type: object
+      required: [id, snapshot_id, position, wb_product_id, title, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        snapshot_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+        wb_product_id:
+          type: integer
+          format: int64
+        title:
+          type: string
+        price:
+          type: integer
+          format: int64
+          nullable: true
+        rating:
+          type: number
+          format: double
+          nullable: true
+        reviews_count:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    SERPSnapshot:
+      type: object
+      required: [id, workspace_id, query, region, total_results, scanned_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        region:
+          type: string
+        total_results:
+          type: integer
+        scanned_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    SERPSnapshotDetail:
+      allOf:
+        - $ref: "#/components/schemas/SERPSnapshot"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/SERPResultItem"
+    BidSnapshot:
+      type: object
+      required: [id, phrase_id, workspace_id, competitive_bid, leadership_bid, cpm_min, captured_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        phrase_id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        competitive_bid:
+          type: integer
+          format: int64
+        leadership_bid:
+          type: integer
+          format: int64
+        cpm_min:
+          type: integer
+          format: int64
+        captured_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    BidEstimate:
+      type: object
+      required: [phrase_id, workspace_id, competitive_bid, leadership_bid, cpm_min, captured_at]
+      properties:
+        phrase_id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        competitive_bid:
+          type: integer
+          format: int64
+        leadership_bid:
+          type: integer
+          format: int64
+        cpm_min:
+          type: integer
+          format: int64
+        captured_at:
+          type: string
+          format: date-time
+    Recommendation:
+      type: object
+      required: [id, workspace_id, title, description, type, severity, confidence, source_metrics, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+          nullable: true
+        phrase_id:
+          type: string
+          format: uuid
+          nullable: true
+        product_id:
+          type: string
+          format: uuid
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+        severity:
+          type: string
+        confidence:
+          type: number
+          format: double
+        source_metrics:
+          type: object
+          additionalProperties: true
+        next_action:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, completed, dismissed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Export:
+      type: object
+      required: [id, workspace_id, user_id, entity_type, format, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        format:
+          type: string
+          enum: [csv, xlsx]
+        status:
+          type: string
+        file_path:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        filters:
+          type: object
+          additionalProperties: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ExtensionSession:
+      type: object
+      required: [id, user_id, workspace_id, extension_version, last_active_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        extension_version:
+          type: string
+        last_active_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    ExtensionVersion:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: string
+    AuditLog:
+      type: object
+      required: [id, workspace_id, action, entity_type, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    JobRun:
+      type: object
+      required: [id, task_type, status, started_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+          nullable: true
+        task_type:
+          type: string
+        status:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    JobRunRetry:
+      type: object
+      required: [original_job_run_id, task_type, status, workspace_id]
+      properties:
+        original_job_run_id:
+          type: string
+          format: uuid
+        task_type:
+          type: string
+        status:
+          type: string
+        workspace_id:
+          type: string
+          format: uuid
+        export_id:
+          type: string
+          format: uuid
+          nullable: true
+    SyncTrigger:
+      type: object
+      required: [task_type, status, workspace_id, cabinet_id]
+      properties:
+        task_type:
+          type: string
+        status:
+          type: string
+        workspace_id:
+          type: string
+          format: uuid
+        cabinet_id:
+          type: string
+          format: uuid
+    WorkspaceTaskTrigger:
+      type: object
+      required: [task_type, status, workspace_id]
+      properties:
+        task_type:
+          type: string
+        status:
+          type: string
+        workspace_id:
+          type: string
+          format: uuid
+
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        name:
+          type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    CreateWorkspaceRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+    InviteMemberRequest:
+      type: object
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [owner, manager, analyst, viewer]
+    UpdateMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [owner, manager, analyst, viewer]
+    CreateSellerCabinetRequest:
+      type: object
+      required: [name, api_token]
+      properties:
+        name:
+          type: string
+        api_token:
+          type: string
+    CreatePositionRequest:
+      type: object
+      required: [product_id, query, region, position, page, source]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        query:
+          type: string
+        region:
+          type: string
+        position:
+          type: integer
+        page:
+          type: integer
+        source:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreateSERPResultItemRequest:
+      type: object
+      required: [position, wb_product_id, title]
+      properties:
+        position:
+          type: integer
+        wb_product_id:
+          type: integer
+          format: int64
+        title:
+          type: string
+        price:
+          type: integer
+          format: int64
+          nullable: true
+        rating:
+          type: number
+          format: double
+          nullable: true
+        reviews_count:
+          type: integer
+          nullable: true
+    CreateSERPSnapshotRequest:
+      type: object
+      required: [query, region, total_results, items]
+      properties:
+        query:
+          type: string
+        region:
+          type: string
+        total_results:
+          type: integer
+        scanned_at:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreateSERPResultItemRequest"
+    CreateBidSnapshotRequest:
+      type: object
+      required: [phrase_id, competitive_bid, leadership_bid, cpm_min]
+      properties:
+        phrase_id:
+          type: string
+          format: uuid
+        competitive_bid:
+          type: integer
+          format: int64
+        leadership_bid:
+          type: integer
+          format: int64
+        cpm_min:
+          type: integer
+          format: int64
+        captured_at:
+          type: string
+          format: date-time
+          nullable: true
+    UpdateRecommendationStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [active, completed, dismissed]
+    CreateExportRequest:
+      type: object
+      required: [entity_type, format]
+      properties:
+        entity_type:
+          type: string
+          enum:
+            - campaigns
+            - campaign_stats
+            - phrases
+            - phrase_stats
+            - products
+            - positions
+            - recommendations
+        format:
+          type: string
+          enum: [csv, xlsx]
+        filters:
+          type: object
+          additionalProperties: true
+          nullable: true
+    CreateExtensionSessionRequest:
+      type: object
+      required: [extension_version]
+      properties:
+        extension_version:
+          type: string
+    ExtensionContextRequest:
+      type: object
+      required: [url, page_type]
+      properties:
+        url:
+          type: string
+        page_type:
+          type: string
+          enum: [search, product]
+
+    AuthTokensEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/AuthTokens"
+    UserEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/User"
+    WorkspaceEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Workspace"
+    WorkspaceListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Workspace"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    WorkspaceMemberEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/WorkspaceMember"
+    WorkspaceMemberListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceMember"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    SellerCabinetEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/SellerCabinet"
+    SellerCabinetListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerCabinet"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    CampaignEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Campaign"
+    CampaignListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Campaign"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    CampaignStatListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampaignStat"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    PhraseEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Phrase"
+    PhraseListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Phrase"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    PhraseStatListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PhraseStat"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ProductEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Product"
+    ProductListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    PositionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Position"
+    PositionListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    PositionAggregateEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/PositionAggregate"
+    SERPSnapshotListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SERPSnapshot"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    SERPSnapshotDetailEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/SERPSnapshotDetail"
+    BidSnapshotEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/BidSnapshot"
+    BidSnapshotListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/BidSnapshot"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    BidEstimateEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/BidEstimate"
+    RecommendationEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Recommendation"
+    RecommendationListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Recommendation"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ExportEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Export"
+    ExportListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Export"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    ExtensionSessionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/ExtensionSession"
+    ExtensionVersionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/ExtensionVersion"
+    AuditLogListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    JobRunEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/JobRun"
+    JobRunListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobRun"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    JobRunRetryEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/JobRunRetry"
+    SyncTriggerEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/SyncTrigger"
+    WorkspaceTaskTriggerEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/WorkspaceTaskTrigger"
+
+    # --- Settings schemas ---
+    RecommendationThresholds:
+      type: object
+      description: Per-workspace recommendation engine thresholds. Zero/missing values use defaults.
+      properties:
+        campaign_high_impressions:
+          type: integer
+          description: "Min impressions to trigger low-CTR alert (default: 1000)"
+        campaign_zero_orders_click:
+          type: integer
+          description: "Min clicks to trigger zero-orders alert (default: 40)"
+        campaign_high_cpc:
+          type: number
+          description: "CPC threshold for bid pressure alert (default: 50)"
+        campaign_poor_cpo:
+          type: number
+          description: "CPO threshold for bid pressure alert (default: 1500)"
+        campaign_raise_bid_clicks:
+          type: integer
+          description: "Min clicks to trigger raise-bid suggestion (default: 40)"
+        campaign_raise_bid_orders:
+          type: integer
+          description: "Min orders to trigger raise-bid suggestion (default: 5)"
+        campaign_strong_roas:
+          type: number
+          description: "ROAS threshold for scale-up suggestion (default: 4.0)"
+        phrase_high_impressions:
+          type: integer
+          description: "Min phrase impressions for low-CTR alert (default: 500)"
+        phrase_bid_raise_clicks:
+          type: integer
+          description: "Min phrase clicks for bid-raise suggestion (default: 10)"
+        position_drop_threshold:
+          type: integer
+          description: "Position drop delta to trigger alert (default: 10)"
+        serp_competitor_top:
+          type: integer
+          description: "Top-N SERP positions to monitor for competitor alerts (default: 5)"
+
+    TelegramSettings:
+      type: object
+      properties:
+        bot_token:
+          type: string
+          description: Telegram Bot API token
+        chat_id:
+          type: string
+          description: Telegram chat/group ID for notifications
+        enabled:
+          type: boolean
+
+    NotificationSettings:
+      type: object
+      properties:
+        telegram:
+          $ref: "#/components/schemas/TelegramSettings"
+
+    WorkspaceSettings:
+      type: object
+      properties:
+        recommendation_thresholds:
+          $ref: "#/components/schemas/RecommendationThresholds"
+        notifications:
+          $ref: "#/components/schemas/NotificationSettings"
+
+    WorkspaceSettingsInput:
+      type: object
+      description: Partial update — only non-null fields are merged.
+      properties:
+        recommendation_thresholds:
+          $ref: "#/components/schemas/RecommendationThresholds"
+        notifications:
+          $ref: "#/components/schemas/NotificationSettings"
+
+    WorkspaceSettingsEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/WorkspaceSettings"
+
+    ThresholdsEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/RecommendationThresholds"

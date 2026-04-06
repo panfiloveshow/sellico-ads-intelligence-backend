@@ -20,5 +20,8 @@ LIMIT $2 OFFSET $3;
 -- name: ListBidSnapshotsByWorkspace :many
 SELECT * FROM bid_snapshots
 WHERE workspace_id = $1
+  AND (sqlc.narg('phrase_id_filter')::uuid IS NULL OR phrase_id = sqlc.narg('phrase_id_filter')::uuid)
+  AND (sqlc.narg('date_from')::timestamptz IS NULL OR captured_at >= sqlc.narg('date_from')::timestamptz)
+  AND (sqlc.narg('date_to')::timestamptz IS NULL OR captured_at <= sqlc.narg('date_to')::timestamptz)
 ORDER BY captured_at DESC
 LIMIT $2 OFFSET $3;

@@ -21,6 +21,7 @@ type workspaceServicer interface {
 	Create(ctx context.Context, userID uuid.UUID, name, slug string) (*domain.Workspace, error)
 	List(ctx context.Context, userID uuid.UUID, limit, offset int32) ([]domain.Workspace, error)
 	Get(ctx context.Context, workspaceID uuid.UUID) (*domain.Workspace, error)
+	ListMembers(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.WorkspaceMember, error)
 	InviteMember(ctx context.Context, workspaceID uuid.UUID, email, role string) (*domain.WorkspaceMember, error)
 	UpdateMemberRole(ctx context.Context, actorID, workspaceID, memberID uuid.UUID, newRole string) (*domain.WorkspaceMember, error)
 	RemoveMember(ctx context.Context, workspaceID, memberID uuid.UUID) error
@@ -107,6 +108,33 @@ func (h *WorkspaceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dto.WriteJSON(w, http.StatusOK, dto.WorkspaceFromDomain(*ws))
+}
+
+// ListMembers handles GET /workspaces/{workspaceId}/members.
+func (h *WorkspaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	pg := pagination.Parse(r)
+	members, err := h.svc.ListMembers(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	items := make([]dto.WorkspaceMemberResponse, len(members))
+	for i, member := range members {
+		items[i] = dto.WorkspaceMemberFromDomain(member)
+	}
+
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{
+		Page:    pg.Page,
+		PerPage: pg.PerPage,
+		Total:   int64(len(items)),
+	})
 }
 
 // InviteMember handles POST /workspaces/{workspaceId}/members.

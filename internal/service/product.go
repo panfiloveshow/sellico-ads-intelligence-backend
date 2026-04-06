@@ -13,7 +13,8 @@ import (
 )
 
 type ProductListFilter struct {
-	Title string
+	Title           string
+	SellerCabinetID *uuid.UUID
 }
 
 // ProductService handles product read operations.
@@ -27,10 +28,11 @@ func NewProductService(queries *sqlcgen.Queries) *ProductService {
 
 func (s *ProductService) List(ctx context.Context, workspaceID uuid.UUID, filter ProductListFilter, limit, offset int32) ([]domain.Product, error) {
 	rows, err := s.queries.ListProductsByWorkspace(ctx, sqlcgen.ListProductsByWorkspaceParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       limit,
-		Offset:      offset,
-		TitleFilter: textToPgtype(filter.Title),
+		WorkspaceID:           uuidToPgtype(workspaceID),
+		Limit:                 limit,
+		Offset:                offset,
+		SellerCabinetIDFilter: uuidToPgtypePtr(filter.SellerCabinetID),
+		TitleFilter:           textToPgtype(filter.Title),
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to list products")
@@ -76,6 +78,33 @@ func (s *ProductService) ListPositions(ctx context.Context, workspaceID, product
 	result := make([]domain.Position, len(rows))
 	for i, row := range rows {
 		result[i] = positionFromSqlc(row)
+	}
+	return result, nil
+}
+
+func (s *ProductService) ListRecommendations(ctx context.Context, workspaceID, productID uuid.UUID, filter RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error) {
+	if _, err := s.Get(ctx, workspaceID, productID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.queries.ListRecommendationsByWorkspace(ctx, sqlcgen.ListRecommendationsByWorkspaceParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Limit:            limit,
+		Offset:           offset,
+		CampaignIDFilter: uuidToPgtypePtr(filter.CampaignID),
+		PhraseIDFilter:   uuidToPgtypePtr(filter.PhraseID),
+		ProductIDFilter:  uuidToPgtypePtr(&productID),
+		TypeFilter:       textToPgtype(filter.Type),
+		SeverityFilter:   textToPgtype(filter.Severity),
+		StatusFilter:     textToPgtype(filter.Status),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list product recommendations")
+	}
+
+	result := make([]domain.Recommendation, len(rows))
+	for i, row := range rows {
+		result[i] = recommendationFromSqlc(row)
 	}
 	return result, nil
 }

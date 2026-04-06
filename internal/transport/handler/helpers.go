@@ -9,8 +9,10 @@ import (
 
 func parseDateRangeWithDefault(r *http.Request, defaultDays int) (time.Time, time.Time) {
 	now := time.Now().UTC()
-	dateTo := now
-	dateFrom := now.AddDate(0, 0, -defaultDays)
+	// Truncate to midnight to ensure consistent date boundaries (audit fix: date precision bug)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	dateTo := today
+	dateFrom := today.AddDate(0, 0, -defaultDays)
 
 	if v := r.URL.Query().Get("date_from"); v != "" {
 		if t, err := time.Parse(dateLayout, v); err == nil {

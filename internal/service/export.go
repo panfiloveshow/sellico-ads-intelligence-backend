@@ -36,6 +36,13 @@ type ExportDownload struct {
 	ContentType string
 }
 
+type ExportListFilter struct {
+	UserID     *uuid.UUID
+	EntityType string
+	Format     string
+	Status     string
+}
+
 type exportFilters struct {
 	Title     string `json:"title"`
 	Type      string `json:"type"`
@@ -60,6 +67,27 @@ func NewExportService(queries *sqlcgen.Queries, storagePath string, enqueuer Exp
 		storagePath: storagePath,
 		enqueuer:    enqueuer,
 	}
+}
+
+func (s *ExportService) List(ctx context.Context, workspaceID uuid.UUID, filter ExportListFilter, limit, offset int32) ([]domain.Export, error) {
+	rows, err := s.queries.ListExportsByWorkspace(ctx, sqlcgen.ListExportsByWorkspaceParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Limit:            limit,
+		Offset:           offset,
+		UserIDFilter:     uuidToPgtypePtr(filter.UserID),
+		EntityTypeFilter: textToPgtype(filter.EntityType),
+		FormatFilter:     textToPgtype(filter.Format),
+		StatusFilter:     textToPgtype(filter.Status),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list exports")
+	}
+
+	result := make([]domain.Export, len(rows))
+	for i, row := range rows {
+		result[i] = exportFromSqlc(row)
+	}
+	return result, nil
 }
 
 func (s *ExportService) Create(ctx context.Context, userID, workspaceID uuid.UUID, entityType, format string, filters json.RawMessage) (*domain.Export, error) {

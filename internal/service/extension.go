@@ -64,15 +64,9 @@ func (s *ExtensionService) UpsertSession(ctx context.Context, userID, workspaceI
 }
 
 func (s *ExtensionService) CreateContextEvent(ctx context.Context, userID, workspaceID uuid.UUID, url, pageType string) (*domain.ExtensionContextEvent, error) {
-	session, err := s.queries.GetExtensionSession(ctx, sqlcgen.GetExtensionSessionParams{
-		UserID:      uuidToPgtype(userID),
-		WorkspaceID: uuidToPgtype(workspaceID),
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, apperror.New(apperror.ErrValidation, "extension session not found")
-	}
+	session, err := s.getSession(ctx, userID, workspaceID)
 	if err != nil {
-		return nil, apperror.New(apperror.ErrInternal, "failed to get extension session")
+		return nil, err
 	}
 
 	metadata, _ := json.Marshal(map[string]string{
@@ -90,7 +84,7 @@ func (s *ExtensionService) CreateContextEvent(ctx context.Context, userID, works
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to create extension context event")
 	}
-	if err := s.queries.UpdateExtensionSessionActivity(ctx, session.ID); err != nil {
+	if err := s.touchSession(ctx, session.ID); err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to update extension activity")
 	}
 
@@ -100,4 +94,22 @@ func (s *ExtensionService) CreateContextEvent(ctx context.Context, userID, works
 
 func (s *ExtensionService) Version() string {
 	return s.appVersion
+}
+
+func (s *ExtensionService) getSession(ctx context.Context, userID, workspaceID uuid.UUID) (*sqlcgen.ExtensionSession, error) {
+	session, err := s.queries.GetExtensionSession(ctx, sqlcgen.GetExtensionSessionParams{
+		UserID:      uuidToPgtype(userID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrValidation, "extension session not found")
+	}
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to get extension session")
+	}
+	return &session, nil
+}
+
+func (s *ExtensionService) touchSession(ctx context.Context, sessionID pgtype.UUID) error {
+	return s.queries.UpdateExtensionSessionActivity(ctx, sessionID)
 }

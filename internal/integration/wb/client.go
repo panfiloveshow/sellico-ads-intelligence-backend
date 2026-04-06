@@ -1,18 +1,22 @@
 package wb
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/metrics"
 	"github.com/rs/zerolog"
+	"github.com/sony/gobreaker/v2"
 	"golang.org/x/time/rate"
 )
 
@@ -31,21 +35,32 @@ var (
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
+	contentURL string
 	rateLimit  int
 	logger     zerolog.Logger
 
 	mu       sync.Mutex
 	limiters map[string]*rate.Limiter
+
+	breakerMu sync.Mutex
+	breakers  map[string]*gobreaker.CircuitBreaker[[]byte]
 }
 
 // NewClient creates a new WB API client from the application config.
 func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
+	contentURL := "https://content-api.wildberries.ru"
+	if strings.Contains(cfg.WBAPIBaseURL, "localhost") || strings.Contains(cfg.WBAPIBaseURL, "127.0.0.1") {
+		contentURL = cfg.WBAPIBaseURL
+	}
+
 	return &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    cfg.WBAPIBaseURL,
+		contentURL: contentURL,
 		rateLimit:  cfg.WBAPIRateLimit,
 		logger:     logger.With().Str("component", "wb_client").Logger(),
 		limiters:   make(map[string]*rate.Limiter),
+		breakers:   make(map[string]*gobreaker.CircuitBreaker[[]byte]),
 	}
 }
 
@@ -69,11 +84,106 @@ func (c *Client) limiterForToken(token string) *rate.Limiter {
 	return lim
 }
 
-// doRequest executes an HTTP request with retry logic, rate-limiting, and logging.
+// doRequest executes an HTTP request with circuit breaker, retry logic, rate-limiting, and logging.
 // It handles HTTP 429 (rate limit) and HTTP 5xx (server errors) with appropriate backoff.
+// breakerForToken returns a per-token circuit breaker (audit fix: HIGH #9).
+func (c *Client) breakerForToken(token string) *gobreaker.CircuitBreaker[[]byte] {
+	key := token
+	if len(key) > 20 {
+		key = key[:20]
+	}
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+	if cb, ok := c.breakers[key]; ok {
+		return cb
+	}
+	cb := newCircuitBreaker("wb-api-" + key)
+	c.breakers[key] = cb
+	return cb
+}
+
 func (c *Client) doRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
-	url := c.baseURL + path
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInner(ctx, method, path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
+}
+
+// doContentRequest executes requests against the WB Content API (contentURL)
+// with the same circuit breaker, retry, rate-limiting, and metrics as doRequest.
+func (c *Client) doContentRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInnerURL(ctx, method, c.contentURL+path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
+}
+
+// doRequestInner is the actual HTTP execution with retry logic.
+func (c *Client) doRequestInner(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	return c.doRequestInnerURL(ctx, method, c.baseURL+path, token, body)
+}
+
+// doRequestInnerURL is the actual HTTP execution with retry logic for an arbitrary base URL.
+func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token string, body io.Reader) (*http.Response, []byte, error) {
 	lim := c.limiterForToken(token)
+
+	// Buffer body so it can be re-read on retry (fix: audit MEDIUM #15)
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read request body: %w", err)
+		}
+	}
 
 	var lastErr error
 
@@ -83,11 +193,15 @@ func (c *Client) doRequest(ctx context.Context, method, path, token string, body
 			return nil, nil, fmt.Errorf("rate limiter wait: %w", err)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, method, url, body)
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create request: %w", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Authorization", token)
 		req.Header.Set("Content-Type", "application/json")
 
 		c.logger.Debug().
@@ -137,7 +251,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, token string, body
 				Int("attempt", attempt).
 				Msg("rate limited (429), pausing")
 
-			lastErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("rate limited (429) on %s", path))
+			lastErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("rate limited (429) on %s", url))
 			if attempt < maxRetries {
 				if err := sleepWithContext(ctx, retryAfter); err != nil {
 					return nil, nil, err
@@ -148,7 +262,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, token string, body
 
 		// Handle HTTP 5xx — server error
 		if resp.StatusCode >= 500 {
-			lastErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("server error (%d) on %s", resp.StatusCode, path))
+			lastErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("server error (%d) on %s", resp.StatusCode, url))
 			c.logger.Debug().
 				Str("url", url).
 				Int("status_code", resp.StatusCode).
@@ -166,7 +280,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, token string, body
 
 		// Non-retryable error status codes (4xx except 429)
 		if resp.StatusCode >= 400 {
-			return resp, respBody, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("client error (%d) on %s", resp.StatusCode, path))
+			return resp, respBody, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("client error (%d) on %s", resp.StatusCode, url))
 		}
 
 		// Success

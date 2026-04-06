@@ -7,11 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/envelope"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/dto"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +27,7 @@ type mockAuthService struct {
 	loginFn        func(ctx context.Context, email, password string) (*service.AuthTokens, error)
 	refreshTokenFn func(ctx context.Context, refreshToken string) (*service.AuthTokens, error)
 	logoutFn       func(ctx context.Context, refreshToken string) error
+	getMeFn        func(ctx context.Context, userID uuid.UUID) (*domain.User, error)
 }
 
 func (m *mockAuthService) Register(ctx context.Context, email, password, name string) (*service.AuthTokens, error) {
@@ -36,6 +41,9 @@ func (m *mockAuthService) RefreshToken(ctx context.Context, refreshToken string)
 }
 func (m *mockAuthService) Logout(ctx context.Context, refreshToken string) error {
 	return m.logoutFn(ctx, refreshToken)
+}
+func (m *mockAuthService) GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
+	return m.getMeFn(ctx, userID)
 }
 
 // --- helpers ---
@@ -62,6 +70,15 @@ func decodeTokens(t *testing.T, data interface{}) dto.AuthTokensResponse {
 	var tokens dto.AuthTokensResponse
 	require.NoError(t, json.Unmarshal(b, &tokens))
 	return tokens
+}
+
+func decodeUser(t *testing.T, data interface{}) dto.UserResponse {
+	t.Helper()
+	b, err := json.Marshal(data)
+	require.NoError(t, err)
+	var user dto.UserResponse
+	require.NoError(t, json.Unmarshal(b, &user))
+	return user
 }
 
 // --- Register tests ---
@@ -379,4 +396,50 @@ func TestLogout_ValidationError_MissingToken(t *testing.T) {
 	h.Logout(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestMe_Success(t *testing.T) {
+	userID := uuid.New()
+	now := time.Now().UTC()
+	mock := &mockAuthService{
+		getMeFn: func(_ context.Context, actualUserID uuid.UUID) (*domain.User, error) {
+			assert.Equal(t, userID, actualUserID)
+			return &domain.User{
+				ID:        userID,
+				Email:     "user@example.com",
+				Name:      "Test User",
+				CreatedAt: now,
+				UpdatedAt: now,
+			}, nil
+		},
+	}
+	h := NewAuthHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, userID))
+	rec := httptest.NewRecorder()
+
+	h.Me(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	user := decodeUser(t, resp.Data)
+	assert.Equal(t, userID, user.ID)
+	assert.Equal(t, "user@example.com", user.Email)
+	assert.Equal(t, "Test User", user.Name)
+	assert.NotContains(t, rec.Body.String(), "password_hash")
+}
+
+func TestMe_NoAuth(t *testing.T) {
+	h := NewAuthHandler(&mockAuthService{})
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	rec := httptest.NewRecorder()
+
+	h.Me(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "UNAUTHORIZED", resp.Errors[0].Code)
 }

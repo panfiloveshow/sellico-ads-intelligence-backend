@@ -1,0 +1,233 @@
+#sellico-extension-panel {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  z-index: 1000;
+  width: 300px;
+  max-height: calc(100vh - 100px);
+  overflow: auto;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(255, 252, 246, 0.98);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(8px);
+  color: #1f2937;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transition: all 0.2s ease;
+}
+
+#sellico-extension-panel.sellico-panel--collapsed {
+  width: auto;
+  max-width: 300px;
+}
+
+#sellico-extension-panel.sellico-panel--collapsed .sellico-panel__body {
+  display: none;
+}
+
+#sellico-extension-panel.sellico-panel--collapsed .sellico-panel__minimize {
+  transform: rotate(0deg);
+}
+
+.sellico-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sellico-panel__header:hover {
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.sellico-panel__logo {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sellico-panel__logo svg {
+  display: block;
+  filter: drop-shadow(0 2px 4px rgba(245, 158, 11, 0.3));
+}
+
+.sellico-panel__header-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sellico-panel__eyebrow {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b45309;
+}
+
+.sellico-panel__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sellico-panel__minimize {
+  border: 0;
+  background: rgba(15, 23, 42, 0.06);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  color: #667085;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.sellico-panel__minimize:hover {
+  background: rgba(15, 23, 42, 0.12);
+  color: #1f2937;
+}
+
+.sellico-panel__minimize:active {
+  transform: scale(0.95);
+}
+
+.sellico-panel__body {
+  padding: 14px 16px 16px;
+}
+
+.sellico-panel__section + .sellico-panel__section {
+  margin-top: 16px;
+}
+
+.sellico-panel__status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sellico-panel__status-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sellico-panel__status-grid span {
+  display: block;
+  font-size: 10px;
+  color: #667085;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sellico-panel__status-grid strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sellico-panel__subsection h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #667085;
+}
+
+.sellico-panel__subsection ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.sellico-panel__subsection li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.sellico-panel__subsection li strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sellico-panel__subsection li span,
+.sellico-panel__subsection li a {
+  color: #475467;
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.sellico-panel__subsection li a:hover {
+  color: #1f2937;
+  text-decoration: underline;
+}
+
+.sellico-panel__empty {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sellico-panel__empty--notice {
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  border: 1px solid rgba(245, 158, 11, 0.15);
+}
+
+[data-sellico-inline-badge] {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font: 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.sellico-inline-badge--info {
+  background: rgba(15, 23, 42, 0.08);
+  color: #334155;
+}
+
+.sellico-inline-badge--warning {
+  background: rgba(245, 158, 11, 0.18);
+  color: #92400e;
+}
+
+.sellico-inline-badge--danger {
+  background: rgba(220, 38, 38, 0.14);
+  color: #b91c1c;
+}
+
+.sellico-inline-badge--success {
+  background: rgba(22, 163, 74, 0.14);
+  color: #166534;
+}

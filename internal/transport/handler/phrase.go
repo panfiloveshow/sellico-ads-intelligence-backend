@@ -12,14 +12,17 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/envelope"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/pagination"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/dto"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/middleware"
 )
 
 type phraseServicer interface {
+	List(ctx context.Context, workspaceID uuid.UUID, filter service.PhraseListFilter, limit, offset int32) ([]domain.Phrase, error)
 	Get(ctx context.Context, workspaceID, phraseID uuid.UUID) (*domain.Phrase, error)
 	GetStats(ctx context.Context, workspaceID, phraseID uuid.UUID, dateFrom, dateTo time.Time, limit, offset int32) ([]domain.PhraseStat, error)
 	ListBids(ctx context.Context, workspaceID, phraseID uuid.UUID, dateFrom, dateTo time.Time, limit, offset int32) ([]domain.BidSnapshot, error)
+	ListRecommendations(ctx context.Context, workspaceID, phraseID uuid.UUID, filter service.RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error)
 }
 
 // PhraseHandler handles phrase endpoints.
@@ -29,6 +32,39 @@ type PhraseHandler struct {
 
 func NewPhraseHandler(svc phraseServicer) *PhraseHandler {
 	return &PhraseHandler{svc: svc}
+}
+
+func (h *PhraseHandler) List(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	campaignID, err := parseOptionalUUIDQuery(r, "campaign_id")
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid campaign_id")
+		return
+	}
+
+	pg := pagination.Parse(r)
+	phrases, err := h.svc.List(r.Context(), workspaceID, service.PhraseListFilter{
+		CampaignID: campaignID,
+	}, int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	items := make([]dto.PhraseResponse, len(phrases))
+	for i, phrase := range phrases {
+		items[i] = dto.PhraseFromDomain(phrase)
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{
+		Page:    pg.Page,
+		PerPage: pg.PerPage,
+		Total:   int64(len(items)),
+	})
 }
 
 func (h *PhraseHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +144,41 @@ func (h *PhraseHandler) ListBids(w http.ResponseWriter, r *http.Request) {
 	items := make([]dto.BidSnapshotResponse, len(bids))
 	for i, bid := range bids {
 		items[i] = dto.BidSnapshotFromDomain(bid)
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{
+		Page:    pg.Page,
+		PerPage: pg.PerPage,
+		Total:   int64(len(items)),
+	})
+}
+
+func (h *PhraseHandler) ListRecommendations(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	phraseID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid phrase id")
+		return
+	}
+
+	pg := pagination.Parse(r)
+	recommendations, err := h.svc.ListRecommendations(r.Context(), workspaceID, phraseID, service.RecommendationListFilter{
+		Type:     r.URL.Query().Get("type"),
+		Severity: r.URL.Query().Get("severity"),
+		Status:   r.URL.Query().Get("status"),
+	}, int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	items := make([]dto.RecommendationResponse, len(recommendations))
+	for i, recommendation := range recommendations {
+		items[i] = dto.RecommendationFromDomain(recommendation)
 	}
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{
 		Page:    pg.Page,

@@ -22,9 +22,14 @@ import (
 )
 
 type mockExportService struct {
+	listFn            func(ctx context.Context, workspaceID uuid.UUID, filter service.ExportListFilter, limit, offset int32) ([]domain.Export, error)
 	createFn          func(ctx context.Context, userID, workspaceID uuid.UUID, entityType, format string, filters json.RawMessage) (*domain.Export, error)
 	getFn             func(ctx context.Context, workspaceID, exportID uuid.UUID) (*domain.Export, error)
 	prepareDownloadFn func(ctx context.Context, workspaceID, exportID uuid.UUID) (*service.ExportDownload, error)
+}
+
+func (m *mockExportService) List(ctx context.Context, workspaceID uuid.UUID, filter service.ExportListFilter, limit, offset int32) ([]domain.Export, error) {
+	return m.listFn(ctx, workspaceID, filter, limit, offset)
 }
 
 func (m *mockExportService) Create(ctx context.Context, userID, workspaceID uuid.UUID, entityType, format string, filters json.RawMessage) (*domain.Export, error) {
@@ -48,6 +53,86 @@ func decodeExport(t *testing.T, data interface{}) dto.ExportResponse {
 	return result
 }
 
+func TestExportList_Success(t *testing.T) {
+	workspaceID := uuid.New()
+	now := time.Now()
+	userID := uuid.New()
+
+	mock := &mockExportService{
+		listFn: func(_ context.Context, gotWorkspaceID uuid.UUID, filter service.ExportListFilter, limit, offset int32) ([]domain.Export, error) {
+			assert.Equal(t, workspaceID, gotWorkspaceID)
+			require.NotNil(t, filter.UserID)
+			assert.Equal(t, userID, *filter.UserID)
+			assert.Equal(t, "products", filter.EntityType)
+			assert.Equal(t, "csv", filter.Format)
+			assert.Equal(t, domain.ExportStatusPending, filter.Status)
+			assert.Equal(t, int32(20), limit)
+			assert.Equal(t, int32(0), offset)
+			return []domain.Export{{
+				ID:          uuid.New(),
+				WorkspaceID: workspaceID,
+				UserID:      userID,
+				EntityType:  "products",
+				Format:      "csv",
+				Status:      domain.ExportStatusPending,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}}, nil
+		},
+		createFn: func(context.Context, uuid.UUID, uuid.UUID, string, string, json.RawMessage) (*domain.Export, error) {
+			return nil, nil
+		},
+		getFn: func(context.Context, uuid.UUID, uuid.UUID) (*domain.Export, error) {
+			return nil, nil
+		},
+		prepareDownloadFn: func(context.Context, uuid.UUID, uuid.UUID) (*service.ExportDownload, error) {
+			return nil, nil
+		},
+	}
+	h := NewExportHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/exports?user_id="+userID.String()+"&entity_type=products&format=csv&status=pending", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID))
+	rec := httptest.NewRecorder()
+
+	h.List(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	items, ok := resp.Data.([]interface{})
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	exportResp := decodeExport(t, items[0])
+	assert.Equal(t, domain.ExportStatusPending, exportResp.Status)
+}
+
+func TestExportList_InvalidUserID(t *testing.T) {
+	mock := &mockExportService{
+		listFn: func(context.Context, uuid.UUID, service.ExportListFilter, int32, int32) ([]domain.Export, error) {
+			t.Fatal("list should not be called")
+			return nil, nil
+		},
+		createFn: func(context.Context, uuid.UUID, uuid.UUID, string, string, json.RawMessage) (*domain.Export, error) {
+			return nil, nil
+		},
+		getFn: func(context.Context, uuid.UUID, uuid.UUID) (*domain.Export, error) {
+			return nil, nil
+		},
+		prepareDownloadFn: func(context.Context, uuid.UUID, uuid.UUID) (*service.ExportDownload, error) {
+			return nil, nil
+		},
+	}
+	h := NewExportHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/exports?user_id=bad-uuid", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+
+	h.List(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestExportCreate_Success(t *testing.T) {
 	userID := uuid.New()
 	workspaceID := uuid.New()
@@ -55,6 +140,9 @@ func TestExportCreate_Success(t *testing.T) {
 	now := time.Now()
 
 	mock := &mockExportService{
+		listFn: func(context.Context, uuid.UUID, service.ExportListFilter, int32, int32) ([]domain.Export, error) {
+			return nil, nil
+		},
 		createFn: func(_ context.Context, gotUserID, gotWorkspaceID uuid.UUID, entityType, format string, filters json.RawMessage) (*domain.Export, error) {
 			assert.Equal(t, userID, gotUserID)
 			assert.Equal(t, workspaceID, gotWorkspaceID)
@@ -107,6 +195,9 @@ func TestExportGet_Success(t *testing.T) {
 	now := time.Now()
 
 	mock := &mockExportService{
+		listFn: func(context.Context, uuid.UUID, service.ExportListFilter, int32, int32) ([]domain.Export, error) {
+			return nil, nil
+		},
 		createFn: func(context.Context, uuid.UUID, uuid.UUID, string, string, json.RawMessage) (*domain.Export, error) {
 			return nil, nil
 		},
@@ -156,6 +247,9 @@ func TestExportDownload_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(filePath, []byte("id,name\n1,boots\n"), 0o644))
 
 	mock := &mockExportService{
+		listFn: func(context.Context, uuid.UUID, service.ExportListFilter, int32, int32) ([]domain.Export, error) {
+			return nil, nil
+		},
 		createFn: func(context.Context, uuid.UUID, uuid.UUID, string, string, json.RawMessage) (*domain.Export, error) {
 			return nil, nil
 		},

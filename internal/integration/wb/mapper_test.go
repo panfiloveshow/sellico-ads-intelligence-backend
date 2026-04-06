@@ -44,16 +44,16 @@ func TestMapBidType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// rublesToKopecks
+// roundRubles
 // ---------------------------------------------------------------------------
 
-func TestRublesToKopecks(t *testing.T) {
-	assert.Equal(t, int64(0), rublesToKopecks(0))
-	assert.Equal(t, int64(100), rublesToKopecks(1.0))
-	assert.Equal(t, int64(1050), rublesToKopecks(10.50))
-	assert.Equal(t, int64(999), rublesToKopecks(9.99))
-	assert.Equal(t, int64(1), rublesToKopecks(0.009)) // rounds to 1
-	assert.Equal(t, int64(-500), rublesToKopecks(-5.0))
+func TestRoundRubles(t *testing.T) {
+	assert.Equal(t, int64(0), roundRubles(0))
+	assert.Equal(t, int64(1), roundRubles(1.0))
+	assert.Equal(t, int64(11), roundRubles(10.50))
+	assert.Equal(t, int64(10), roundRubles(9.99))
+	assert.Equal(t, int64(0), roundRubles(0.009))
+	assert.Equal(t, int64(-5), roundRubles(-5.0))
 }
 
 // ---------------------------------------------------------------------------
@@ -131,11 +131,14 @@ func TestMapCampaignDTO_ZeroAdvertID(t *testing.T) {
 func TestMapCampaignStatDTO_Success(t *testing.T) {
 	campID := uuid.New()
 	dto := WBCampaignStatDTO{
-		AdvertID: 1,
-		Date:     "2026-03-20",
-		Views:    1500,
-		Clicks:   120,
-		Sum:      345.67,
+		AdvertID:     1,
+		Date:         "2026-03-20",
+		Views:        1500,
+		Clicks:       120,
+		Sum:          345.67,
+		Orders:       int64Ptr(12),
+		OrderedItems: int64Ptr(18),
+		Revenue:      float64Ptr(4567.89),
 	}
 
 	stat, err := MapCampaignStatDTO(dto, campID)
@@ -146,9 +149,26 @@ func TestMapCampaignStatDTO_Success(t *testing.T) {
 	assert.Equal(t, "2026-03-20", stat.Date.Format("2006-01-02"))
 	assert.Equal(t, int64(1500), stat.Impressions)
 	assert.Equal(t, int64(120), stat.Clicks)
-	assert.Equal(t, int64(34567), stat.Spend)
-	assert.Nil(t, stat.Orders)
-	assert.Nil(t, stat.Revenue)
+	assert.Equal(t, int64(346), stat.Spend)
+	require.NotNil(t, stat.Orders)
+	assert.Equal(t, int64(18), *stat.Orders)
+	require.NotNil(t, stat.Revenue)
+	assert.Equal(t, int64(4568), *stat.Revenue)
+}
+
+func TestMapCampaignStatDTO_RFC3339Date(t *testing.T) {
+	campID := uuid.New()
+	dto := WBCampaignStatDTO{
+		AdvertID: 1,
+		Date:     "2026-03-20T00:00:00Z",
+		Views:    1500,
+		Clicks:   120,
+		Sum:      345.67,
+	}
+
+	stat, err := MapCampaignStatDTO(dto, campID)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-20", stat.Date.Format("2006-01-02"))
 }
 
 func TestMapCampaignStatDTO_InvalidDate(t *testing.T) {
@@ -241,7 +261,7 @@ func TestMapSearchClusterStatDTO_Success(t *testing.T) {
 	assert.Equal(t, "2026-03-15", stat.Date.Format("2006-01-02"))
 	assert.Equal(t, int64(500), stat.Impressions)
 	assert.Equal(t, int64(30), stat.Clicks)
-	assert.Equal(t, int64(1234), stat.Spend)
+	assert.Equal(t, int64(12), stat.Spend)
 }
 
 func TestMapSearchClusterStatDTO_InvalidDate(t *testing.T) {
@@ -326,7 +346,7 @@ func TestMapSalesFunnelDTO_Success(t *testing.T) {
 	require.NotNil(t, stat.Orders)
 	assert.Equal(t, int64(25), *stat.Orders)
 	require.NotNil(t, stat.Revenue)
-	assert.Equal(t, int64(7500050), *stat.Revenue)
+	assert.Equal(t, int64(75001), *stat.Revenue)
 }
 
 func TestMapSalesFunnelDTO_InvalidDate(t *testing.T) {
@@ -343,6 +363,14 @@ func TestMapSalesFunnelDTO_ZeroOrders(t *testing.T) {
 	assert.Equal(t, int64(0), *stat.Orders)
 	require.NotNil(t, stat.Revenue)
 	assert.Equal(t, int64(0), *stat.Revenue)
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }
 
 // ---------------------------------------------------------------------------

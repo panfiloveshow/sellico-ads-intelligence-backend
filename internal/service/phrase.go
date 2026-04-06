@@ -18,8 +18,30 @@ type PhraseService struct {
 	queries *sqlcgen.Queries
 }
 
+type PhraseListFilter struct {
+	CampaignID *uuid.UUID
+}
+
 func NewPhraseService(queries *sqlcgen.Queries) *PhraseService {
 	return &PhraseService{queries: queries}
+}
+
+func (s *PhraseService) List(ctx context.Context, workspaceID uuid.UUID, filter PhraseListFilter, limit, offset int32) ([]domain.Phrase, error) {
+	rows, err := s.queries.ListPhrasesByWorkspace(ctx, sqlcgen.ListPhrasesByWorkspaceParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		CampaignIDFilter: uuidToPgtypePtr(filter.CampaignID),
+		Limit:            limit,
+		Offset:           offset,
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list phrases")
+	}
+
+	result := make([]domain.Phrase, len(rows))
+	for i, row := range rows {
+		result[i] = phraseFromSqlc(row)
+	}
+	return result, nil
 }
 
 func (s *PhraseService) Get(ctx context.Context, workspaceID, phraseID uuid.UUID) (*domain.Phrase, error) {
@@ -80,6 +102,33 @@ func (s *PhraseService) ListBids(ctx context.Context, workspaceID, phraseID uuid
 	result := make([]domain.BidSnapshot, len(rows))
 	for i, row := range rows {
 		result[i] = bidSnapshotFromSqlc(row)
+	}
+	return result, nil
+}
+
+func (s *PhraseService) ListRecommendations(ctx context.Context, workspaceID, phraseID uuid.UUID, filter RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error) {
+	if _, err := s.Get(ctx, workspaceID, phraseID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.queries.ListRecommendationsByWorkspace(ctx, sqlcgen.ListRecommendationsByWorkspaceParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Limit:            limit,
+		Offset:           offset,
+		CampaignIDFilter: uuidToPgtypePtr(filter.CampaignID),
+		PhraseIDFilter:   uuidToPgtypePtr(&phraseID),
+		ProductIDFilter:  uuidToPgtypePtr(filter.ProductID),
+		TypeFilter:       textToPgtype(filter.Type),
+		SeverityFilter:   textToPgtype(filter.Severity),
+		StatusFilter:     textToPgtype(filter.Status),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list phrase recommendations")
+	}
+
+	result := make([]domain.Recommendation, len(rows))
+	for i, row := range rows {
+		result[i] = recommendationFromSqlc(row)
 	}
 	return result, nil
 }

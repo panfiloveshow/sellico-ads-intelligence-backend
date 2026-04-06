@@ -36,12 +36,14 @@ func newTestClient(baseURL string) *Client {
 		WBAPIRateLimit: 100, // high limit for tests
 	}
 	logger := zerolog.Nop()
-	return NewClient(cfg, logger)
+	client := NewClient(cfg, logger)
+	client.contentURL = baseURL
+	return client
 }
 
 func TestDoRequest_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "test-token", r.Header.Get("Authorization"))
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"ok":true}`))

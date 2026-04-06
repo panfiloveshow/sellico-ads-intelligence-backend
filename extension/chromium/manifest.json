@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "Sellico Ads Intelligence",
+  "description": "Live Sellico context and auto-capture inside Wildberries Ads cabinet.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "cookies",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://seller.wildberries.ru/*",
+    "https://cmp.wildberries.ru/*",
+    "https://sellico.ru/*",
+    "http://127.0.0.1:8080/*",
+    "http://localhost:8080/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Sellico Ads Intelligence"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://seller.wildberries.ru/*",
+        "https://cmp.wildberries.ru/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "panel.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-bridge.js",
+        "icons/*"
+      ],
+      "matches": [
+        "https://seller.wildberries.ru/*",
+        "https://cmp.wildberries.ru/*"
+      ]
+    }
+  ]
+}

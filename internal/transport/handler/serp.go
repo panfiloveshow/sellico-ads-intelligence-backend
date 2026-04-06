@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -17,8 +18,10 @@ import (
 )
 
 type serpServicer interface {
+	Create(ctx context.Context, actorID, workspaceID uuid.UUID, input service.CreateSERPSnapshotInput) (*domain.SERPSnapshot, []domain.SERPResultItem, error)
 	List(ctx context.Context, workspaceID uuid.UUID, filter service.SERPListFilter, limit, offset int32) ([]domain.SERPSnapshot, error)
 	Get(ctx context.Context, workspaceID, snapshotID uuid.UUID) (*domain.SERPSnapshot, error)
+	Compare(ctx context.Context, workspaceID, snapshotID uuid.UUID) (*domain.SERPComparison, error)
 	ListItems(ctx context.Context, snapshotID uuid.UUID) ([]domain.SERPResultItem, error)
 }
 
@@ -29,6 +32,55 @@ type SERPHandler struct {
 
 func NewSERPHandler(svc serpServicer) *SERPHandler {
 	return &SERPHandler{svc: svc}
+}
+
+func (h *SERPHandler) Create(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "authentication required"))
+		return
+	}
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	var req dto.CreateSERPSnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid request body")
+		return
+	}
+	if errs := req.Validate(); len(errs) > 0 {
+		dto.WriteValidationError(w, errs)
+		return
+	}
+
+	items := make([]service.CreateSERPResultItemInput, len(req.Items))
+	for i, item := range req.Items {
+		items[i] = service.CreateSERPResultItemInput{
+			Position:     item.Position,
+			WBProductID:  item.WBProductID,
+			Title:        item.Title,
+			Price:        item.Price,
+			Rating:       item.Rating,
+			ReviewsCount: item.ReviewsCount,
+		}
+	}
+
+	snapshot, createdItems, err := h.svc.Create(r.Context(), actorID, workspaceID, service.CreateSERPSnapshotInput{
+		Query:        req.Query,
+		Region:       req.Region,
+		TotalResults: req.TotalResults,
+		ScannedAt:    req.ScannedAt,
+		Items:        items,
+	})
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	dto.WriteJSON(w, http.StatusCreated, dto.SERPSnapshotDetailFromDomain(*snapshot, createdItems, nil))
 }
 
 func (h *SERPHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -84,5 +136,10 @@ func (h *SERPHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	dto.WriteJSON(w, http.StatusOK, dto.SERPSnapshotDetailFromDomain(*snapshot, items))
+	compare, err := h.svc.Compare(r.Context(), workspaceID, snapshotID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, dto.SERPSnapshotDetailFromDomain(*snapshot, items, compare))
 }

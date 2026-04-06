@@ -1,0 +1,18 @@
+[Unit]
+Description=Sellico Ads Intelligence Backend
+Documentation=https://github.com/panfiloveshow/sellico-ads-intelligence-backend
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/sellico
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml down
+ExecReload=/usr/bin/docker compose -f docker-compose.prod.yml pull api worker && /usr/bin/docker compose -f docker-compose.prod.yml up -d api worker
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -23,6 +23,7 @@ var (
 	ErrInternal       = &AppError{Code: "INTERNAL_ERROR", Message: "internal server error", Status: 500}
 	ErrWBAPIError     = &AppError{Code: "WB_API_ERROR", Message: "wildberries api error", Status: 502}
 	ErrDecryptionFail = &AppError{Code: "DECRYPTION_ERROR", Message: "failed to process credentials", Status: 500}
+	ErrRateLimited    = &AppError{Code: "RATE_LIMITED", Message: "too many requests", Status: 429}
 )
 
 // New creates a new AppError with a custom message, inheriting Code and Status from base.

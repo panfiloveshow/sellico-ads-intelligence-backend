@@ -9,6 +9,9 @@ SELECT * FROM recommendations WHERE id = $1;
 -- name: ListRecommendationsByWorkspace :many
 SELECT * FROM recommendations
 WHERE workspace_id = $1
+  AND (sqlc.narg('campaign_id_filter')::uuid IS NULL OR campaign_id = sqlc.narg('campaign_id_filter')::uuid)
+  AND (sqlc.narg('phrase_id_filter')::uuid IS NULL OR phrase_id = sqlc.narg('phrase_id_filter')::uuid)
+  AND (sqlc.narg('product_id_filter')::uuid IS NULL OR product_id = sqlc.narg('product_id_filter')::uuid)
   AND (sqlc.narg('type_filter')::text IS NULL OR type = sqlc.narg('type_filter')::text)
   AND (sqlc.narg('severity_filter')::text IS NULL OR severity = sqlc.narg('severity_filter')::text)
   AND (sqlc.narg('status_filter')::text IS NULL OR status = sqlc.narg('status_filter')::text)

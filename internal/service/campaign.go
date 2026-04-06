@@ -19,17 +19,26 @@ type CampaignService struct {
 	queries *sqlcgen.Queries
 }
 
+type CampaignListFilter struct {
+	SellerCabinetID *uuid.UUID
+	Status          string
+	Name            string
+}
+
 // NewCampaignService creates a new CampaignService.
 func NewCampaignService(queries *sqlcgen.Queries) *CampaignService {
 	return &CampaignService{queries: queries}
 }
 
 // List returns campaigns for a workspace with pagination.
-func (s *CampaignService) List(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.Campaign, error) {
+func (s *CampaignService) List(ctx context.Context, workspaceID uuid.UUID, filter CampaignListFilter, limit, offset int32) ([]domain.Campaign, error) {
 	rows, err := s.queries.ListCampaignsByWorkspace(ctx, sqlcgen.ListCampaignsByWorkspaceParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       limit,
-		Offset:      offset,
+		WorkspaceID:           uuidToPgtype(workspaceID),
+		SellerCabinetIDFilter: uuidToPgtypePtr(filter.SellerCabinetID),
+		StatusFilter:          textToPgtype(filter.Status),
+		NameFilter:            textToPgtype(filter.Name),
+		Limit:                 limit,
+		Offset:                offset,
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to list campaigns")
@@ -94,6 +103,34 @@ func (s *CampaignService) ListPhrases(ctx context.Context, campaignID uuid.UUID,
 	result := make([]domain.Phrase, len(rows))
 	for i, row := range rows {
 		result[i] = phraseFromSqlc(row)
+	}
+	return result, nil
+}
+
+// ListRecommendations returns recommendations for a campaign with pagination.
+func (s *CampaignService) ListRecommendations(ctx context.Context, workspaceID, campaignID uuid.UUID, filter RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error) {
+	if _, err := s.Get(ctx, workspaceID, campaignID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.queries.ListRecommendationsByWorkspace(ctx, sqlcgen.ListRecommendationsByWorkspaceParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Limit:            limit,
+		Offset:           offset,
+		CampaignIDFilter: uuidToPgtypePtr(&campaignID),
+		PhraseIDFilter:   uuidToPgtypePtr(filter.PhraseID),
+		ProductIDFilter:  uuidToPgtypePtr(filter.ProductID),
+		TypeFilter:       textToPgtype(filter.Type),
+		SeverityFilter:   textToPgtype(filter.Severity),
+		StatusFilter:     textToPgtype(filter.Status),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list campaign recommendations")
+	}
+
+	result := make([]domain.Recommendation, len(rows))
+	for i, row := range rows {
+		result[i] = recommendationFromSqlc(row)
 	}
 	return result, nil
 }

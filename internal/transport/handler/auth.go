@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/google/uuid"
+
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/dto"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/middleware"
 )
 
 // authServicer is the interface the AuthHandler depends on.
@@ -16,6 +20,7 @@ type authServicer interface {
 	Login(ctx context.Context, email, password string) (*service.AuthTokens, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*service.AuthTokens, error)
 	Logout(ctx context.Context, refreshToken string) error
+	GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error)
 }
 
 // AuthHandler handles authentication HTTP endpoints.
@@ -122,6 +127,23 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dto.WriteJSON(w, http.StatusOK, nil)
+}
+
+// Me handles GET /auth/me.
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "authentication required"))
+		return
+	}
+
+	user, err := h.authService.GetMe(r.Context(), userID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	dto.WriteJSON(w, http.StatusOK, dto.UserFromDomain(*user))
 }
 
 // writeAppError maps an AppError to the appropriate HTTP response.

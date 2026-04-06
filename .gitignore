@@ -1,7 +1,7 @@
 # Binaries
 bin/
-api
-worker
+/api
+/worker
 *.exe
 
 # Environment
@@ -17,6 +17,10 @@ worker
 
 # Exports
 exports/
+
+# Extension packaging artifacts
+extension/dist/
+extension/*.pem
 
 # Test
 coverage.out

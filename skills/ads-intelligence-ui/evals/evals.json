@@ -1,0 +1,45 @@
+{
+  "skill_name": "ads-intelligence-ui",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Создай главный экран Command Center с таблицей-переключателем (кампании/товары/фразы) и карточками рекомендаций",
+      "expected_output": "Complete CommandCenter.tsx React component with: ShopDropdown, MetricCards, QuickStats, RecommendationCards with action buttons, EntityTable with Tabs (Campaigns/Products/Phrases), all using adsIntelligenceApi methods",
+      "files": [],
+      "assertions": [
+        {"text": "Uses adsIntelligenceApi.getOverview for dashboard data", "type": "contains"},
+        {"text": "Has Tab switcher for Campaigns/Products/Phrases", "type": "contains"},
+        {"text": "RecommendationCard has Apply/Pause/Dismiss buttons", "type": "contains"},
+        {"text": "Campaign row click navigates to /ads-intelligence/campaigns/:id", "type": "contains"},
+        {"text": "All text in Russian", "type": "check"},
+        {"text": "Uses MUI components (Paper, Table, Tabs, Chip)", "type": "contains"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Создай страницу детали товара с табами: конкуренты, SEO-анализ, события изменений",
+      "expected_output": "Complete ProductDetailPage.tsx with tabs: Overview, Competitors (table), SEO (scores+issues), Events (timeline), Positions",
+      "files": [],
+      "assertions": [
+        {"text": "Has 5 tabs: Overview, Competitors, SEO, Events, Positions", "type": "check"},
+        {"text": "Competitors tab shows competitor_title, price, position comparison", "type": "contains"},
+        {"text": "SEO tab shows overall_score, title_score, keywords_score", "type": "contains"},
+        {"text": "Events tab shows event_type, old_value, new_value, detected_at", "type": "contains"},
+        {"text": "Uses getProductCompetitors, getProductSEO, getProductEvents API methods", "type": "contains"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Создай страницу настроек со стратегиями автоставок, ключевыми словами и конкурентами",
+      "expected_output": "Complete SettingsPage.tsx with accordion sections for Strategies, Keywords, Competitors, Exports, Jobs, Thresholds",
+      "files": [],
+      "assertions": [
+        {"text": "Has strategy create form with type selection (acos/roas/anti_sliv/dayparting)", "type": "contains"},
+        {"text": "Keywords section has collect and cluster buttons", "type": "contains"},
+        {"text": "Competitors section has extract from SERP button", "type": "contains"},
+        {"text": "Export section allows creating exports for different entity types", "type": "check"},
+        {"text": "Uses getStrategies, getKeywords, getCompetitors API methods", "type": "contains"}
+      ]
+    }
+  ]
+}

@@ -24,6 +24,7 @@ type mockWorkspaceService struct {
 	createFn           func(ctx context.Context, userID uuid.UUID, name, slug string) (*domain.Workspace, error)
 	listFn             func(ctx context.Context, userID uuid.UUID, limit, offset int32) ([]domain.Workspace, error)
 	getFn              func(ctx context.Context, workspaceID uuid.UUID) (*domain.Workspace, error)
+	listMembersFn      func(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.WorkspaceMember, error)
 	inviteMemberFn     func(ctx context.Context, workspaceID uuid.UUID, email, role string) (*domain.WorkspaceMember, error)
 	updateMemberRoleFn func(ctx context.Context, actorID, workspaceID, memberID uuid.UUID, newRole string) (*domain.WorkspaceMember, error)
 	removeMemberFn     func(ctx context.Context, workspaceID, memberID uuid.UUID) error
@@ -37,6 +38,9 @@ func (m *mockWorkspaceService) List(ctx context.Context, userID uuid.UUID, limit
 }
 func (m *mockWorkspaceService) Get(ctx context.Context, workspaceID uuid.UUID) (*domain.Workspace, error) {
 	return m.getFn(ctx, workspaceID)
+}
+func (m *mockWorkspaceService) ListMembers(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.WorkspaceMember, error) {
+	return m.listMembersFn(ctx, workspaceID, limit, offset)
 }
 func (m *mockWorkspaceService) InviteMember(ctx context.Context, workspaceID uuid.UUID, email, role string) (*domain.WorkspaceMember, error) {
 	return m.inviteMemberFn(ctx, workspaceID, email, role)
@@ -224,6 +228,51 @@ func TestListWorkspaces_Empty(t *testing.T) {
 	items, ok := resp.Data.([]interface{})
 	require.True(t, ok)
 	assert.Len(t, items, 0)
+}
+
+func TestListWorkspaceMembers_Success(t *testing.T) {
+	now := time.Now()
+	workspaceID := uuid.New()
+	member1 := domain.WorkspaceMember{ID: uuid.New(), WorkspaceID: workspaceID, UserID: uuid.New(), Role: "owner", CreatedAt: now, UpdatedAt: now}
+	member2 := domain.WorkspaceMember{ID: uuid.New(), WorkspaceID: workspaceID, UserID: uuid.New(), Role: "analyst", CreatedAt: now, UpdatedAt: now}
+
+	mock := &mockWorkspaceService{
+		listMembersFn: func(_ context.Context, actualWorkspaceID uuid.UUID, limit, offset int32) ([]domain.WorkspaceMember, error) {
+			assert.Equal(t, workspaceID, actualWorkspaceID)
+			return []domain.WorkspaceMember{member1, member2}, nil
+		},
+	}
+	h := NewWorkspaceHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/workspaces/"+workspaceID.String()+"/members", nil)
+	ctx := context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.ListMembers(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	assert.Empty(t, resp.Errors)
+	items, ok := resp.Data.([]interface{})
+	require.True(t, ok)
+	require.Len(t, items, 2)
+	first := decodeMember(t, items[0])
+	assert.Equal(t, "owner", first.Role)
+}
+
+func TestListWorkspaceMembers_NoWorkspace(t *testing.T) {
+	h := NewWorkspaceHandler(&mockWorkspaceService{})
+
+	req := httptest.NewRequest(http.MethodGet, "/workspaces/x/members", nil)
+	rec := httptest.NewRecorder()
+
+	h.ListMembers(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "VALIDATION_ERROR", resp.Errors[0].Code)
 }
 
 // --- InviteMember tests ---

@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +13,14 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
+
+// writeAuditLog creates an audit log entry and logs any errors to stderr.
+// Audit log failures should never break business operations, but must be visible.
+func writeAuditLog(ctx context.Context, queries *sqlcgen.Queries, params sqlcgen.CreateAuditLogParams) {
+	if _, err := queries.CreateAuditLog(ctx, params); err != nil {
+		log.Printf("[WARN] audit log write failed: action=%s entity_type=%s err=%v", params.Action, params.EntityType, err)
+	}
+}
 
 func textToPgtype(value string) pgtype.Text {
 	if value == "" {
@@ -73,6 +83,20 @@ func timePtrToPgtype(t *time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
 
+func optionalInt64ToPgInt8(value *int64) pgtype.Int8 {
+	if value == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: *value, Valid: true}
+}
+
+func optionalIntToPgInt4(value *int) pgtype.Int4 {
+	if value == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(*value), Valid: true}
+}
+
 func pgDate(t time.Time) pgtype.Date {
 	return pgtype.Date{Time: t, Valid: true}
 }
@@ -133,6 +157,21 @@ func positionFromSqlc(p sqlcgen.Position) domain.Position {
 	}
 }
 
+func positionTrackingTargetFromSqlc(t sqlcgen.PositionTrackingTarget) domain.PositionTrackingTarget {
+	return domain.PositionTrackingTarget{
+		ID:                uuidFromPgtype(t.ID),
+		WorkspaceID:       uuidFromPgtype(t.WorkspaceID),
+		ProductID:         uuidFromPgtype(t.ProductID),
+		Query:             t.Query,
+		Region:            t.Region,
+		IsActive:          t.IsActive,
+		BaselinePosition:  int4ToPtr(t.BaselinePosition),
+		BaselineCheckedAt: timeToPtr(t.BaselineCheckedAt),
+		CreatedAt:         t.CreatedAt.Time,
+		UpdatedAt:         t.UpdatedAt.Time,
+	}
+}
+
 func serpSnapshotFromSqlc(s sqlcgen.SerpSnapshot) domain.SERPSnapshot {
 	return domain.SERPSnapshot{
 		ID:           uuidFromPgtype(s.ID),
@@ -172,6 +211,20 @@ func auditLogFromSqlc(a sqlcgen.AuditLog) domain.AuditLog {
 	}
 }
 
+func jobRunFromSqlc(j sqlcgen.JobRun) domain.JobRun {
+	return domain.JobRun{
+		ID:           uuidFromPgtype(j.ID),
+		WorkspaceID:  uuidToPtr(j.WorkspaceID),
+		TaskType:     j.TaskType,
+		Status:       j.Status,
+		StartedAt:    j.StartedAt.Time,
+		FinishedAt:   timeToPtr(j.FinishedAt),
+		ErrorMessage: textToPtr(j.ErrorMessage),
+		Metadata:     json.RawMessage(j.Metadata),
+		CreatedAt:    j.CreatedAt.Time,
+	}
+}
+
 func extensionSessionFromSqlc(s sqlcgen.ExtensionSession) domain.ExtensionSession {
 	return domain.ExtensionSession{
 		ID:               uuidFromPgtype(s.ID),
@@ -193,6 +246,117 @@ func extensionContextEventFromSqlc(e sqlcgen.ExtensionContextEvent) domain.Exten
 		PageType:    e.PageType,
 		Metadata:    json.RawMessage(e.Metadata),
 		CreatedAt:   e.CreatedAt.Time,
+	}
+}
+
+func extensionPageContextFromSqlc(e sqlcgen.ExtensionPageContext) domain.ExtensionPageContext {
+	return domain.ExtensionPageContext{
+		ID:              uuidFromPgtype(e.ID),
+		SessionID:       uuidFromPgtype(e.SessionID),
+		WorkspaceID:     uuidFromPgtype(e.WorkspaceID),
+		UserID:          uuidFromPgtype(e.UserID),
+		URL:             e.Url,
+		PageType:        e.PageType,
+		SellerCabinetID: uuidToPtr(e.SellerCabinetID),
+		CampaignID:      uuidToPtr(e.CampaignID),
+		PhraseID:        uuidToPtr(e.PhraseID),
+		ProductID:       uuidToPtr(e.ProductID),
+		Query:           textToPtr(e.Query),
+		Region:          textToPtr(e.Region),
+		ActiveFilters:   json.RawMessage(e.ActiveFilters),
+		Metadata:        json.RawMessage(e.Metadata),
+		CapturedAt:      e.CapturedAt.Time,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
+func extensionBidSnapshotFromSqlc(e sqlcgen.ExtensionBidSnapshot) domain.ExtensionBidSnapshot {
+	return domain.ExtensionBidSnapshot{
+		ID:              uuidFromPgtype(e.ID),
+		SessionID:       uuidFromPgtype(e.SessionID),
+		WorkspaceID:     uuidFromPgtype(e.WorkspaceID),
+		UserID:          uuidFromPgtype(e.UserID),
+		SellerCabinetID: uuidToPtr(e.SellerCabinetID),
+		CampaignID:      uuidToPtr(e.CampaignID),
+		PhraseID:        uuidToPtr(e.PhraseID),
+		Query:           textToPtr(e.Query),
+		Region:          textToPtr(e.Region),
+		VisibleBid:      int8ToPtr(e.VisibleBid),
+		RecommendedBid:  int8ToPtr(e.RecommendedBid),
+		CompetitiveBid:  int8ToPtr(e.CompetitiveBid),
+		LeadershipBid:   int8ToPtr(e.LeadershipBid),
+		CPMMin:          int8ToPtr(e.CpmMin),
+		Source:          e.Source,
+		Confidence:      numericToFloat64(e.Confidence),
+		Metadata:        json.RawMessage(e.Metadata),
+		CapturedAt:      e.CapturedAt.Time,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
+func extensionPositionSnapshotFromSqlc(e sqlcgen.ExtensionPositionSnapshot) domain.ExtensionPositionSnapshot {
+	return domain.ExtensionPositionSnapshot{
+		ID:              uuidFromPgtype(e.ID),
+		SessionID:       uuidFromPgtype(e.SessionID),
+		WorkspaceID:     uuidFromPgtype(e.WorkspaceID),
+		UserID:          uuidFromPgtype(e.UserID),
+		SellerCabinetID: uuidToPtr(e.SellerCabinetID),
+		CampaignID:      uuidToPtr(e.CampaignID),
+		PhraseID:        uuidToPtr(e.PhraseID),
+		ProductID:       uuidToPtr(e.ProductID),
+		Query:           e.Query,
+		Region:          e.Region,
+		VisiblePosition: int(e.VisiblePosition),
+		VisiblePage:     int4ToPtr(e.VisiblePage),
+		PageSubtype:     textToPtr(e.PageSubtype),
+		Source:          e.Source,
+		Confidence:      numericToFloat64(e.Confidence),
+		Metadata:        json.RawMessage(e.Metadata),
+		CapturedAt:      e.CapturedAt.Time,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
+func extensionUISignalFromSqlc(e sqlcgen.ExtensionUiSignal) domain.ExtensionUISignal {
+	return domain.ExtensionUISignal{
+		ID:              uuidFromPgtype(e.ID),
+		SessionID:       uuidFromPgtype(e.SessionID),
+		WorkspaceID:     uuidFromPgtype(e.WorkspaceID),
+		UserID:          uuidFromPgtype(e.UserID),
+		SellerCabinetID: uuidToPtr(e.SellerCabinetID),
+		CampaignID:      uuidToPtr(e.CampaignID),
+		PhraseID:        uuidToPtr(e.PhraseID),
+		ProductID:       uuidToPtr(e.ProductID),
+		Query:           textToPtr(e.Query),
+		Region:          textToPtr(e.Region),
+		SignalType:      e.SignalType,
+		Severity:        e.Severity,
+		Title:           e.Title,
+		Message:         textToPtr(e.Message),
+		Confidence:      numericToFloat64(e.Confidence),
+		Metadata:        json.RawMessage(e.Metadata),
+		CapturedAt:      e.CapturedAt.Time,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
+func extensionNetworkCaptureFromSqlc(e sqlcgen.ExtensionNetworkCapture) domain.ExtensionNetworkCapture {
+	return domain.ExtensionNetworkCapture{
+		ID:              uuidFromPgtype(e.ID),
+		SessionID:       uuidFromPgtype(e.SessionID),
+		WorkspaceID:     uuidFromPgtype(e.WorkspaceID),
+		UserID:          uuidFromPgtype(e.UserID),
+		SellerCabinetID: uuidToPtr(e.SellerCabinetID),
+		CampaignID:      uuidToPtr(e.CampaignID),
+		PhraseID:        uuidToPtr(e.PhraseID),
+		ProductID:       uuidToPtr(e.ProductID),
+		PageType:        e.PageType,
+		EndpointKey:     e.EndpointKey,
+		Query:           textToPtr(e.Query),
+		Region:          textToPtr(e.Region),
+		Payload:         json.RawMessage(e.Payload),
+		CapturedAt:      e.CapturedAt.Time,
+		CreatedAt:       e.CreatedAt.Time,
 	}
 }
 

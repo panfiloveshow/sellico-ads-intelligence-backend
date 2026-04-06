@@ -25,5 +25,6 @@ LIMIT $2 OFFSET $3;
 -- name: ListPhrasesByWorkspace :many
 SELECT * FROM phrases
 WHERE workspace_id = $1
+  AND (sqlc.narg('campaign_id_filter')::uuid IS NULL OR campaign_id = sqlc.narg('campaign_id_filter')::uuid)
 ORDER BY keyword
 LIMIT $2 OFFSET $3;

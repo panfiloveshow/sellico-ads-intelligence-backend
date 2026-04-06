@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,10 +13,11 @@ import (
 
 func TestListCampaigns_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/adverts", r.URL.Path)
+		assert.Equal(t, "/api/advert/v2/adverts", r.URL.Path)
 		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "-1,4,7,8,9,11", r.URL.Query().Get("statuses"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"advertId":123,"name":"Test","status":9,"type":9,"bidType":0,"paymentType":"cpm"}]`))
+		w.Write([]byte(`{"adverts":[{"advertId":123,"name":"Promo Test","type":8,"status":9,"dailyBudget":5000,"bid_type":"manual","paymentType":"cpm"},{"id":456,"type":9,"status":11,"bid_type":"manual","settings":{"name":"Auction Test","payment_type":"cpm"}}]}`))
 	}))
 	defer server.Close()
 
@@ -23,9 +25,17 @@ func TestListCampaigns_Success(t *testing.T) {
 	result, err := client.ListCampaigns(context.Background(), "token")
 
 	require.NoError(t, err)
-	require.Len(t, result, 1)
+	require.Len(t, result, 2)
 	assert.Equal(t, 123, result[0].AdvertID)
-	assert.Equal(t, "Test", result[0].Name)
+	assert.Equal(t, "Promo Test", result[0].Name)
+	assert.Equal(t, 9, result[0].Status)
+	assert.Equal(t, 8, result[0].Type)
+	assert.Equal(t, 0, result[0].BidType)
+	assert.Equal(t, "cpm", result[0].PaymentType)
+	assert.Equal(t, 456, result[1].AdvertID)
+	assert.Equal(t, "Auction Test", result[1].Name)
+	assert.Equal(t, 11, result[1].Status)
+	assert.Equal(t, 9, result[1].Type)
 }
 
 func TestListCampaigns_UnmarshalError(t *testing.T) {
@@ -39,15 +49,18 @@ func TestListCampaigns_UnmarshalError(t *testing.T) {
 	_, err := client.ListCampaigns(context.Background(), "token")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unmarshal campaigns")
+	assert.Contains(t, err.Error(), "unmarshal adverts v2 campaigns")
 }
 
 func TestGetCampaignStats_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/statistics", r.URL.Path)
-		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/adv/v3/fullstats", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "1", r.URL.Query().Get("ids"))
+		assert.Equal(t, "2025-01-01", r.URL.Query().Get("beginDate"))
+		assert.Equal(t, "2025-01-31", r.URL.Query().Get("endDate"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"advertId":1,"date":"2025-01-01","views":100,"clicks":10,"sum":50.5}]`))
+		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5,"orders":4,"shks":7,"sum_price":1250.4}]}]`))
 	}))
 	defer server.Close()
 
@@ -58,13 +71,52 @@ func TestGetCampaignStats_Success(t *testing.T) {
 	require.Len(t, result, 1)
 	assert.Equal(t, int64(100), result[0].Views)
 	assert.Equal(t, 50.5, result[0].Sum)
+	require.NotNil(t, result[0].Orders)
+	assert.Equal(t, int64(4), *result[0].Orders)
+	require.NotNil(t, result[0].OrderedItems)
+	assert.Equal(t, int64(7), *result[0].OrderedItems)
+	require.NotNil(t, result[0].Revenue)
+	assert.Equal(t, 1250.4, *result[0].Revenue)
+}
+
+func TestGetCampaignStats_SplitsOnClient400(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v3/fullstats", r.URL.Path)
+		ids := strings.Split(r.URL.Query().Get("ids"), ",")
+		if len(ids) > 1 {
+			http.Error(w, `{"error":"too many ids"}`, http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5}]}]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	stats, err := client.GetCampaignStats(context.Background(), "token", []int{1, 2}, "2025-01-01", "2025-01-31")
+
+	require.NoError(t, err)
+	assert.Len(t, stats, 2)
 }
 
 func TestListSearchClusters_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/search-clusters/42/bids", r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":1,"keywords":["shoes"],"count":500,"bid":150}]`))
+		switch r.URL.Path {
+		case "/api/advert/v2/adverts":
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111}]}]}`))
+		case "/adv/v1/normquery/stats":
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"stats":[{"advert_id":42,"nm_id":111,"stats":[{"norm_query":"shoes","views":500,"clicks":25,"cpc":120}]}]}`))
+		case "/adv/v0/normquery/get-bids":
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"bids":[{"advert_id":42,"nm_id":111,"bid":150,"norm_query":"shoes"}]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -73,15 +125,30 @@ func TestListSearchClusters_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	assert.Equal(t, int64(1), result[0].ClusterID)
+	assert.NotZero(t, result[0].ClusterID)
 	assert.Equal(t, []string{"shoes"}, result[0].Keywords)
+	assert.Equal(t, 500, result[0].Count)
+	assert.Equal(t, int64(150), result[0].Bid)
 }
 
 func TestGetSearchClusterStats_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/search-clusters/42/statistics", r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":1,"date":"2025-01-01","views":200,"clicks":20,"sum":30.0}]`))
+		switch r.URL.Path {
+		case "/api/advert/v2/adverts":
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111}]}]}`))
+		case "/adv/v1/normquery/stats":
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"stats":[{"advert_id":42,"nm_id":111,"stats":[{"norm_query":"shoes","views":200,"clicks":20,"cpc":150}]}]}`))
+		case "/adv/v0/normquery/get-bids":
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"bids":[{"advert_id":42,"nm_id":111,"bid":150,"norm_query":"shoes"}]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -91,6 +158,8 @@ func TestGetSearchClusterStats_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, int64(200), result[0].Views)
+	assert.Equal(t, int64(20), result[0].Clicks)
+	assert.Equal(t, 30.0, result[0].Sum)
 }
 
 func TestGetRecommendedBids_Success(t *testing.T) {
@@ -130,9 +199,10 @@ func TestGetCategoryConfig_Success(t *testing.T) {
 
 func TestListProducts_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/products", r.URL.Path)
+		assert.Equal(t, "/content/v2/get/cards/list", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"nmId":999,"vendorCode":"VC1","title":"Widget","brand":"Acme","chrtId":555}]`))
+		w.Write([]byte(`{"cards":[{"nmID":999,"vendorCode":"VC1","title":"Widget","brand":"Acme","object":"Electronics","mediaFiles":["https://cdn.example/item.jpg"],"sizes":[{"price":129900}]}]}`))
 	}))
 	defer server.Close()
 
@@ -143,6 +213,9 @@ func TestListProducts_Success(t *testing.T) {
 	require.Len(t, result, 1)
 	assert.Equal(t, int64(999), result[0].NmID)
 	assert.Equal(t, "Widget", result[0].Title)
+	assert.Equal(t, "Electronics", result[0].Category)
+	require.NotNil(t, result[0].Price)
+	assert.Equal(t, int64(129900), *result[0].Price)
 }
 
 func TestGetSalesFunnel_Success(t *testing.T) {

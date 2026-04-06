@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS idx_seller_cabinets_external_integration_id;
+
+CREATE UNIQUE INDEX idx_seller_cabinets_external_integration_id
+ON seller_cabinets (external_integration_id);

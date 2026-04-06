@@ -15,9 +15,12 @@ import (
 )
 
 type RecommendationListFilter struct {
-	Type     string
-	Severity string
-	Status   string
+	CampaignID *uuid.UUID
+	PhraseID   *uuid.UUID
+	ProductID  *uuid.UUID
+	Type       string
+	Severity   string
+	Status     string
 }
 
 type RecommendationUpsertInput struct {
@@ -45,20 +48,31 @@ func NewRecommendationService(queries *sqlcgen.Queries) *RecommendationService {
 
 func (s *RecommendationService) List(ctx context.Context, workspaceID uuid.UUID, filter RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error) {
 	rows, err := s.queries.ListRecommendationsByWorkspace(ctx, sqlcgen.ListRecommendationsByWorkspaceParams{
-		WorkspaceID:    uuidToPgtype(workspaceID),
-		Limit:          limit,
-		Offset:         offset,
-		TypeFilter:     textToPgtype(filter.Type),
-		SeverityFilter: textToPgtype(filter.Severity),
-		StatusFilter:   textToPgtype(filter.Status),
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Limit:            limit,
+		Offset:           offset,
+		CampaignIDFilter: uuidToPgtypePtr(filter.CampaignID),
+		PhraseIDFilter:   uuidToPgtypePtr(filter.PhraseID),
+		ProductIDFilter:  uuidToPgtypePtr(filter.ProductID),
+		TypeFilter:       textToPgtype(filter.Type),
+		SeverityFilter:   textToPgtype(filter.Severity),
+		StatusFilter:     textToPgtype(filter.Status),
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to list recommendations")
 	}
 
+	extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit)
+	if evidenceErr != nil {
+		extensionEvidence = &workspaceExtensionEvidence{}
+	}
+
 	result := make([]domain.Recommendation, len(rows))
 	for i, row := range rows {
-		result[i] = recommendationFromSqlc(row)
+		recommendation := recommendationFromSqlc(row)
+		recommendation = s.enrichCabinetContext(ctx, recommendation)
+		recommendation.Evidence = extensionEvidence.recommendationEvidence(recommendation)
+		result[i] = recommendation
 	}
 	return result, nil
 }
@@ -76,6 +90,12 @@ func (s *RecommendationService) Get(ctx context.Context, workspaceID, recommenda
 	}
 
 	result := recommendationFromSqlc(row)
+	result = s.enrichCabinetContext(ctx, result)
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit); evidenceErr == nil {
+		result.Evidence = extensionEvidence.recommendationEvidence(result)
+	} else {
+		result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
+	}
 	return &result, nil
 }
 
@@ -93,6 +113,12 @@ func (s *RecommendationService) UpdateStatus(ctx context.Context, workspaceID, r
 	}
 
 	result := recommendationFromSqlc(row)
+	result = s.enrichCabinetContext(ctx, result)
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit); evidenceErr == nil {
+		result.Evidence = extensionEvidence.recommendationEvidence(result)
+	} else {
+		result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
+	}
 	return &result, nil
 }
 
@@ -127,6 +153,12 @@ func (s *RecommendationService) UpsertActive(ctx context.Context, input Recommen
 			return nil, apperror.New(apperror.ErrInternal, "failed to refresh recommendation")
 		}
 		result := recommendationFromSqlc(row)
+		result = s.enrichCabinetContext(ctx, result)
+		if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, input.WorkspaceID, adsReadStatsLimit); evidenceErr == nil {
+			result.Evidence = extensionEvidence.recommendationEvidence(result)
+		} else {
+			result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
+		}
 		return &result, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -151,7 +183,37 @@ func (s *RecommendationService) UpsertActive(ctx context.Context, input Recommen
 	}
 
 	result := recommendationFromSqlc(row)
+	result = s.enrichCabinetContext(ctx, result)
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, input.WorkspaceID, adsReadStatsLimit); evidenceErr == nil {
+		result.Evidence = extensionEvidence.recommendationEvidence(result)
+	} else {
+		result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
+	}
 	return &result, nil
+}
+
+func (s *RecommendationService) CloseActive(ctx context.Context, workspaceID uuid.UUID, recommendationType string, campaignID, phraseID, productID *uuid.UUID) error {
+	existing, err := s.queries.GetActiveRecommendation(ctx, sqlcgen.GetActiveRecommendationParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Type:             recommendationType,
+		CampaignIDFilter: uuidToPgtypePtr(campaignID),
+		PhraseIDFilter:   uuidToPgtypePtr(phraseID),
+		ProductIDFilter:  uuidToPgtypePtr(productID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return apperror.New(apperror.ErrInternal, "failed to lookup active recommendation")
+	}
+
+	if _, err := s.queries.UpdateRecommendationStatus(ctx, sqlcgen.UpdateRecommendationStatusParams{
+		ID:     existing.ID,
+		Status: domain.RecommendationStatusCompleted,
+	}); err != nil {
+		return apperror.New(apperror.ErrInternal, "failed to close recommendation")
+	}
+	return nil
 }
 
 func ptrStringValue(v *string) string {
@@ -175,4 +237,42 @@ func nullableInt64(v pgtype.Int8) *int64 {
 	}
 	value := v.Int64
 	return &value
+}
+
+func (s *RecommendationService) enrichCabinetContext(ctx context.Context, recommendation domain.Recommendation) domain.Recommendation {
+	if recommendation.SellerCabinetID != nil {
+		return recommendation
+	}
+
+	if recommendation.ProductID != nil {
+		row, err := s.queries.GetProductByID(ctx, uuidToPgtype(*recommendation.ProductID))
+		if err == nil {
+			sellerCabinetID := uuidFromPgtype(row.SellerCabinetID)
+			recommendation.SellerCabinetID = nullableUUID(sellerCabinetID)
+			return recommendation
+		}
+	}
+
+	if recommendation.CampaignID != nil {
+		row, err := s.queries.GetCampaignByID(ctx, uuidToPgtype(*recommendation.CampaignID))
+		if err == nil {
+			sellerCabinetID := uuidFromPgtype(row.SellerCabinetID)
+			recommendation.SellerCabinetID = nullableUUID(sellerCabinetID)
+			return recommendation
+		}
+	}
+
+	if recommendation.PhraseID != nil {
+		phraseRow, err := s.queries.GetPhraseByID(ctx, uuidToPgtype(*recommendation.PhraseID))
+		if err == nil {
+			campaignRow, campaignErr := s.queries.GetCampaignByID(ctx, phraseRow.CampaignID)
+			if campaignErr == nil {
+				sellerCabinetID := uuidFromPgtype(campaignRow.SellerCabinetID)
+				recommendation.SellerCabinetID = nullableUUID(sellerCabinetID)
+				return recommendation
+			}
+		}
+	}
+
+	return recommendation
 }

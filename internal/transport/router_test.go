@@ -63,6 +63,8 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	}
 
 	// Public routes
+	assert.True(t, set["GET /openapi.yaml"], "missing GET /openapi.yaml")
+	assert.True(t, set["GET /docs"], "missing GET /docs")
 	assert.True(t, set["GET /health/live"], "missing GET /health/live")
 	assert.True(t, set["GET /health/ready"], "missing GET /health/ready")
 
@@ -71,6 +73,7 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["POST /api/v1/auth/login"], "missing POST /api/v1/auth/login")
 	assert.True(t, set["POST /api/v1/auth/refresh"], "missing POST /api/v1/auth/refresh")
 	assert.True(t, set["POST /api/v1/auth/logout"], "missing POST /api/v1/auth/logout")
+	assert.True(t, set["GET /api/v1/auth/me"], "missing GET /api/v1/auth/me")
 
 	// Workspace routes
 	assert.True(t, set["POST /api/v1/workspaces"], "missing POST /api/v1/workspaces")
@@ -78,6 +81,7 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["GET /api/v1/workspaces/{workspaceId}/"], "missing GET /api/v1/workspaces/{workspaceId}/")
 
 	// Workspace members
+	assert.True(t, set["GET /api/v1/workspaces/{workspaceId}/members/"], "missing GET members")
 	assert.True(t, set["POST /api/v1/workspaces/{workspaceId}/members/"], "missing POST members")
 	assert.True(t, set["PATCH /api/v1/workspaces/{workspaceId}/members/{memberId}"], "missing PATCH members")
 	assert.True(t, set["DELETE /api/v1/workspaces/{workspaceId}/members/{memberId}"], "missing DELETE members")
@@ -86,37 +90,69 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["POST /api/v1/seller-cabinets/"], "missing POST /api/v1/seller-cabinets/")
 	assert.True(t, set["GET /api/v1/seller-cabinets/"], "missing GET /api/v1/seller-cabinets/")
 	assert.True(t, set["GET /api/v1/seller-cabinets/{id}"], "missing GET /api/v1/seller-cabinets/{id}")
+	assert.True(t, set["GET /api/v1/seller-cabinets/{id}/campaigns"], "missing GET /api/v1/seller-cabinets/{id}/campaigns")
+	assert.True(t, set["GET /api/v1/seller-cabinets/{id}/products"], "missing GET /api/v1/seller-cabinets/{id}/products")
+	assert.True(t, set["POST /api/v1/seller-cabinets/{id}/sync"], "missing POST /api/v1/seller-cabinets/{id}/sync")
 	assert.True(t, set["DELETE /api/v1/seller-cabinets/{id}"], "missing DELETE /api/v1/seller-cabinets/{id}")
+	assert.True(t, set["POST /api/v1/cabinets/"], "missing POST /api/v1/cabinets/")
+	assert.True(t, set["GET /api/v1/cabinets/"], "missing GET /api/v1/cabinets/")
+	assert.True(t, set["GET /api/v1/cabinets/{id}"], "missing GET /api/v1/cabinets/{id}")
+	assert.True(t, set["GET /api/v1/cabinets/{id}/campaigns"], "missing GET /api/v1/cabinets/{id}/campaigns")
+	assert.True(t, set["GET /api/v1/cabinets/{id}/products"], "missing GET /api/v1/cabinets/{id}/products")
+	assert.True(t, set["POST /api/v1/cabinets/{id}/sync"], "missing POST /api/v1/cabinets/{id}/sync")
+	assert.True(t, set["DELETE /api/v1/cabinets/{id}"], "missing DELETE /api/v1/cabinets/{id}")
 
 	// Campaigns
 	assert.True(t, set["GET /api/v1/campaigns/"], "missing GET /api/v1/campaigns/")
 	assert.True(t, set["GET /api/v1/campaigns/{id}"], "missing GET /api/v1/campaigns/{id}")
 	assert.True(t, set["GET /api/v1/campaigns/{id}/stats"], "missing GET /api/v1/campaigns/{id}/stats")
+	assert.True(t, set["GET /api/v1/campaigns/{id}/daily-stats"], "missing GET /api/v1/campaigns/{id}/daily-stats")
 	assert.True(t, set["GET /api/v1/campaigns/{id}/phrases"], "missing GET /api/v1/campaigns/{id}/phrases")
+	assert.True(t, set["GET /api/v1/campaigns/{id}/recommendations"], "missing GET /api/v1/campaigns/{id}/recommendations")
 
 	// Phrases
+	assert.True(t, set["GET /api/v1/phrases/"], "missing GET /api/v1/phrases/")
 	assert.True(t, set["GET /api/v1/phrases/{id}"], "missing GET /api/v1/phrases/{id}")
 	assert.True(t, set["GET /api/v1/phrases/{id}/stats"], "missing GET /api/v1/phrases/{id}/stats")
+	assert.True(t, set["GET /api/v1/phrases/{id}/daily-stats"], "missing GET /api/v1/phrases/{id}/daily-stats")
 	assert.True(t, set["GET /api/v1/phrases/{id}/bids"], "missing GET /api/v1/phrases/{id}/bids")
+	assert.True(t, set["GET /api/v1/phrases/{id}/recommendations"], "missing GET /api/v1/phrases/{id}/recommendations")
+
+	// Bids
+	assert.True(t, set["POST /api/v1/bids/history"], "missing POST /api/v1/bids/history")
+	assert.True(t, set["GET /api/v1/bids/history"], "missing GET /api/v1/bids/history")
+	assert.True(t, set["GET /api/v1/bids/estimates"], "missing GET /api/v1/bids/estimates")
 
 	// Products
 	assert.True(t, set["GET /api/v1/products/"], "missing GET /api/v1/products/")
 	assert.True(t, set["GET /api/v1/products/{id}"], "missing GET /api/v1/products/{id}")
 	assert.True(t, set["GET /api/v1/products/{id}/positions"], "missing GET /api/v1/products/{id}/positions")
+	assert.True(t, set["GET /api/v1/products/{id}/recommendations"], "missing GET /api/v1/products/{id}/recommendations")
 
 	// Positions
+	assert.True(t, set["POST /api/v1/positions/targets"], "missing POST /api/v1/positions/targets")
+	assert.True(t, set["GET /api/v1/positions/targets"], "missing GET /api/v1/positions/targets")
+	assert.True(t, set["POST /api/v1/positions/"], "missing POST /api/v1/positions/")
 	assert.True(t, set["GET /api/v1/positions/"], "missing GET /api/v1/positions/")
+	assert.True(t, set["GET /api/v1/positions/history"], "missing GET /api/v1/positions/history")
 	assert.True(t, set["GET /api/v1/positions/aggregate"], "missing GET /api/v1/positions/aggregate")
 
 	// SERP
+	assert.True(t, set["POST /api/v1/serp-snapshots/"], "missing POST /api/v1/serp-snapshots/")
 	assert.True(t, set["GET /api/v1/serp-snapshots/"], "missing GET /api/v1/serp-snapshots/")
 	assert.True(t, set["GET /api/v1/serp-snapshots/{id}"], "missing GET /api/v1/serp-snapshots/{id}")
+	assert.True(t, set["GET /api/v1/serp/history"], "missing GET /api/v1/serp/history")
+	assert.True(t, set["GET /api/v1/serp/{id}"], "missing GET /api/v1/serp/{id}")
 
 	// Recommendations
 	assert.True(t, set["GET /api/v1/recommendations/"], "missing GET /api/v1/recommendations/")
+	assert.True(t, set["POST /api/v1/recommendations/generate"], "missing POST /api/v1/recommendations/generate")
 	assert.True(t, set["PATCH /api/v1/recommendations/{id}"], "missing PATCH /api/v1/recommendations/{id}")
+	assert.True(t, set["POST /api/v1/recommendations/{id}/resolve"], "missing POST /api/v1/recommendations/{id}/resolve")
+	assert.True(t, set["POST /api/v1/recommendations/{id}/dismiss"], "missing POST /api/v1/recommendations/{id}/dismiss")
 
 	// Exports
+	assert.True(t, set["GET /api/v1/exports/"], "missing GET /api/v1/exports/")
 	assert.True(t, set["POST /api/v1/exports/"], "missing POST /api/v1/exports/")
 	assert.True(t, set["GET /api/v1/exports/{id}"], "missing GET /api/v1/exports/{id}")
 	assert.True(t, set["GET /api/v1/exports/{id}/download"], "missing GET /api/v1/exports/{id}/download")
@@ -124,9 +160,20 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	// Audit logs
 	assert.True(t, set["GET /api/v1/audit-logs"], "missing GET /api/v1/audit-logs")
 
+	// Job runs
+	assert.True(t, set["GET /api/v1/job-runs/"], "missing GET /api/v1/job-runs/")
+	assert.True(t, set["GET /api/v1/job-runs/{id}"], "missing GET /api/v1/job-runs/{id}")
+	assert.True(t, set["POST /api/v1/job-runs/{id}/retry"], "missing POST /api/v1/job-runs/{id}/retry")
+
 	// Extension
 	assert.True(t, set["POST /api/v1/extension/sessions"], "missing POST /api/v1/extension/sessions")
+	assert.True(t, set["POST /api/v1/extension/session/start"], "missing POST /api/v1/extension/session/start")
 	assert.True(t, set["POST /api/v1/extension/context"], "missing POST /api/v1/extension/context")
+	assert.True(t, set["POST /api/v1/extension/page-context"], "missing POST /api/v1/extension/page-context")
+	assert.True(t, set["POST /api/v1/extension/bid-snapshots"], "missing POST /api/v1/extension/bid-snapshots")
+	assert.True(t, set["POST /api/v1/extension/position-snapshots"], "missing POST /api/v1/extension/position-snapshots")
+	assert.True(t, set["POST /api/v1/extension/ui-signals"], "missing POST /api/v1/extension/ui-signals")
+	assert.True(t, set["POST /api/v1/extension/network-captures/batch"], "missing POST /api/v1/extension/network-captures/batch")
 	assert.True(t, set["GET /api/v1/extension/version"], "missing GET /api/v1/extension/version")
 }
 
@@ -139,6 +186,8 @@ func TestPublicRoutes_NoAuth(t *testing.T) {
 		method string
 		path   string
 	}{
+		{"GET", "/openapi.yaml"},
+		{"GET", "/docs"},
 		{"GET", "/health/live"},
 		{"GET", "/health/ready"},
 		{"POST", "/api/v1/auth/register"},
@@ -174,6 +223,7 @@ func TestProtectedRoutes_Return401WithoutAuth(t *testing.T) {
 	}{
 		{"POST", "/api/v1/workspaces"},
 		{"GET", "/api/v1/workspaces"},
+		{"GET", "/api/v1/auth/me"},
 	}
 
 	for _, tc := range tests {

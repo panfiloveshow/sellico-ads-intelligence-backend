@@ -16,7 +16,10 @@ type Config struct {
 	AppVersion string // env: APP_VERSION, default: "dev"
 
 	// Database
-	DatabaseURL string // env: DATABASE_URL, required
+	DatabaseURL        string        // env: DATABASE_URL, required
+	DBMaxConns         int           // env: DB_MAX_CONNS, default: 25
+	DBMinConns         int           // env: DB_MIN_CONNS, default: 5
+	DBMaxConnIdleTime  time.Duration // env: DB_MAX_CONN_IDLE_TIME, default: 5m
 
 	// Redis
 	RedisURL string // env: REDIS_URL, required
@@ -40,6 +43,22 @@ type Config struct {
 	// Export
 	ExportStoragePath string // env: EXPORT_STORAGE_PATH, default: "./exports"
 
+	// Sellico API
+	SellicoAPIBaseURL string        // env: SELLICO_API_BASE_URL, default: "https://sellico.ru/api"
+	SellicoAPITimeout time.Duration // env: SELLICO_API_TIMEOUT, default: 5s
+
+	// CORS
+	CORSAllowOrigins []string // env: CORS_ALLOW_ORIGINS, comma-separated, default: "*"
+
+	// Rate Limiting
+	RateLimitRPS   float64 // env: RATE_LIMIT_RPS, default: 20
+	RateLimitBurst int     // env: RATE_LIMIT_BURST, default: 40
+
+	// Worker Schedules
+	SyncInterval            string // env: SYNC_INTERVAL, default: "@every 1h"
+	RecommendationInterval  string // env: RECOMMENDATION_INTERVAL, default: "@every 2h"
+	BidAutomationInterval   string // env: BID_AUTOMATION_INTERVAL, default: "@every 15m"
+
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
 }
@@ -52,6 +71,9 @@ func Load() *Config {
 		ServerPort:         getEnvAsInt("SERVER_PORT", 8080),
 		AppVersion:         getEnvOrDefault("APP_VERSION", "dev"),
 		DatabaseURL:        requireEnv("DATABASE_URL"),
+		DBMaxConns:         getEnvAsInt("DB_MAX_CONNS", 25),
+		DBMinConns:         getEnvAsInt("DB_MIN_CONNS", 5),
+		DBMaxConnIdleTime:  getEnvAsDuration("DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
 		RedisURL:           requireEnv("REDIS_URL"),
 		JWTSecret:          requireEnv("JWT_SECRET"),
 		JWTAccessTokenTTL:  getEnvAsDuration("JWT_ACCESS_TOKEN_TTL", 15*time.Minute),
@@ -62,6 +84,14 @@ func Load() *Config {
 		WBParserMinDelay:   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
 		WBParserProxies:    getEnvAsSlice("WB_PARSER_PROXIES", ","),
 		ExportStoragePath:  getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
+		SellicoAPIBaseURL:  getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
+		SellicoAPITimeout:  getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
+		SyncInterval:          getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
+		RecommendationInterval: getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
+		BidAutomationInterval:  getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),
+		CORSAllowOrigins:   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
+		RateLimitRPS:       getEnvAsFloat("RATE_LIMIT_RPS", 20),
+		RateLimitBurst:     getEnvAsInt("RATE_LIMIT_BURST", 40),
 		LogLevel:           getEnvOrDefault("LOG_LEVEL", "info"),
 	}
 
@@ -110,6 +140,20 @@ func getEnvAsDuration(key string, defaultVal time.Duration) time.Duration {
 	parsed, err := time.ParseDuration(val)
 	if err != nil {
 		log.Fatalf("environment variable %s must be a valid duration, got %q: %v", key, val, err)
+	}
+	return parsed
+}
+
+// getEnvAsFloat returns the environment variable parsed as float64, or the default value.
+// Terminates the process if the value is set but cannot be parsed.
+func getEnvAsFloat(key string, defaultVal float64) float64 {
+	val, ok := os.LookupEnv(key)
+	if !ok || val == "" {
+		return defaultVal
+	}
+	parsed, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		log.Fatalf("environment variable %s must be a valid float, got %q: %v", key, val, err)
 	}
 	return parsed
 }

@@ -3,9 +3,18 @@ INSERT INTO workspaces (name, slug)
 VALUES ($1, $2)
 RETURNING *;
 
+-- name: CreateExternalWorkspace :one
+INSERT INTO workspaces (name, slug, external_workspace_id, source)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
 -- name: GetWorkspaceByID :one
 SELECT * FROM workspaces
 WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: GetWorkspaceByExternalWorkspaceID :one
+SELECT * FROM workspaces
+WHERE external_workspace_id = $1 AND deleted_at IS NULL;
 
 -- name: GetWorkspaceBySlug :one
 SELECT * FROM workspaces
@@ -27,6 +36,16 @@ LIMIT $1 OFFSET $2;
 -- name: UpdateWorkspace :one
 UPDATE workspaces
 SET name = $2, slug = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateExternalWorkspace :one
+UPDATE workspaces
+SET name = $2,
+    slug = $3,
+    external_workspace_id = $4,
+    source = $5,
+    updated_at = now()
 WHERE id = $1
 RETURNING *;
 

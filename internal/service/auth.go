@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/crypto"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/jwt"
@@ -145,6 +146,27 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenStr string) error 
 		return apperror.New(apperror.ErrInternal, "failed to revoke refresh token")
 	}
 	return nil
+}
+
+// GetMe returns the currently authenticated user profile.
+func (s *AuthService) GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
+	user, err := s.queries.GetUserByID(ctx, uuidToPgtype(userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrNotFound, "user not found")
+	}
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to get user")
+	}
+
+	result := domain.User{
+		ID:           uuidFromPgtype(user.ID),
+		Email:        user.Email,
+		PasswordHash: user.PasswordHash,
+		Name:         user.Name,
+		CreatedAt:    user.CreatedAt.Time,
+		UpdatedAt:    user.UpdatedAt.Time,
+	}
+	return &result, nil
 }
 
 // generateTokenPair creates a new access + refresh token pair and stores the refresh hash.

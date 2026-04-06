@@ -88,6 +88,24 @@ func (s *WorkspaceService) Get(ctx context.Context, workspaceID uuid.UUID) (*dom
 	return &result, nil
 }
 
+// ListMembers returns workspace members.
+func (s *WorkspaceService) ListMembers(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.WorkspaceMember, error) {
+	rows, err := s.queries.ListWorkspaceMembers(ctx, sqlcgen.ListWorkspaceMembersParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Limit:       limit,
+		Offset:      offset,
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list workspace members")
+	}
+
+	result := make([]domain.WorkspaceMember, len(rows))
+	for i, row := range rows {
+		result[i] = memberFromSqlc(row)
+	}
+	return result, nil
+}
+
 // InviteMember adds a user to a workspace with the specified role.
 func (s *WorkspaceService) InviteMember(ctx context.Context, workspaceID uuid.UUID, email, role string) (*domain.WorkspaceMember, error) {
 	// Look up user by email.
@@ -156,7 +174,7 @@ func (s *WorkspaceService) UpdateMemberRole(ctx context.Context, actorID, worksp
 		"old_role": oldRole,
 		"new_role": newRole,
 	})
-	_, _ = s.queries.CreateAuditLog(ctx, sqlcgen.CreateAuditLogParams{
+	writeAuditLog(ctx, s.queries, sqlcgen.CreateAuditLogParams{
 		WorkspaceID: uuidToPgtype(workspaceID),
 		UserID:      uuidToPgtype(actorID),
 		Action:      "update_member_role",
