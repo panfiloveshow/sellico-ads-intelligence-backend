@@ -19,37 +19,40 @@ proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_set_header X-Request-ID      $request_id;
 
+# Dynamic upstream — re-resolves DNS on each request (survives container restarts)
+set $api http://api:8080;
+
 # Health probes — no rate limit
 location /health/ {
-    proxy_pass http://api_backend;
+    proxy_pass $api;
 }
 
 # Auth endpoints — strict rate limit
 location /api/v1/auth/ {
     limit_req zone=api_auth burst=10 nodelay;
     limit_req_status 429;
-    proxy_pass http://api_backend;
+    proxy_pass $api;
 }
 
 # OpenAPI & docs — no rate limit
 location = /openapi.yaml {
-    proxy_pass http://api_backend;
+    proxy_pass $api;
 }
 location = /docs {
-    proxy_pass http://api_backend;
+    proxy_pass $api;
 }
 
 # All other API routes — general rate limit
 location /api/ {
     limit_req zone=api_general burst=60 nodelay;
     limit_req_status 429;
-    proxy_pass http://api_backend;
+    proxy_pass $api;
 }
 
 # SSE events endpoint — disable buffering for real-time streaming
 location /api/v1/events {
     limit_req zone=api_general burst=10 nodelay;
-    proxy_pass http://api_backend;
+    proxy_pass $api;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 3600s;
