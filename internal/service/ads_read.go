@@ -80,8 +80,8 @@ type adsWorkspaceData struct {
 	phrases           []domain.Phrase
 	campaignStatsByID map[uuid.UUID][]domain.CampaignStat
 	phraseStatsByID   map[uuid.UUID][]domain.PhraseStat
-	campaignProducts  map[uuid.UUID][]domain.Product
-	productCampaigns  map[uuid.UUID][]domain.Campaign
+	campaignProductIDs map[uuid.UUID][]uuid.UUID
+	productCampaignIDs map[uuid.UUID][]uuid.UUID
 	campaignPhrases   map[uuid.UUID][]domain.Phrase
 	lastAutoSync      *domain.SellerCabinetAutoSyncSummary
 	extensionEvidence *workspaceExtensionEvidence
@@ -325,8 +325,8 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 		phrases:           make([]domain.Phrase, 0, len(phraseRows)),
 		campaignStatsByID: make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
 		phraseStatsByID:   make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
-		campaignProducts:  make(map[uuid.UUID][]domain.Product),
-		productCampaigns:  make(map[uuid.UUID][]domain.Campaign),
+		campaignProductIDs: make(map[uuid.UUID][]uuid.UUID),
+		productCampaignIDs: make(map[uuid.UUID][]uuid.UUID),
 		campaignPhrases:   make(map[uuid.UUID][]domain.Phrase),
 		lastAutoSync:      lastAutoSync,
 		extensionEvidence: &workspaceExtensionEvidence{},
@@ -382,20 +382,85 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 // Uses seller_cabinet_id as the join key (products and campaigns from the same cabinet are related).
 // This avoids live WB API calls on every read request (audit fix: CRITICAL — was O(cabinets) HTTP calls per read).
 func (s *AdsReadService) attachCampaignProducts(_ context.Context, data *adsWorkspaceData, _ uuid.UUID) {
-	// Group products by cabinet for fast lookup
-	productsByCabinet := make(map[uuid.UUID][]domain.Product)
+	// Group product IDs by cabinet for fast lookup
+	productIDsByCabinet := make(map[uuid.UUID][]uuid.UUID)
 	for _, product := range data.products {
-		productsByCabinet[product.SellerCabinetID] = append(productsByCabinet[product.SellerCabinetID], product)
+		productIDsByCabinet[product.SellerCabinetID] = append(productIDsByCabinet[product.SellerCabinetID], product.ID)
 	}
 
-	// Link campaigns to products in the same cabinet
+	// Link campaigns to products in the same cabinet (store IDs only to save memory)
 	for _, campaign := range data.campaigns {
-		cabinetProducts := productsByCabinet[campaign.SellerCabinetID]
-		for _, product := range cabinetProducts {
-			data.campaignProducts[campaign.ID] = append(data.campaignProducts[campaign.ID], product)
-			data.productCampaigns[product.ID] = append(data.productCampaigns[product.ID], campaign)
+		cabinetProductIDs := productIDsByCabinet[campaign.SellerCabinetID]
+		data.campaignProductIDs[campaign.ID] = cabinetProductIDs
+		for _, productID := range cabinetProductIDs {
+			data.productCampaignIDs[productID] = append(data.productCampaignIDs[productID], campaign.ID)
 		}
 	}
+}
+
+func (data *adsWorkspaceData) lookupCampaignProducts(campaignID uuid.UUID) []domain.Product {
+	ids := data.campaignProductIDs[campaignID]
+	if len(ids) == 0 {
+		return nil
+	}
+	productByID := data.productByIDMap()
+	result := make([]domain.Product, 0, len(ids))
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if p, ok := productByID[id]; ok {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+func (data *adsWorkspaceData) lookupProductCampaigns(productID uuid.UUID) []domain.Campaign {
+	ids := data.productCampaignIDs[productID]
+	if len(ids) == 0 {
+		return nil
+	}
+	campaignByID := data.campaignByIDMap()
+	result := make([]domain.Campaign, 0, len(ids))
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if c, ok := campaignByID[id]; ok {
+			result = append(result, c)
+		}
+	}
+	return result
+}
+
+func (data *adsWorkspaceData) productByIDMap() map[uuid.UUID]domain.Product {
+	m := make(map[uuid.UUID]domain.Product, len(data.products))
+	for _, p := range data.products {
+		m[p.ID] = p
+	}
+	return m
+}
+
+func (data *adsWorkspaceData) campaignByIDMap() map[uuid.UUID]domain.Campaign {
+	m := make(map[uuid.UUID]domain.Campaign, len(data.campaigns))
+	for _, c := range data.campaigns {
+		m[c.ID] = c
+	}
+	return m
+}
+
+func containsID(ids []uuid.UUID, target uuid.UUID) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AdsReadService) buildCabinetSummaries(data *adsWorkspaceData) []domain.CabinetSummary {
@@ -467,7 +532,7 @@ func (s *AdsReadService) buildProductSummaries(data *adsWorkspaceData, dateFrom,
 		}
 
 		cabinet := data.cabinets[product.SellerCabinetID]
-		campaigns := dedupeCampaigns(data.productCampaigns[product.ID])
+		campaigns := data.lookupProductCampaigns(product.ID)
 
 		// Скрываем товары без связанных кампаний с данными за период
 		hasAnyStats := false
@@ -547,7 +612,7 @@ func (s *AdsReadService) buildCampaignSummaries(data *adsWorkspaceData, dateFrom
 			continue
 		}
 
-		relatedProducts := dedupeProducts(data.campaignProducts[campaign.ID])
+		relatedProducts := data.lookupCampaignProducts(campaign.ID)
 		if filter.ProductID != nil && !containsProductID(relatedProducts, *filter.ProductID) {
 			continue
 		}
@@ -620,7 +685,7 @@ func (s *AdsReadService) buildQuerySummaries(data *adsWorkspaceData, dateFrom, d
 			continue
 		}
 
-		relatedProducts := dedupeProducts(data.campaignProducts[campaign.ID])
+		relatedProducts := data.lookupCampaignProducts(campaign.ID)
 		if filter.ProductID != nil && !containsProductID(relatedProducts, *filter.ProductID) {
 			continue
 		}
@@ -745,7 +810,7 @@ func (s *AdsReadService) querySummariesForPhrases(data *adsWorkspaceData, phrase
 		if !ok {
 			continue
 		}
-		result = append(result, s.buildQuerySummary(data, phrase, campaign, dedupeProducts(data.campaignProducts[campaign.ID]), dateFrom, dateTo))
+		result = append(result, s.buildQuerySummary(data, phrase, campaign, data.lookupCampaignProducts(campaign.ID), dateFrom, dateTo))
 	}
 
 	sortQuerySummaries(result)
@@ -801,7 +866,7 @@ func (s *AdsReadService) aggregateProductMetrics(data *adsWorkspaceData, product
 	metrics := domain.AdsMetricsSummary{}
 	mode := "exact"
 	for _, campaign := range campaigns {
-		if len(data.campaignProducts[campaign.ID]) > 1 {
+		if len(data.campaignProductIDs[campaign.ID]) > 1 {
 			mode = "shared"
 		}
 		campaignMetrics := aggregateCampaignStats(data.campaignStatsByID[campaign.ID], dateFrom, dateTo)
