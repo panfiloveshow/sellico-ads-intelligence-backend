@@ -58,6 +58,7 @@
     let method = "GET";
     let url = "";
     let body = null;
+    let listenerAttached = false;
     const open = xhr.open;
     const send = xhr.send;
 
@@ -68,33 +69,36 @@
     };
     xhr.send = function patchedSend(nextBody) {
       body = nextBody || null;
-      this.addEventListener("load", () => {
-        try {
-          const contentType = xhr.getResponseHeader("content-type") || "";
-          let responsePayload = null;
-          if (contentType.includes("application/json")) {
-            responsePayload = JSON.parse(xhr.responseText);
-            const serialized = JSON.stringify(responsePayload);
-            const limit = 200_000;
-            if (serialized.length > limit) {
-              responsePayload = {
-                _sellico_truncated: true,
-                _sellico_original_size: serialized.length
-              };
+      if (!listenerAttached) {
+        listenerAttached = true;
+        this.addEventListener("load", () => {
+          try {
+            const contentType = xhr.getResponseHeader("content-type") || "";
+            let responsePayload = null;
+            if (contentType.includes("application/json")) {
+              responsePayload = JSON.parse(xhr.responseText);
+              const serialized = JSON.stringify(responsePayload);
+              const limit = 200_000;
+              if (serialized.length > limit) {
+                responsePayload = {
+                  _sellico_truncated: true,
+                  _sellico_original_size: serialized.length
+                };
+              }
             }
+            emit({
+              channel: "xhr",
+              method,
+              url,
+              status: xhr.status,
+              request: truncateBody(body),
+              response: responsePayload
+            });
+          } catch (_error) {
+            // Ignore malformed/non-json payloads.
           }
-          emit({
-            channel: "xhr",
-            method,
-            url,
-            status: xhr.status,
-            request: truncateBody(body),
-            response: responsePayload
-          });
-        } catch (_error) {
-          // Ignore malformed/non-json payloads.
-        }
-      });
+        });
+      }
       return send.call(this, nextBody);
     };
     return xhr;

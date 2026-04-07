@@ -106,7 +106,7 @@ func TestListSearchClusters_Success(t *testing.T) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111}]}]}`))
-		case "/adv/v1/normquery/stats":
+		case "/adv/v0/normquery/stats":
 			assert.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"stats":[{"advert_id":42,"nm_id":111,"stats":[{"norm_query":"shoes","views":500,"clicks":25,"cpc":120}]}]}`))
@@ -138,7 +138,7 @@ func TestGetSearchClusterStats_Success(t *testing.T) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111}]}]}`))
-		case "/adv/v1/normquery/stats":
+		case "/adv/v0/normquery/stats":
 			assert.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"stats":[{"advert_id":42,"nm_id":111,"stats":[{"norm_query":"shoes","views":200,"clicks":20,"cpc":150}]}]}`))

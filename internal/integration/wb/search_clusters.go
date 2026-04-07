@@ -38,18 +38,19 @@ type normQueryBidsResponse struct {
 }
 
 type normQueryStatsResponse struct {
+	// WB API v0 uses "stats" as the top-level key
 	Stats []struct {
 		AdvertID int64 `json:"advert_id"`
 		NMID     int64 `json:"nm_id"`
 		Stats    []struct {
 			NormQuery string  `json:"norm_query"`
-			Views     int64   `json:"views"`     // 0 for CPC campaigns (WB API 2026-04 change)
+			Views     int64   `json:"views"`
 			Clicks    int64   `json:"clicks"`
 			CPC       float64 `json:"cpc"`
-			CPM       float64 `json:"cpm"`       // 0 for CPC campaigns
-			CTR       float64 `json:"ctr"`       // 0 for CPC campaigns
+			CPM       float64 `json:"cpm"`
+			CTR       float64 `json:"ctr"`
 			Orders    int64   `json:"orders"`
-			Sum       float64 `json:"sum"`       // direct spend amount if provided
+			Sum       float64 `json:"sum"`
 		} `json:"stats"`
 	} `json:"stats"`
 }
@@ -117,15 +118,55 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery stats request: %v", err))
 	}
 
-	// Use v1 endpoint — supports CPC campaigns (WB API 2026-04 update)
-	_, statsRaw, err := c.doRequest(ctx, "POST", "/adv/v1/normquery/stats", token, bytes.NewReader(statsBody))
+	// Use v0 normquery/stats endpoint (official WB API)
+	_, statsRaw, err := c.doRequest(ctx, "POST", "/adv/v0/normquery/stats", token, bytes.NewReader(statsBody))
 	if err != nil {
 		return nil, "", err
 	}
 
 	var statsResponse normQueryStatsResponse
 	if err := json.Unmarshal(statsRaw, &statsResponse); err != nil {
+		// Log raw response for debugging unmarshal issues
+		preview := string(statsRaw)
+		if len(preview) > 500 {
+			preview = preview[:500]
+		}
+		c.logger.Error().
+			Int("campaign_id", campaignID).
+			Str("raw_preview", preview).
+			Msg("normquery stats unmarshal failed")
 		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal normquery stats: %v", err))
+	}
+
+	// Debug: log response structure to diagnose empty phrases
+	totalStatsItems := 0
+	totalKeywords := 0
+	for _, item := range statsResponse.Stats {
+		totalStatsItems++
+		for _, stat := range item.Stats {
+			if stat.NormQuery != "" {
+				totalKeywords++
+			}
+		}
+	}
+	if totalKeywords == 0 {
+		// Log raw for diagnosis when API returns no keywords
+		preview := string(statsRaw)
+		if len(preview) > 300 {
+			preview = preview[:300]
+		}
+		c.logger.Warn().
+			Int("campaign_id", campaignID).
+			Int("stats_items", totalStatsItems).
+			Int("raw_len", len(statsRaw)).
+			Str("raw_preview", preview).
+			Msg("normquery stats returned 0 keywords")
+	} else {
+		c.logger.Debug().
+			Int("campaign_id", campaignID).
+			Int("stats_items", totalStatsItems).
+			Int("keywords", totalKeywords).
+			Msg("normquery stats parsed")
 	}
 
 	bidsBody, err := json.Marshal(buildNormQueryRequest(campaignID, nmIDs))
@@ -202,15 +243,44 @@ func (c *Client) loadNormQueryAggregates(ctx context.Context, token string, camp
 		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery stats request: %v", err))
 	}
 
-	// Use v1 endpoint — supports CPC campaigns (WB API 2026-04 update)
-	_, statsRaw, err := c.doRequest(ctx, "POST", "/adv/v1/normquery/stats", token, bytes.NewReader(statsBody))
+	// Use v0 normquery/stats endpoint (official WB API)
+	_, statsRaw, err := c.doRequest(ctx, "POST", "/adv/v0/normquery/stats", token, bytes.NewReader(statsBody))
 	if err != nil {
 		return nil, "", err
 	}
 
 	var statsResponse normQueryStatsResponse
 	if err := json.Unmarshal(statsRaw, &statsResponse); err != nil {
+		preview := string(statsRaw)
+		if len(preview) > 500 {
+			preview = preview[:500]
+		}
+		c.logger.Error().
+			Int("campaign_id", campaignID).
+			Str("raw_preview", preview).
+			Msg("normquery stats unmarshal failed")
 		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal normquery stats: %v", err))
+	}
+
+	totalKeywords := 0
+	for _, item := range statsResponse.Stats {
+		for _, stat := range item.Stats {
+			if stat.NormQuery != "" {
+				totalKeywords++
+			}
+		}
+	}
+	if totalKeywords == 0 {
+		preview := string(statsRaw)
+		if len(preview) > 300 {
+			preview = preview[:300]
+		}
+		c.logger.Warn().
+			Int("campaign_id", campaignID).
+			Int("stats_items", len(statsResponse.Stats)).
+			Int("raw_len", len(statsRaw)).
+			Str("raw_preview", preview).
+			Msg("normquery stats returned 0 keywords")
 	}
 
 	bidsBody, err := json.Marshal(buildNormQueryRequest(campaignID, nmIDs))

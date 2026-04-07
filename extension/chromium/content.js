@@ -837,11 +837,11 @@
   function renderList(title, items, emptyText) {
     const safeItems = items.filter(Boolean);
     if (!safeItems.length) {
-      return `<div class="sellico-panel__empty">${emptyText}</div>`;
+      return `<div class="sellico-panel__empty">${escapeHtml(emptyText)}</div>`;
     }
     return `
       <div class="sellico-panel__subsection">
-        <h4>${title}</h4>
+        <h4>${escapeHtml(title)}</h4>
         <ul>${safeItems.map((item) => `<li>${item}</li>`).join("")}</ul>
       </div>
     `;
@@ -950,14 +950,14 @@
     status.appendChild(statusGrid);
 
     const recommendationItems = (widget?.recommendations || []).slice(0, 3).map((item) => {
-      const action = summarizeRecommendation(item);
-      return `<strong>${item.title || item.type}</strong><span>${action}</span>`;
+      const action = escapeHtml(summarizeRecommendation(item));
+      return `<strong>${escapeHtml(item.title || item.type)}</strong><span>${action}</span>`;
     });
     const signalItems = []
-      .concat((widget?.ui_signals || []).slice(0, 3).map((item) => `<strong>${item.title}</strong><span>${item.message}</span>`))
-      .concat((widget?.live_positions || []).slice(0, 2).map((item) => `<strong>Позиция ${item.visible_position || "—"}</strong><span>${item.query || context.query || ""}</span>`))
-      .concat((widget?.live_bids || []).slice(0, 2).map((item) => `<strong>Bid ${item.visible_bid || "—"}</strong><span>${item.query || context.query || ""}</span>`))
-      .concat(widget?.live_bid_snapshot ? [`<strong>Bid ${widget.live_bid_snapshot.visible_bid || "—"}</strong><span>${context.query || ""}</span>`] : []);
+      .concat((widget?.ui_signals || []).slice(0, 3).map((item) => `<strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.message)}</span>`))
+      .concat((widget?.live_positions || []).slice(0, 2).map((item) => `<strong>Позиция ${escapeHtml(item.visible_position || "—")}</strong><span>${escapeHtml(item.query || context.query || "")}</span>`))
+      .concat((widget?.live_bids || []).slice(0, 2).map((item) => `<strong>Bid ${escapeHtml(item.visible_bid || "—")}</strong><span>${escapeHtml(item.query || context.query || "")}</span>`))
+      .concat(widget?.live_bid_snapshot ? [`<strong>Bid ${escapeHtml(widget.live_bid_snapshot.visible_bid || "—")}</strong><span>${escapeHtml(context.query || "")}</span>`] : []);
 
     summary.innerHTML = renderList("Что важно сейчас", recommendationItems, "Sellico не нашёл срочных действий на этой странице.");
     signals.innerHTML = renderList("Live сигналы", signalItems, "На странице пока нет подтверждённых live сигналов.");

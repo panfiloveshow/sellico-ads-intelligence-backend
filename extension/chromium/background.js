@@ -7,6 +7,7 @@ const DEFAULT_CONFIG = {
 
 const SESSION_TTL_MS = 5 * 60 * 1000;
 let activeSession = null;
+let sessionPromise = null;
 
 async function getConfig() {
   const stored = await chrome.storage.sync.get(DEFAULT_CONFIG);
@@ -93,21 +94,32 @@ async function apiFetch(path, init = {}) {
 
 async function ensureSession() {
   const now = Date.now();
-  if (activeSession && now-activeSession.startedAt < SESSION_TTL_MS) {
+  if (activeSession && now - activeSession.startedAt < SESSION_TTL_MS) {
     return activeSession.data;
   }
 
-  const payload = await apiFetch("/api/v1/extension/sessions", {
-    method: "POST",
-    body: JSON.stringify({
-      extension_version: chrome.runtime.getManifest().version
-    })
+  // Prevent concurrent session creation — reuse in-flight request
+  if (sessionPromise) {
+    return sessionPromise;
+  }
+
+  sessionPromise = (async () => {
+    const payload = await apiFetch("/api/v1/extension/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        extension_version: chrome.runtime.getManifest().version
+      })
+    });
+    activeSession = {
+      startedAt: Date.now(),
+      data: payload?.data ?? payload
+    };
+    return activeSession.data;
+  })().finally(() => {
+    sessionPromise = null;
   });
-  activeSession = {
-    startedAt: now,
-    data: payload?.data ?? payload
-  };
-  return activeSession.data;
+
+  return sessionPromise;
 }
 
 function normalizeWidgetResponse(payload) {
