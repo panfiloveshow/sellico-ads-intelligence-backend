@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
@@ -20,8 +21,8 @@ import (
 )
 
 const (
-	adsReadEntityLimit = int32(10000)
-	adsReadStatsLimit  = int32(50000)
+	adsReadEntityLimit = int32(5000)
+	adsReadStatsLimit  = int32(20000)
 )
 
 type ProductSummaryFilter struct {
@@ -59,6 +60,7 @@ type AdsReadService struct {
 
 	cacheMu   sync.RWMutex
 	dataCache map[string]cachedWorkspaceData
+	loadGroup singleflight.Group
 }
 
 func NewAdsReadService(queries *sqlcgen.Queries, wbClient WBSyncClient, encryptionKey []byte, logger zerolog.Logger) *AdsReadService {
@@ -224,7 +226,26 @@ func (s *AdsReadService) loadWorkspaceData(ctx context.Context, workspaceID uuid
 	}
 	s.cacheMu.RUnlock()
 
-	// Run ALL DB queries in parallel (was sequential — 11 queries × ~100ms each = 1.1s → now ~150ms)
+	// Deduplicate concurrent loads for the same workspace+date range
+	result, err, _ := s.loadGroup.Do(cacheKey, func() (interface{}, error) {
+		return s.doLoadWorkspaceData(ctx, workspaceID, dateFrom, dateTo, cacheKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(*adsWorkspaceData), nil
+}
+
+func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, cacheKey string) (*adsWorkspaceData, error) {
+	// Double-check cache after winning the singleflight race
+	s.cacheMu.RLock()
+	if cached, ok := s.dataCache[cacheKey]; ok && time.Since(cached.loadedAt) < 30*time.Second {
+		s.cacheMu.RUnlock()
+		return cached.data, nil
+	}
+	s.cacheMu.RUnlock()
+
+	// Run ALL DB queries in parallel
 	g, gctx := errgroup.WithContext(ctx)
 
 	var cabinetRows []sqlcgen.SellerCabinet
