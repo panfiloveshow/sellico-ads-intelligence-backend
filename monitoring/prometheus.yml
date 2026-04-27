@@ -2,14 +2,26 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
-# Alertmanager talks to Prometheus over the docker network.
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets:
-            - alertmanager:9093
+# Alertmanager wiring — currently disabled because the alertmanager service
+# in docker-compose.prod.yml has profile "alerts" and is not started by default
+# (requires ALERT_CHAT_ID + monitoring/alertmanager-secrets/bot_token to function).
+#
+# To enable alerting:
+#  1. Set ALERT_CHAT_ID in .env
+#  2. Place Telegram bot token at monitoring/alertmanager-secrets/bot_token
+#  3. Uncomment the `alerting:` block below
+#  4. Bring up: `docker compose --profile alerts up -d alertmanager`
+#  5. Reload prometheus: `docker compose kill -s HUP prometheus`
+#
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#             - alertmanager:9093
 
-# Alert rule files live alongside this config; reloaded on SIGHUP.
+# Alert rules are loaded but only evaluated; without alerting wired up they
+# produce no notifications — useful for "what would have fired" inspection
+# in the prometheus UI.
 rule_files:
   - /etc/prometheus/alerts.yml
 
@@ -28,9 +40,4 @@ scrape_configs:
   - job_name: "node-exporter"
     static_configs:
       - targets: ["node-exporter:9100"]
-    scrape_interval: 30s
-
-  - job_name: "alertmanager"
-    static_configs:
-      - targets: ["alertmanager:9093"]
     scrape_interval: 30s

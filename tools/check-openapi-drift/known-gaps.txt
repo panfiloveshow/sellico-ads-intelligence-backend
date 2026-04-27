@@ -17,13 +17,7 @@
 - /api/v1/audit-logs
 
 # ---- Routes wired but not yet documented (added during the autobidder merge) ----
-+ /api/v1/ads/campaigns
-+ /api/v1/ads/campaigns/{id}
-+ /api/v1/ads/overview
-+ /api/v1/ads/products
-+ /api/v1/ads/products/{id}
-+ /api/v1/ads/queries
-+ /api/v1/ads/queries/{id}
+# /api/v1/ads/* — documented (Phase F.2 sync, 2026-04-27)
 + /api/v1/cabinets
 + /api/v1/cabinets/{id}
 + /api/v1/cabinets/{id}/campaigns

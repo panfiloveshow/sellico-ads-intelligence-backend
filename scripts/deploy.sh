@@ -70,17 +70,34 @@ case "${1:-update}" in
     log "=== Updating Sellico ==="
     cd "$DEPLOY_DIR"
 
-    # Pull latest images
-    docker compose -f "$COMPOSE_FILE" pull api worker
-    log "Images pulled"
+    # Pull latest images for prebuilt services (monitoring stack);
+    # api/worker are build-from-source on this host so `pull` is a no-op for them.
+    docker compose -f "$COMPOSE_FILE" pull prometheus grafana cadvisor node-exporter || true
 
-    # Restart api and worker (zero-downtime with health checks)
-    docker compose -f "$COMPOSE_FILE" up -d api worker
-    log "Services restarted"
+    # Build api+worker from current source (needed when running `git pull` first).
+    docker compose -f "$COMPOSE_FILE" build api worker
+    log "Images built"
+
+    # Bring up everything in the default profile (api, worker, postgres, redis,
+    # nginx, prometheus, grafana, cadvisor, node-exporter). Alertmanager stays
+    # off — it's behind the "alerts" profile and requires Telegram bot setup.
+    docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+    log "Services up"
 
     # Cleanup old images
     docker image prune -f
     log "=== Update complete ==="
+    ;;
+
+  monitoring)
+    # Convenience target: start ONLY the monitoring stack on a running cluster
+    # (e.g. when retrofitting monitoring onto a deployment that started without it).
+    log "=== Starting monitoring stack ==="
+    cd "$DEPLOY_DIR"
+    docker compose -f "$COMPOSE_FILE" up -d prometheus grafana cadvisor node-exporter
+    log "Monitoring up. Access via SSH tunnel:"
+    log "  ssh -L 3000:grafana:3000 admin_reprice@$(hostname -I | awk '{print $1}')"
+    log "Then open http://localhost:3000 (admin / \$GRAFANA_ADMIN_PASSWORD)"
     ;;
 
   restart)

@@ -199,6 +199,9 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
+    # Opt-in: requires ALERT_CHAT_ID + monitoring/alertmanager-secrets/bot_token.
+    # Bring up explicitly with: docker compose --profile alerts up -d alertmanager
+    profiles: ["alerts"]
     expose:
       - "9093"
     volumes:
