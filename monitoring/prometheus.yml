@@ -2,9 +2,35 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Alertmanager talks to Prometheus over the docker network.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Alert rule files live alongside this config; reloaded on SIGHUP.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: "sellico-api"
     static_configs:
       - targets: ["api:8080"]
     metrics_path: /metrics
     scrape_interval: 10s
+
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    scrape_interval: 30s
+
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+    scrape_interval: 30s
+
+  - job_name: "alertmanager"
+    static_configs:
+      - targets: ["alertmanager:9093"]
+    scrape_interval: 30s

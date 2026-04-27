@@ -3,6 +3,7 @@ bin/
 /api
 /worker
 /check-openapi-drift
+/rotate-encryption-key
 *.exe
 
 # Environment
@@ -31,3 +32,7 @@ nginx/ssl/*
 !nginx/ssl/.gitkeep
 nginx/acme/*
 !nginx/acme/.gitkeep
+
+# Alertmanager bot token (live secret, never committed)
+monitoring/alertmanager-secrets/*
+!monitoring/alertmanager-secrets/.gitkeep

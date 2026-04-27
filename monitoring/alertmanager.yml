@@ -1,0 +1,75 @@
+# Alertmanager configuration — routes alerts to Telegram.
+#
+# The bot token + chat ID come from the existing TELEGRAM_BOT_TOKEN and
+# ALERT_CHAT_ID env vars (already used for product notifications). Same bot,
+# different chat (an "alerts" group, separate from "product notifications"
+# so on-call doesn't get drowned in user-facing event traffic).
+#
+# Reload on change with: docker compose kill -s HUP alertmanager
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: telegram-default
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Page-level alerts go straight to the on-call channel with shorter
+    # repeat interval so they keep nudging until acknowledged.
+    - matchers:
+        - severity = "page"
+      receiver: telegram-page
+      repeat_interval: 30m
+      continue: false
+
+    # Warn-level alerts go to the same chat but batched more loosely.
+    - matchers:
+        - severity = "warn"
+      receiver: telegram-default
+      continue: false
+
+receivers:
+  - name: telegram-default
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/bot_token
+        chat_id: ${ALERT_CHAT_ID}
+        parse_mode: HTML
+        message: |
+          <b>{{ .CommonAnnotations.summary }}</b>
+          severity: {{ .CommonLabels.severity }}
+          alert: {{ .CommonLabels.alertname }}
+          {{ range .Alerts }}
+          • {{ .Annotations.description }}
+          {{ end }}
+
+  - name: telegram-page
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/bot_token
+        chat_id: ${ONCALL_CHAT_ID}
+        parse_mode: HTML
+        message: |
+          🚨 <b>PAGE: {{ .CommonAnnotations.summary }}</b>
+          alert: {{ .CommonLabels.alertname }}
+          {{ range .Alerts }}
+          • {{ .Annotations.description }}
+          {{ end }}
+
+# Don't fire X if Y is already firing (prevents duplicate noise during
+# cascading failures: e.g. when the API is down everything else degrades).
+inhibit_rules:
+  - source_matchers:
+      - alertname = "APIDown"
+    target_matchers:
+      - severity =~ "warn|page"
+      - alertname != "APIDown"
+    equal: [instance]
+
+  - source_matchers:
+      - alertname = "ContainerOOMKilled"
+    target_matchers:
+      - alertname =~ "ContainerHighMemory|APIHighLatencyP95"
+    equal: [name]

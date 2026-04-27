@@ -1,0 +1,5 @@
+# Place a file named `bot_token` here on the production host containing only
+# the Telegram bot token (no quotes, no newline). chmod 0400.
+# Example: echo -n "1234567890:AbCdEf..." > bot_token; chmod 0400 bot_token
+#
+# Files in this directory are gitignored — see .gitignore.

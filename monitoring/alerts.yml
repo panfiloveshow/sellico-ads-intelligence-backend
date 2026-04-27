@@ -1,0 +1,130 @@
+# Alert rules for Sellico API + worker + infra.
+#
+# Severity convention:
+#   page  — wakes someone up; user-visible impact or data loss imminent
+#   warn  — investigate within business hours; capacity / degradation signal
+#
+# All alerts flow through Alertmanager → Telegram (alertmanager.yml routes).
+
+groups:
+  - name: sellico-api
+    interval: 30s
+    rules:
+      - alert: APIHighErrorRate
+        expr: |
+          (
+            sum(rate(sellico_http_requests_total{code=~"5.."}[5m]))
+            /
+            sum(rate(sellico_http_requests_total[5m]))
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "API 5xx rate above 1% for 5m"
+          description: "5xx fraction is {{ $value | humanizePercentage }} over the last 5m. Check api logs and recent deploys."
+
+      - alert: APIHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(sellico_http_request_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "API p95 latency above 500ms for 10m"
+          description: "p95 latency = {{ $value }}s. Likely DB pool saturation or WB API slowness; check pgxpool and circuit breaker metrics."
+
+      - alert: APIDown
+        expr: up{job="sellico-api"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Prometheus cannot scrape sellico-api for 2m"
+          description: "Container may be in a crash loop or healthcheck failing. `docker compose ps api` and `docker compose logs api`."
+
+  - name: sellico-runtime
+    interval: 30s
+    rules:
+      - alert: ContainerOOMKilled
+        # cAdvisor exposes container_oom_events_total since v0.36+. Fires when
+        # any container in the project is OOM-killed.
+        expr: increase(container_oom_events_total{name=~"sellico.*"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: page
+        annotations:
+          summary: "Container {{ $labels.name }} was OOM-killed"
+          description: "Check GOMEMLIMIT, cgroup limit, and recent commits touching ads_read or sync paths."
+
+      - alert: ContainerHighMemory
+        expr: |
+          (container_memory_working_set_bytes{name=~"sellico.*"} /
+           container_spec_memory_limit_bytes{name=~"sellico.*"}) > 0.9
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "{{ $labels.name }} at >90% of memory limit for 10m"
+          description: "Working set is {{ $value | humanizePercentage }} of the container limit; OOM kill is likely soon."
+
+      - alert: HostHighCPU
+        expr: |
+          100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 15m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Host CPU > 85% for 15m"
+          description: "Sustained high CPU on {{ $labels.instance }}. Investigate top processes and per-container rate."
+
+      - alert: HostLowDisk
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} /
+           node_filesystem_size_bytes{mountpoint="/"}) < 0.10
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Host root disk under 10% free"
+          description: "Free = {{ $value | humanizePercentage }}. Backups, docker images, or postgres bloat are common culprits."
+
+  - name: sellico-data-plane
+    interval: 30s
+    rules:
+      - alert: WBCircuitBreakerOpen
+        # The breaker's "state" gauge: 0=closed, 1=half-open, 2=open. We only
+        # alert if it's been open for a sustained interval to avoid flapping
+        # during transient WB API outages that resolve in seconds.
+        expr: max(sellico_wb_breaker_state) >= 2
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "WB API circuit breaker open for 5m"
+          description: "Sync and recommendation jobs are degraded. Check WB status; the breaker auto-recovers when calls succeed again."
+
+      - alert: AsynqQueueBacklog
+        # Asynq exporter (sellico_worker_queue_length) emitted by the worker.
+        # If pending > 1000 for 10m the worker can't keep up.
+        expr: max by (queue) (sellico_worker_queue_length{state="pending"}) > 1000
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Asynq queue {{ $labels.queue }} > 1000 pending tasks"
+          description: "Worker is falling behind. Investigate slow handlers or scale the worker container."
+
+      - alert: BackupAbsent
+        # A successful backup writes the timestamp metric via a textfile collector
+        # at /var/lib/node_exporter/textfile_collector/sellico_backup.prom.
+        # If no successful backup in 26h, alert (24h cron + 2h slack).
+        expr: time() - sellico_backup_last_success_timestamp_seconds > 93600
+        for: 0s
+        labels:
+          severity: page
+        annotations:
+          summary: "No successful PostgreSQL backup in 26h"
+          description: "Check /var/log/sellico-backup.log and S3 upload status."

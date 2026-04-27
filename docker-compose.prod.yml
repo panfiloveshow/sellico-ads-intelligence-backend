@@ -179,6 +179,7 @@ services:
       - "9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -195,6 +196,75 @@ services:
       resources:
         limits:
           memory: 512M
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    expose:
+      - "9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/alertmanager-secrets:/etc/alertmanager/secrets:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    environment:
+      ALERT_CHAT_ID: ${ALERT_CHAT_ID}
+      ONCALL_CHAT_ID: ${ONCALL_CHAT_ID:-${ALERT_CHAT_ID}}
+    restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # cAdvisor — per-container CPU / memory / oom event metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    expose:
+      - "8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    privileged: true # cAdvisor needs broad host access — accepted trade-off for visibility
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # node_exporter — host-level CPU / memory / disk / network metrics
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    expose:
+      - "9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.textfile.directory=/var/lib/node_exporter/textfile
+    pid: host # required for some collectors (process-level stats)
+    restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   grafana:
     image: grafana/grafana:11.5.2
@@ -225,3 +295,4 @@ volumes:
   exports:
   prometheus_data:
   grafana_data:
+  alertmanager_data:
