@@ -1,0 +1,8 @@
+node_modules
+dist
+*.local
+.vite
+
+# Generated OpenAPI client — checked into commits because regenerated less
+# often than imports change; remove this line if you prefer codegen-on-build.
+# src/api/schema.gen.ts
