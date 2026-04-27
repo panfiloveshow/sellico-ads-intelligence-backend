@@ -34,7 +34,23 @@ func main() {
 	notificationService := service.NewNotificationService(deps.Queries, tgClient, deps.Logger)
 	syncService := service.NewSyncService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger)
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
+	// Service-account discovery (financial-dashboard pattern). When neither
+	// SELLICO_API_TOKEN nor SELLICO_EMAIL/PASSWORD are set, the manager is
+	// still created but reports IsConfigured()==false; the service skips
+	// the service-account path silently and only the legacy per-user path
+	// runs (which itself is a no-op when no workspace has cached a token).
+	sellicoTokenManager := sellico.NewServiceTokenManager(sellicoClient, sellico.ServiceTokenConfig{
+		StaticToken: cfg.SellicoServiceToken,
+		Email:       cfg.SellicoServiceEmail,
+		Password:    cfg.SellicoServicePassword,
+	})
 	integrationRefreshService := service.NewIntegrationRefreshService(deps.Queries, sellicoClient, sellerCabinetService, []byte(cfg.EncryptionKey), deps.Logger)
+	if sellicoTokenManager.IsConfigured() {
+		integrationRefreshService = integrationRefreshService.WithServiceAccount(sellicoTokenManager)
+		deps.Logger.Info().Msg("sellico service-account discovery enabled")
+	} else {
+		deps.Logger.Info().Msg("sellico service-account NOT configured; only legacy per-user discovery active")
+	}
 	recommendationService := service.NewRecommendationService(deps.Queries)
 	engine := service.NewRecommendationEngine(deps.Queries, recommendationService, notificationService, deps.Logger)
 	extendedEngine := service.NewExtendedRecommendationEngine(deps.Queries, recommendationService, deps.Logger)

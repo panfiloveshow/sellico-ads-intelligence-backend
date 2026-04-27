@@ -50,9 +50,11 @@ type syncNotifier interface {
 	NotifySyncComplete(ctx context.Context, workspaceID uuid.UUID, status string, issues []string)
 }
 
-// integrationRefresher auto-discovers new Sellico integrations.
+// integrationRefresher auto-discovers new Sellico integrations. Refresh
+// dispatches to whichever discovery paths the service has been configured
+// for (legacy per-user, service-account, or both).
 type integrationRefresher interface {
-	RefreshAllWorkspaces(ctx context.Context) error
+	Refresh(ctx context.Context) error
 }
 
 // bidAutomationRunner executes bid strategies for a workspace.
@@ -231,7 +233,7 @@ func (p *Processor) HandleSweepRefreshIntegrations(ctx context.Context, _ *asynq
 		p.logger.Debug().Msg("integration refresher not configured, skipping")
 		return nil
 	}
-	return p.integrationRefresher.RefreshAllWorkspaces(ctx)
+	return p.integrationRefresher.Refresh(ctx)
 }
 
 func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) error {

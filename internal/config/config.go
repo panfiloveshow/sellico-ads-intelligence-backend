@@ -54,6 +54,19 @@ type Config struct {
 	SellicoAPIBaseURL string        // env: SELLICO_API_BASE_URL, default: "https://sellico.ru/api"
 	SellicoAPITimeout time.Duration // env: SELLICO_API_TIMEOUT, default: 5s
 
+	// Sellico service-account credentials. The backend uses them to call the
+	// service-account endpoints documented in financial-dashboard/rules.md
+	// (GET /get-integrations, GET /check-permission, etc.). One of these two
+	// auth paths must be supplied; both empty disables Sellico-mediated flows.
+	//
+	//   SELLICO_API_TOKEN — preferred, static bearer; cached forever
+	//   SELLICO_EMAIL + SELLICO_PASSWORD — fallback; backend logs in via
+	//                                       /api/login at first use, refreshes
+	//                                       transparently on 401
+	SellicoServiceToken    string // env: SELLICO_API_TOKEN, optional
+	SellicoServiceEmail    string // env: SELLICO_EMAIL, optional
+	SellicoServicePassword string // env: SELLICO_PASSWORD, optional
+
 	// CORS
 	CORSAllowOrigins []string // env: CORS_ALLOW_ORIGINS, comma-separated, default: "*"
 
@@ -93,8 +106,11 @@ func Load() *Config {
 		WBParserMinDelay:   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
 		WBParserProxies:    getEnvAsSlice("WB_PARSER_PROXIES", ","),
 		ExportStoragePath:  getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
-		SellicoAPIBaseURL:  getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
-		SellicoAPITimeout:  getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
+		SellicoAPIBaseURL:      getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
+		SellicoAPITimeout:      getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
+		SellicoServiceToken:    getEnvOrDefault("SELLICO_API_TOKEN", ""),
+		SellicoServiceEmail:    getEnvOrDefault("SELLICO_EMAIL", ""),
+		SellicoServicePassword: getEnvOrDefault("SELLICO_PASSWORD", ""),
 		SyncInterval:          getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
 		RecommendationInterval: getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
 		BidAutomationInterval:  getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),

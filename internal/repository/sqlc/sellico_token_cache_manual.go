@@ -53,3 +53,43 @@ func (q *Queries) ListWorkspacesWithSellicoToken(ctx context.Context, limit int3
 	}
 	return items, rows.Err()
 }
+
+// WorkspaceExternalID is the projection used by the service-account discovery
+// path: just enough fields to map a local workspace to its Sellico
+// work_space_id and call /api/get-integrations/{ws}.
+type WorkspaceExternalID struct {
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	ExternalWorkspaceID pgtype.Text `json:"external_workspace_id"`
+}
+
+const listWorkspacesWithExternalID = `
+SELECT id, external_workspace_id
+FROM workspaces
+WHERE deleted_at IS NULL
+  AND external_workspace_id IS NOT NULL
+  AND external_workspace_id != ''
+ORDER BY updated_at DESC NULLS LAST
+LIMIT $1
+`
+
+// ListWorkspacesWithExternalID returns every local workspace that knows its
+// Sellico work_space_id. Used by IntegrationRefreshService.RefreshViaServiceAccount
+// to ask the upstream "what integrations does this tenant have?" without
+// needing the tenant's personal token.
+func (q *Queries) ListWorkspacesWithExternalID(ctx context.Context, limit int32) ([]WorkspaceExternalID, error) {
+	rows, err := q.db.Query(ctx, listWorkspacesWithExternalID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []WorkspaceExternalID
+	for rows.Next() {
+		var i WorkspaceExternalID
+		if err := rows.Scan(&i.WorkspaceID, &i.ExternalWorkspaceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
