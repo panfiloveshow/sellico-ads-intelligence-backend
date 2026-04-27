@@ -45,7 +45,10 @@ func main() {
 	asynqClient := asynq.NewClient(asynqRedisOpt)
 	defer asynqClient.Close()
 
-	sellicoClient := sellico.NewClient(cfg.SellicoAPIBaseURL, cfg.SellicoAPITimeout)
+	// Local-auth mode: skip Sellico client wiring entirely. Constructors that
+	// accept *sellico.Client receive nil and fall back to local-DB code paths
+	// (see SellerCabinetService.List → listLocalCabinets, etc.).
+	var sellicoClient *sellico.Client
 	authService := service.NewAuthService(deps.Queries, cfg.JWTSecret, cfg.JWTAccessTokenTTL, cfg.JWTRefreshTokenTTL)
 	workspaceService := service.NewWorkspaceService(deps.Queries)
 	// sellicoBridgeService is constructed but unused while local-auth mode is active.

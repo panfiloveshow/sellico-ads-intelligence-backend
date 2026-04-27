@@ -72,8 +72,14 @@ func (s *SellerCabinetService) Create(ctx context.Context, workspaceID uuid.UUID
 	return &result, nil
 }
 
-// List returns Sellico-backed seller cabinets for the workspace.
+// List returns seller cabinets for the workspace. When the Sellico client is
+// configured, it pulls the upstream WildBerries integration list (the canonical
+// source under SSO mode). When it's nil (local-auth deployments), it falls
+// back to the local seller_cabinets table only.
 func (s *SellerCabinetService) List(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, filter SellerCabinetListFilter, limit, offset int32) ([]domain.SellerCabinet, error) {
+	if s.sellicoClient == nil {
+		return s.listLocalCabinets(ctx, workspaceID, filter, limit, offset)
+	}
 	integrations, err := s.listWbIntegrations(ctx, token, workspaceRef, workspaceID)
 	if err != nil {
 		return nil, err
@@ -359,6 +365,30 @@ func (s *SellerCabinetService) resolveCabinet(ctx context.Context, token, worksp
 		return nil, err
 	}
 	return s.ensureSellicoCabinet(ctx, workspaceID, *integration)
+}
+
+// listLocalCabinets is the no-Sellico path: read directly from seller_cabinets,
+// resolve the latest auto-sync, and apply the same status filter + pagination.
+func (s *SellerCabinetService) listLocalCabinets(ctx context.Context, workspaceID uuid.UUID, filter SellerCabinetListFilter, limit, offset int32) ([]domain.SellerCabinet, error) {
+	rows, err := s.queries.ListSellerCabinetsByWorkspace(ctx, sqlcgen.ListSellerCabinetsByWorkspaceParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Limit:       1000,
+		Offset:      0,
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list local seller cabinets")
+	}
+	lastAutoSync, _ := s.latestWorkspaceAutoSync(ctx, workspaceID)
+	result := make([]domain.SellerCabinet, 0, len(rows))
+	for _, row := range rows {
+		cabinet := sellerCabinetFromSqlc(row)
+		cabinet.LastAutoSync = lastAutoSync
+		if filter.Status != "" && cabinet.Status != filter.Status {
+			continue
+		}
+		result = append(result, cabinet)
+	}
+	return paginateCabinets(result, limit, offset), nil
 }
 
 func (s *SellerCabinetService) listWbIntegrations(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID) ([]sellico.Integration, error) {
