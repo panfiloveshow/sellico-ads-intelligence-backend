@@ -1,0 +1,3 @@
+# Place fullchain.pem and privkey.pem here on the production host.
+# Bootstrap via scripts/setup-ssl.sh (certbot --standalone).
+# Files in this directory are gitignored — see .gitignore.

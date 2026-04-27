@@ -9,7 +9,10 @@
 set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/sellico}"
-COMPOSE_FILE="docker-compose.prod.yml"
+# Production compose file. server.yml carries the latest memory limits, GOMEMLIMIT,
+# and SSL config. docker-compose.prod.yml is deprecated and will be removed in Sprint 2
+# of the v1.0 roadmap (consolidated under a single prod file).
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server.yml}"
 
 log() { echo "[$(date -Iseconds)] $*"; }
 
@@ -51,10 +54,14 @@ case "${1:-update}" in
       log "Systemd service installed and enabled"
     fi
 
-    # Install backup cron
-    CRON_LINE="0 3 * * * $DEPLOY_DIR/scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1"
-    (crontab -l 2>/dev/null | grep -v "backup-db.sh"; echo "$CRON_LINE") | crontab -
-    log "Backup cron installed (daily at 03:00)"
+    # Install backup + restore-check crons
+    BACKUP_LINE="0 3 * * * $DEPLOY_DIR/scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1"
+    RESTORE_LINE="30 4 * * * $DEPLOY_DIR/scripts/restore-check.sh >> /var/log/sellico-restore-check.log 2>&1"
+    ( crontab -l 2>/dev/null | grep -v "backup-db.sh\|restore-check.sh"
+      echo "$BACKUP_LINE"
+      echo "$RESTORE_LINE"
+    ) | crontab -
+    log "Backup cron installed (daily 03:00) + restore-check cron (daily 04:30)"
 
     # Start services
     cd "$DEPLOY_DIR"

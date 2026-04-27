@@ -1,0 +1,2 @@
+# ACME http-01 challenge webroot. Certbot writes challenge files here during renewal.
+# Mounted read-only into the nginx container at /var/www/certbot.

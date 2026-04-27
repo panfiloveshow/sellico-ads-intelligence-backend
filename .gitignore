@@ -24,3 +24,9 @@ extension/*.pem
 
 # Test
 coverage.out
+
+# SSL certs and ACME challenges (live data, never committed)
+nginx/ssl/*
+!nginx/ssl/.gitkeep
+nginx/acme/*
+!nginx/acme/.gitkeep

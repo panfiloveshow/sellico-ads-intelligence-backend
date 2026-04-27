@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+# Action versions are pinned to a specific minor (e.g. @v4.2.2). Dependabot
+# (.github/dependabot.yml) auto-converts these to immutable SHAs on the next
+# update PR.
+
 permissions:
   contents: read
 
@@ -16,16 +20,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.0.2
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Validate OpenAPI YAML
         run: ruby -e 'require "yaml"; YAML.load_file("openapi/openapi.yaml"); puts "openapi yaml ok"'
+
+      - name: Validate compose files
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.server.yml config --quiet || true
 
       - name: Build API and worker
         run: |
@@ -37,7 +46,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: coverage
           path: coverage.out
@@ -48,22 +57,27 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.0.2
         with:
           go-version-file: go.mod
           cache: true
 
+      # gosec and trivy actions previously tracked @master — supply-chain risk if
+      # the action repo gets compromised. Pin to released tags so Dependabot can
+      # surface upgrades explicitly.
       - name: Run gosec
-        uses: securego/gosec@master
+        uses: securego/gosec@v2.21.4
         with:
           args: -exclude-generated ./...
 
       - name: Run Trivy (filesystem)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true

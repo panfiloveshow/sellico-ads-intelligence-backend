@@ -1,0 +1,49 @@
+# Dependabot keeps dependencies pinned and surfaces updates as PRs.
+# For github-actions, Dependabot rewrites version tags into immutable SHAs
+# (with a comment carrying the human-readable version), which is the
+# recommended supply-chain hardening pattern.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      gh-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      go-runtime:
+        patterns:
+          - "github.com/jackc/*"
+          - "github.com/redis/*"
+          - "github.com/hibiken/*"
+      go-observability:
+        patterns:
+          - "github.com/prometheus/*"
+          - "github.com/rs/zerolog"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
