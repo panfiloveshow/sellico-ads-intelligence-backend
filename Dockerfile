@@ -14,7 +14,7 @@ ARG TARGET=api
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/bin/server ./cmd/${TARGET}
 
 # Final stage
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata su-exec
 RUN addgroup -S app && adduser -S -G app app
