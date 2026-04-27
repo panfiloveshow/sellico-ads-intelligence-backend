@@ -5,7 +5,7 @@
 set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/sellico}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 SSL_DIR="$DEPLOY_DIR/nginx/ssl"
 
 log() { echo "[$(date -Iseconds)] [deploy-hook] $*"; }

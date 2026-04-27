@@ -1,11 +1,13 @@
-# Production docker-compose for Timeweb VPS deployment.
-# Usage:
-#   docker compose -f docker-compose.prod.yml up -d
+# Production docker-compose — single source of truth.
 #
-# Prerequisites:
-#   - .env file with production secrets
-#   - SSL certificates in nginx/ssl/ (fullchain.pem + privkey.pem)
-#   - GHCR login: echo $GHCR_TOKEN | docker login ghcr.io -u <user> --password-stdin
+# Hardening profile applied to every container:
+#   security_opt: no-new-privileges  (kernel forbids escalation via setuid binaries)
+#   cap_drop: ALL + targeted cap_add  (least-privilege Linux capabilities)
+#   read_only: true with explicit tmpfs for runtime-writable paths
+#
+# Monitoring (prometheus, grafana, alertmanager) runs on the internal docker
+# network only — no host ports. Reach grafana via nginx /admin/grafana/ (Sprint 4).
+# For ad-hoc access use SSH tunnel: ssh -L 3000:grafana:3000 ops@host
 
 services:
   nginx:
@@ -14,13 +16,23 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/proxy.inc:/etc/nginx/conf.d/proxy.inc:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/acme:/var/www/certbot:ro
     depends_on:
       api:
         condition: service_healthy
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"]
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
 
   migrate:
     image: migrate/migrate:v4.19.0
@@ -34,9 +46,15 @@ services:
     volumes:
       - ./migrations:/migrations:ro
     restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
 
   api:
-    image: ${API_IMAGE:-ghcr.io/panfiloveshow/sellico-ads-intelligence-backend-api:latest}
+    build:
+      context: .
+      args:
+        TARGET: api
     expose:
       - "8080"
     env_file:
@@ -45,6 +63,9 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       EXPORT_STORAGE_PATH: /app/exports
+      # GOMEMLIMIT is also computed at startup from the cgroup limit
+      # (internal/app/bootstrap.go) — this env var acts as an override.
+      GOMEMLIMIT: 700MiB
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,23 +78,32 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health/ready >/dev/null 2>&1 || exit 1"]
       interval: 15s
-      timeout: 3s
+      timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 30s
     restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
 
   worker:
-    image: ${WORKER_IMAGE:-ghcr.io/panfiloveshow/sellico-ads-intelligence-backend-worker:latest}
+    build:
+      context: .
+      args:
+        TARGET: worker
     env_file:
       - .env
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       EXPORT_STORAGE_PATH: /app/exports
+      GOMEMLIMIT: 350MiB
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,14 +116,19 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8081/health/live >/dev/null 2>&1 || exit 1"]
       interval: 15s
-      timeout: 3s
+      timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 30s
     restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 384M
 
   postgres:
     image: postgres:16-alpine
@@ -101,6 +136,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-sellico}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-sellico}
+    command: postgres -c shared_buffers=128MB -c effective_cache_size=256MB -c work_mem=4MB
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -109,10 +145,13 @@ services:
       timeout: 3s
       retries: 5
     restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "SETGID", "SETUID", "DAC_OVERRIDE", "FOWNER"]
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 384M
 
   redis:
     image: redis:7-alpine
@@ -120,45 +159,65 @@ services:
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
     restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["SETGID", "SETUID"]
     deploy:
       resources:
         limits:
           memory: 256M
 
-  # --- Monitoring ---
+  # --- Monitoring (internal-only; reach via nginx /admin/grafana or SSH tunnel) ---
   prometheus:
     image: prom/prometheus:v3.2.1
+    expose:
+      - "9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=30d
+      - --web.external-url=/admin/prometheus
+      - --web.route-prefix=/
     depends_on:
       api:
         condition: service_healthy
     restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   grafana:
     image: grafana/grafana:11.5.2
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://api.sellico.ru/admin/grafana/}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
     restart: always
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 volumes:
   pgdata:

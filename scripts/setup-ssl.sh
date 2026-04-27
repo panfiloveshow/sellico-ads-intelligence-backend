@@ -15,7 +15,7 @@ set -euo pipefail
 DOMAIN="${DOMAIN:?DOMAIN env var required (e.g. api.sellico.ru)}"
 EMAIL="${EMAIL:?EMAIL env var required (for Lets Encrypt expiry notices)}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/sellico}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 
 log() { echo "[$(date -Iseconds)] $*"; }
 

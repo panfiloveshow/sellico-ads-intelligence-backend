@@ -30,6 +30,8 @@ func NewDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, er
 		return nil, err
 	}
 
+	applyMemoryLimit(logger)
+
 	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)

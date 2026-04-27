@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
@@ -23,6 +22,14 @@ import (
 const (
 	maxRetries        = 3
 	backoffMultiplier = 3.0
+
+	// Per-token caches are bounded so a high-cardinality token stream (e.g.
+	// many workspaces, or rotated tokens) cannot grow the resident set
+	// without limit. TTL is set conservatively — a token unused for an hour
+	// gets a fresh limiter/breaker on next use, which matches the behaviour
+	// callers would expect after that idle period anyway.
+	tokenCacheCapacity = 1000
+	tokenCacheTTL      = time.Hour
 )
 
 var (
@@ -39,11 +46,8 @@ type Client struct {
 	rateLimit  int
 	logger     zerolog.Logger
 
-	mu       sync.Mutex
-	limiters map[string]*rate.Limiter
-
-	breakerMu sync.Mutex
-	breakers  map[string]*gobreaker.CircuitBreaker[[]byte]
+	limiters *boundedLRU[*rate.Limiter]
+	breakers *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
 }
 
 // NewClient creates a new WB API client from the application config.
@@ -59,8 +63,8 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		contentURL: contentURL,
 		rateLimit:  cfg.WBAPIRateLimit,
 		logger:     logger.With().Str("component", "wb_client").Logger(),
-		limiters:   make(map[string]*rate.Limiter),
-		breakers:   make(map[string]*gobreaker.CircuitBreaker[[]byte]),
+		limiters:   newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
+		breakers:   newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
 }
 
@@ -71,36 +75,34 @@ func (c *Client) ValidateToken(ctx context.Context, token string) error {
 }
 
 // limiterForToken returns a per-token rate limiter, creating one if it doesn't exist.
+// Backed by a bounded LRU+TTL cache (see boundedLRU): unused tokens age out so
+// the resident set stays bounded even with high-cardinality token streams.
 func (c *Client) limiterForToken(token string) *rate.Limiter {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if lim, ok := c.limiters[token]; ok {
+	if lim, ok := c.limiters.Get(token); ok {
 		return lim
 	}
-
 	lim := rate.NewLimiter(rate.Limit(c.rateLimit), c.rateLimit)
-	c.limiters[token] = lim
+	c.limiters.Set(token, lim)
 	return lim
 }
 
-// doRequest executes an HTTP request with circuit breaker, retry logic, rate-limiting, and logging.
-// It handles HTTP 429 (rate limit) and HTTP 5xx (server errors) with appropriate backoff.
 // breakerForToken returns a per-token circuit breaker (audit fix: HIGH #9).
+// Same bounded-LRU semantics as limiterForToken.
 func (c *Client) breakerForToken(token string) *gobreaker.CircuitBreaker[[]byte] {
 	key := token
 	if len(key) > 20 {
 		key = key[:20]
 	}
-	c.breakerMu.Lock()
-	defer c.breakerMu.Unlock()
-	if cb, ok := c.breakers[key]; ok {
+	if cb, ok := c.breakers.Get(key); ok {
 		return cb
 	}
 	cb := newCircuitBreaker("wb-api-" + key)
-	c.breakers[key] = cb
+	c.breakers.Set(key, cb)
 	return cb
 }
+
+// doRequest executes an HTTP request with circuit breaker, retry logic, rate-limiting, and logging.
+// It handles HTTP 429 (rate limit) and HTTP 5xx (server errors) with appropriate backoff.
 
 func (c *Client) doRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
 	var resp *http.Response

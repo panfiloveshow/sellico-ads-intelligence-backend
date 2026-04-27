@@ -9,10 +9,7 @@
 set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/sellico}"
-# Production compose file. server.yml carries the latest memory limits, GOMEMLIMIT,
-# and SSL config. docker-compose.prod.yml is deprecated and will be removed in Sprint 2
-# of the v1.0 roadmap (consolidated under a single prod file).
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 
 log() { echo "[$(date -Iseconds)] $*"; }
 

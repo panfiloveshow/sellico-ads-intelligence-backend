@@ -10,7 +10,7 @@
 set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/sellico}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 SSL_DIR="$DEPLOY_DIR/nginx/ssl"
 ACME_DIR="$DEPLOY_DIR/nginx/acme"
 
@@ -19,7 +19,7 @@ log() { echo "[$(date -Iseconds)] $*"; }
 mkdir -p "$ACME_DIR"
 
 # certbot --webroot doesn't need port 80 free — nginx serves the challenge from
-# /var/www/certbot (already mounted from $ACME_DIR by docker-compose.server.yml).
+# /var/www/certbot (already mounted from $ACME_DIR by docker-compose.prod.yml).
 log "Renewing certs via webroot..."
 certbot renew \
   --webroot \

@@ -77,11 +77,11 @@ modules:
 
 ## Откат на HTTP (только для emergency)
 
-Сменить в `docker-compose.server.yml` mount nginx-конфига обратно на `nginx.conf`
+Сменить в `docker-compose.prod.yml` mount nginx-конфига обратно на `nginx.conf`
 (dev-вариант, без SSL), убрать порт 443. Пересоздать контейнер:
 
 ```bash
-docker compose -f docker-compose.server.yml up -d nginx
+docker compose -f docker-compose.prod.yml up -d nginx
 ```
 
 После исправления вернуть на `nginx.prod.conf`.

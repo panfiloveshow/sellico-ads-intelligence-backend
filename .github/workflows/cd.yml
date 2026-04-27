@@ -92,8 +92,8 @@ jobs:
             cd "${DEPLOY_PATH:-/opt/sellico}"
             # Token is read from env — never echoed, never interpolated.
             printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            docker compose -f docker-compose.server.yml pull api worker
-            docker compose -f docker-compose.server.yml up -d api worker
+            docker compose -f docker-compose.prod.yml pull api worker
+            docker compose -f docker-compose.prod.yml up -d api worker
             docker logout ghcr.io
             docker image prune -f
         env:
