@@ -1,18 +1,27 @@
 {
   "manifest_version": 3,
   "name": "Sellico Ads Intelligence",
+  "version": "1.0.0",
+  "version_name": "1.0.0",
   "description": "Live Sellico context and auto-capture inside Wildberries Ads cabinet.",
-  "version": "0.1.0",
+  "homepage_url": "https://sellico.ru",
+  "author": "Sellico",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "storage",
-    "cookies",
-    "activeTab",
-    "scripting"
+    "cookies"
   ],
   "host_permissions": [
     "https://seller.wildberries.ru/*",
     "https://cmp.wildberries.ru/*",
     "https://sellico.ru/*",
+    "https://api.sellico.ru/*"
+  ],
+  "optional_host_permissions": [
     "http://127.0.0.1:8080/*",
     "http://localhost:8080/*"
   ],
@@ -22,7 +31,12 @@
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "Sellico Ads Intelligence"
+    "default_title": "Sellico Ads Intelligence",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "content_scripts": [
     {
@@ -30,25 +44,22 @@
         "https://seller.wildberries.ru/*",
         "https://cmp.wildberries.ru/*"
       ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "panel.css"
-      ],
+      "js": ["content.js"],
+      "css": ["panel.css"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "page-bridge.js",
-        "icons/*"
-      ],
+      "resources": ["page-bridge.js", "icons/*"],
       "matches": [
         "https://seller.wildberries.ru/*",
         "https://cmp.wildberries.ru/*"
       ]
     }
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'; form-action 'self'"
+  },
+  "minimum_chrome_version": "120"
 }

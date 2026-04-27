@@ -1,0 +1,50 @@
+name: Extension Release
+
+# Triggers only on a dedicated tag pattern so the extension can be cut
+# independently of backend releases. Backend uses tags like v1.0.0; the
+# extension uses extension-v1.0.0.
+on:
+  push:
+    tags:
+      - "extension-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create release + upload artefacts
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install Chromium + ImageMagick
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y chromium-browser imagemagick zip
+
+      - name: Pack extension (CRX + zip)
+        env:
+          # Stored as a base64-encoded PEM so YAML doesn't choke on newlines.
+          # Generate once with: base64 -i extension/sellico-extension-key.pem | pbcopy
+          EXTENSION_PRIVATE_KEY: ${{ secrets.EXTENSION_PRIVATE_KEY }}
+        run: bash scripts/pack-extension.sh
+
+      - name: Upload artefacts to workflow run
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: extension-build
+          path: extension/dist/
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/extension-v')
+        uses: softprops/action-gh-release@v2.0.8
+        with:
+          files: |
+            extension/dist/*.crx
+            extension/dist/*.zip
+          generate_release_notes: true
+          name: "Browser Extension ${{ github.ref_name }}"
