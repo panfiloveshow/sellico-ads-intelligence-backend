@@ -1,0 +1,81 @@
+# Known OpenAPI ↔ router drift, accepted as a baseline so that
+# CI fails only on NEW drift introduced by future changes.
+#
+# Format:
+#   `+ /path`  — registered in router.go but NOT in openapi.yaml
+#   `- /path`  — declared in openapi.yaml but NOT in router.go
+#
+# These entries SHOULD be reduced over time as part of the v1.0 spec-sync
+# work (see roadmap "Documentation & release"). When you remove an entry,
+# either delete the route or add a matching path to openapi.yaml.
+
+# ---- Spec/docs endpoints — they ARE the documentation, no need to self-document ----
++ /docs
++ /openapi.yaml
+
+# ---- Documented but route TBD ----
+- /api/v1/audit-logs
+
+# ---- Routes wired but not yet documented (added during the autobidder merge) ----
++ /api/v1/ads/campaigns
++ /api/v1/ads/campaigns/{id}
++ /api/v1/ads/overview
++ /api/v1/ads/products
++ /api/v1/ads/products/{id}
++ /api/v1/ads/queries
++ /api/v1/ads/queries/{id}
++ /api/v1/cabinets
++ /api/v1/cabinets/{id}
++ /api/v1/cabinets/{id}/campaigns
++ /api/v1/cabinets/{id}/products
++ /api/v1/cabinets/{id}/sync
++ /api/v1/campaigns
++ /api/v1/campaigns/{id}/bid-history
++ /api/v1/campaigns/{id}/bids
++ /api/v1/campaigns/{id}/daily-stats
++ /api/v1/campaigns/{id}/minus-phrases
++ /api/v1/campaigns/{id}/minus-phrases/{phraseId}
++ /api/v1/campaigns/{id}/pause
++ /api/v1/campaigns/{id}/plus-phrases
++ /api/v1/campaigns/{id}/plus-phrases/{phraseId}
++ /api/v1/campaigns/{id}/start
++ /api/v1/campaigns/{id}/stop
++ /api/v1/competitors
++ /api/v1/competitors/extract
++ /api/v1/delivery/collect
++ /api/v1/exports
++ /api/v1/extension/bid-snapshots
++ /api/v1/extension/network-captures/batch
++ /api/v1/extension/page-context
++ /api/v1/extension/position-snapshots
++ /api/v1/extension/session/start
++ /api/v1/extension/ui-signals
++ /api/v1/extension/widgets/campaign
++ /api/v1/extension/widgets/product
++ /api/v1/extension/widgets/search
++ /api/v1/job-runs
++ /api/v1/keyword-clusters
++ /api/v1/keywords
++ /api/v1/keywords/cluster
++ /api/v1/keywords/collect
++ /api/v1/phrases
++ /api/v1/phrases/{id}/daily-stats
++ /api/v1/positions
++ /api/v1/positions/history
++ /api/v1/positions/targets
++ /api/v1/product-events
++ /api/v1/products
++ /api/v1/products/{id}/competitors
++ /api/v1/products/{id}/events
++ /api/v1/products/{id}/seo
++ /api/v1/recommendations
++ /api/v1/recommendations/{id}/apply
++ /api/v1/seller-cabinets
++ /api/v1/seo/analyze
++ /api/v1/serp-snapshots
++ /api/v1/serp/history
++ /api/v1/serp/{id}
++ /api/v1/strategies
++ /api/v1/strategies/{id}
++ /api/v1/strategies/{id}/attach
++ /api/v1/strategies/{id}/bindings/{bindingId}

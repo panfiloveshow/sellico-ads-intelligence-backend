@@ -224,118 +224,16 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 	return aggregated, dateTo, nil
 }
 
+// loadNormQueryAggregates resolves the NM IDs for a campaign via ListCampaigns,
+// then defers to loadNormQueryAggregatesWithNMIDs. The split exists so callers
+// that already have NM IDs (e.g. SearchClusterStats with explicit input) can
+// skip the ListCampaigns round-trip.
 func (c *Client) loadNormQueryAggregates(ctx context.Context, token string, campaignID int) (map[string]*aggregatedNormQuery, string, error) {
 	campaigns, err := c.ListCampaigns(ctx, token)
 	if err != nil {
 		return nil, "", err
 	}
-
-	nmIDs := campaignNMIDs(campaigns, campaignID)
-	if len(nmIDs) == 0 {
-		return map[string]*aggregatedNormQuery{}, time.Now().UTC().Format(dateFmt), nil
-	}
-
-	dateTo := time.Now().UTC().Format(dateFmt)
-	dateFrom := time.Now().UTC().AddDate(0, 0, -30).Format(dateFmt)
-
-	statsBody, err := json.Marshal(buildNormQueryStatsRequest(campaignID, nmIDs, dateFrom, dateTo))
-	if err != nil {
-		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery stats request: %v", err))
-	}
-
-	// Use v0 normquery/stats endpoint (official WB API)
-	_, statsRaw, err := c.doRequest(ctx, "POST", "/adv/v0/normquery/stats", token, bytes.NewReader(statsBody))
-	if err != nil {
-		return nil, "", err
-	}
-
-	var statsResponse normQueryStatsResponse
-	if err := json.Unmarshal(statsRaw, &statsResponse); err != nil {
-		preview := string(statsRaw)
-		if len(preview) > 500 {
-			preview = preview[:500]
-		}
-		c.logger.Error().
-			Int("campaign_id", campaignID).
-			Str("raw_preview", preview).
-			Msg("normquery stats unmarshal failed")
-		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal normquery stats: %v", err))
-	}
-
-	totalKeywords := 0
-	for _, item := range statsResponse.Stats {
-		for _, stat := range item.Stats {
-			if stat.NormQuery != "" {
-				totalKeywords++
-			}
-		}
-	}
-	if totalKeywords == 0 {
-		preview := string(statsRaw)
-		if len(preview) > 300 {
-			preview = preview[:300]
-		}
-		c.logger.Warn().
-			Int("campaign_id", campaignID).
-			Int("stats_items", len(statsResponse.Stats)).
-			Int("raw_len", len(statsRaw)).
-			Str("raw_preview", preview).
-			Msg("normquery stats returned 0 keywords")
-	}
-
-	bidsBody, err := json.Marshal(buildNormQueryRequest(campaignID, nmIDs))
-	if err != nil {
-		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery bids request: %v", err))
-	}
-
-	_, bidsRaw, err := c.doRequest(ctx, "POST", "/adv/v0/normquery/get-bids", token, bytes.NewReader(bidsBody))
-	if err != nil {
-		c.logger.Warn().Err(err).Int("campaign_id", campaignID).Msg("normquery get-bids failed, falling back without explicit bids")
-	}
-
-	bidsByQuery := make(map[string]int64)
-	if len(bidsRaw) > 0 {
-		var bidsResponse normQueryBidsResponse
-		if err := json.Unmarshal(bidsRaw, &bidsResponse); err == nil {
-			for _, bid := range bidsResponse.Bids {
-				if bid.NormQuery == "" {
-					continue
-				}
-				if bid.Bid > bidsByQuery[bid.NormQuery] {
-					bidsByQuery[bid.NormQuery] = bid.Bid
-				}
-			}
-		}
-	}
-
-	aggregated := make(map[string]*aggregatedNormQuery)
-	for _, item := range statsResponse.Stats {
-		for _, stat := range item.Stats {
-			keyword := stat.NormQuery
-			if keyword == "" {
-				continue
-			}
-			entry, ok := aggregated[keyword]
-			if !ok {
-				entry = &aggregatedNormQuery{keyword: keyword}
-				aggregated[keyword] = entry
-			}
-			entry.views += stat.Views
-			entry.clicks += stat.Clicks
-			entry.orders += stat.Orders
-			if entry.bid == 0 {
-				entry.bid = bidsByQuery[keyword]
-			}
-			// WB API 2026-04: CPC campaigns return sum directly, views/cpm are 0
-			if stat.Sum > 0 {
-				entry.spend += stat.Sum / 100 // sum is in kopecks
-			} else {
-				entry.spend += normQuerySpend(stat.Views, stat.Clicks, stat.CPC, stat.CPM)
-			}
-		}
-	}
-
-	return aggregated, dateTo, nil
+	return c.loadNormQueryAggregatesWithNMIDs(ctx, token, campaignID, campaignNMIDs(campaigns, campaignID))
 }
 
 func buildNormQueryRequest(campaignID int, nmIDs []int64) normQueryRequest {

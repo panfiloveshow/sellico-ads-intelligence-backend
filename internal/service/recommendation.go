@@ -62,7 +62,7 @@ func (s *RecommendationService) List(ctx context.Context, workspaceID uuid.UUID,
 		return nil, apperror.New(apperror.ErrInternal, "failed to list recommendations")
 	}
 
-	extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit)
+	extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, defaultAdsReadStatsLimit)
 	if evidenceErr != nil {
 		extensionEvidence = &workspaceExtensionEvidence{}
 	}
@@ -91,7 +91,7 @@ func (s *RecommendationService) Get(ctx context.Context, workspaceID, recommenda
 
 	result := recommendationFromSqlc(row)
 	result = s.enrichCabinetContext(ctx, result)
-	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit); evidenceErr == nil {
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, defaultAdsReadStatsLimit); evidenceErr == nil {
 		result.Evidence = extensionEvidence.recommendationEvidence(result)
 	} else {
 		result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
@@ -114,7 +114,7 @@ func (s *RecommendationService) UpdateStatus(ctx context.Context, workspaceID, r
 
 	result := recommendationFromSqlc(row)
 	result = s.enrichCabinetContext(ctx, result)
-	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit); evidenceErr == nil {
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, defaultAdsReadStatsLimit); evidenceErr == nil {
 		result.Evidence = extensionEvidence.recommendationEvidence(result)
 	} else {
 		result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
@@ -154,7 +154,7 @@ func (s *RecommendationService) UpsertActive(ctx context.Context, input Recommen
 		}
 		result := recommendationFromSqlc(row)
 		result = s.enrichCabinetContext(ctx, result)
-		if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, input.WorkspaceID, adsReadStatsLimit); evidenceErr == nil {
+		if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, input.WorkspaceID, defaultAdsReadStatsLimit); evidenceErr == nil {
 			result.Evidence = extensionEvidence.recommendationEvidence(result)
 		} else {
 			result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)
@@ -184,7 +184,7 @@ func (s *RecommendationService) UpsertActive(ctx context.Context, input Recommen
 
 	result := recommendationFromSqlc(row)
 	result = s.enrichCabinetContext(ctx, result)
-	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, input.WorkspaceID, adsReadStatsLimit); evidenceErr == nil {
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, input.WorkspaceID, defaultAdsReadStatsLimit); evidenceErr == nil {
 		result.Evidence = extensionEvidence.recommendationEvidence(result)
 	} else {
 		result.Evidence = backendOnlyEvidence(domain.SourceDerived, result.Confidence)

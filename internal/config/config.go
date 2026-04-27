@@ -36,6 +36,13 @@ type Config struct {
 	WBAPIBaseURL   string // env: WB_API_BASE_URL, default: "https://advert-api.wildberries.ru"
 	WBAPIRateLimit int    // env: WB_API_RATE_LIMIT, default: 10
 
+	// Ads Read service per-query data caps. Previously hardcoded as constants in
+	// internal/service/ads_read_loader.go and tuned during the OOM incident; lifted
+	// to config so ops can adjust per-deployment without a code change. A future
+	// per-workspace override is tracked in the v1.0 roadmap.
+	AdsReadEntityLimit int // env: ADS_READ_ENTITY_LIMIT, default: 5000
+	AdsReadStatsLimit  int // env: ADS_READ_STATS_LIMIT, default: 20000
+
 	// WB Catalog Parser
 	WBParserMinDelay time.Duration // env: WB_PARSER_MIN_DELAY, default: 2s
 	WBParserProxies  []string      // env: WB_PARSER_PROXIES, comma-separated
@@ -81,6 +88,8 @@ func Load() *Config {
 		EncryptionKey:      requireEnv("ENCRYPTION_KEY"),
 		WBAPIBaseURL:       getEnvOrDefault("WB_API_BASE_URL", "https://advert-api.wildberries.ru"),
 		WBAPIRateLimit:     getEnvAsInt("WB_API_RATE_LIMIT", 10),
+		AdsReadEntityLimit: getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
+		AdsReadStatsLimit:  getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
 		WBParserMinDelay:   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
 		WBParserProxies:    getEnvAsSlice("WB_PARSER_PROXIES", ","),
 		ExportStoragePath:  getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),

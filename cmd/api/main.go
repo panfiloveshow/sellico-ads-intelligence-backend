@@ -50,7 +50,9 @@ func main() {
 	workspaceService := service.NewWorkspaceService(deps.Queries)
 	sellicoBridgeService := service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
-	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger)
+	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
+		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
+	)
 	syncJobService := service.NewSyncJobService(deps.Queries, workspaceSyncEnqueuerFunc(func(workspaceID uuid.UUID, jobRunID *uuid.UUID, metadata map[string]any) (string, error) {
 		task, taskErr := worker.NewWorkspaceTaskWithMetadata(worker.TaskSyncWorkspace, workspaceID, jobRunID, metadata)
 		if taskErr != nil {

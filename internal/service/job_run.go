@@ -53,7 +53,7 @@ func (s *JobRunService) List(ctx context.Context, workspaceID uuid.UUID, filter 
 		return nil, apperror.New(apperror.ErrInternal, "failed to list job runs")
 	}
 
-	extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit)
+	extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, defaultAdsReadStatsLimit)
 	if evidenceErr != nil {
 		extensionEvidence = &workspaceExtensionEvidence{}
 	}
@@ -79,7 +79,7 @@ func (s *JobRunService) Get(ctx context.Context, workspaceID, jobRunID uuid.UUID
 	}
 
 	result := jobRunFromSqlc(row)
-	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, adsReadStatsLimit); evidenceErr == nil {
+	if extensionEvidence, evidenceErr := loadWorkspaceExtensionEvidence(ctx, s.queries, workspaceID, defaultAdsReadStatsLimit); evidenceErr == nil {
 		result.Evidence = extensionEvidence.workspaceEvidence(domain.SourceAPI)
 	} else {
 		result.Evidence = backendOnlyEvidence(domain.SourceAPI, 0.75)

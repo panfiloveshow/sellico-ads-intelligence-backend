@@ -31,6 +31,9 @@ jobs:
       - name: Validate OpenAPI YAML
         run: ruby -e 'require "yaml"; YAML.load_file("openapi/openapi.yaml"); puts "openapi yaml ok"'
 
+      - name: OpenAPI ↔ router drift check
+        run: go run ./tools/check-openapi-drift
+
       - name: Validate compose files
         run: |
           docker compose -f docker-compose.yml config --quiet

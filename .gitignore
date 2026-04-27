@@ -2,6 +2,7 @@
 bin/
 /api
 /worker
+/check-openapi-drift
 *.exe
 
 # Environment
