@@ -48,7 +48,10 @@ func main() {
 	sellicoClient := sellico.NewClient(cfg.SellicoAPIBaseURL, cfg.SellicoAPITimeout)
 	authService := service.NewAuthService(deps.Queries, cfg.JWTSecret, cfg.JWTAccessTokenTTL, cfg.JWTRefreshTokenTTL)
 	workspaceService := service.NewWorkspaceService(deps.Queries)
-	sellicoBridgeService := service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
+	// sellicoBridgeService is constructed but unused while local-auth mode is active.
+	// Keeping the assignment commented documents the wiring point for the SSO option.
+	// _ = service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
+	_ = sellicoClient
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
 	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
 		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
@@ -167,10 +170,16 @@ func main() {
 			RequestsPerSecond: cfg.RateLimitRPS,
 			Burst:             cfg.RateLimitBurst,
 		},
-		JWTSecret:             cfg.JWTSecret,
-		MembershipChecker:     workspaceService,
-		WorkspaceResolver:     sellicoBridgeService,
-		Authenticator:         sellicoBridgeService,
+		JWTSecret:         cfg.JWTSecret,
+		MembershipChecker: workspaceService,
+		// Local-auth mode: leaving WorkspaceResolver and Authenticator nil makes
+		// router.go fall back to middleware.Auth (local JWT validation) and
+		// middleware.TenantScope (local workspace_members lookup) instead of
+		// the Sellico SSO bridge. The bridge still exists in the binary and is
+		// used by the worker for token caching; only the HTTP auth path is local.
+		// To re-enable Sellico SSO, restore the two assignments below.
+		// WorkspaceResolver: sellicoBridgeService,
+		// Authenticator:     sellicoBridgeService,
 		DocsHandler:           handler.NewDocsHandler(embeddedopenapi.Spec),
 		HealthHandler:         handler.NewHealthHandler(deps.Ready),
 		AuthHandler:           handler.NewAuthHandler(authService),
