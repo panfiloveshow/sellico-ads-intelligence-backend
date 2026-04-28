@@ -45,16 +45,19 @@ func main() {
 	asynqClient := asynq.NewClient(asynqRedisOpt)
 	defer asynqClient.Close()
 
-	// Local-auth mode: skip Sellico client wiring entirely. Constructors that
-	// accept *sellico.Client receive nil and fall back to local-DB code paths
-	// (see SellerCabinetService.List → listLocalCabinets, etc.).
-	var sellicoClient *sellico.Client
+	// Sellico SSO mode: real users authenticate on sellico.ru and the frontend
+	// embeds our raw Bearer token (their personal Sellico token) in every API
+	// call. SharedAuth middleware validates that token via GET /api/user, and
+	// SharedTenantScope resolves X-Workspace-ID against the user's available
+	// Sellico workspaces — both implemented by SellicoBridgeService.
+	//
+	// The local /api/v1/auth/{register,login,refresh} endpoints are still wired
+	// (handler not removed) but now serve no purpose for production users; any
+	// request that arrives without a valid Sellico bearer hits 401.
+	sellicoClient := sellico.NewClient(cfg.SellicoAPIBaseURL, cfg.SellicoAPITimeout)
 	authService := service.NewAuthService(deps.Queries, cfg.JWTSecret, cfg.JWTAccessTokenTTL, cfg.JWTRefreshTokenTTL)
 	workspaceService := service.NewWorkspaceService(deps.Queries)
-	// sellicoBridgeService is constructed but unused while local-auth mode is active.
-	// Keeping the assignment commented documents the wiring point for the SSO option.
-	// _ = service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
-	_ = sellicoClient
+	sellicoBridgeService := service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
 	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
 		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
@@ -175,14 +178,14 @@ func main() {
 		},
 		JWTSecret:         cfg.JWTSecret,
 		MembershipChecker: workspaceService,
-		// Local-auth mode: leaving WorkspaceResolver and Authenticator nil makes
-		// router.go fall back to middleware.Auth (local JWT validation) and
-		// middleware.TenantScope (local workspace_members lookup) instead of
-		// the Sellico SSO bridge. The bridge still exists in the binary and is
-		// used by the worker for token caching; only the HTTP auth path is local.
-		// To re-enable Sellico SSO, restore the two assignments below.
-		// WorkspaceResolver: sellicoBridgeService,
-		// Authenticator:     sellicoBridgeService,
+		// Sellico SSO: bearer token is the user's Sellico personal token.
+		// `Authenticate` calls GET sellico.ru/api/user to validate + load profile.
+		// `ResolveWorkspaceAccess` calls GET sellico.ru/api/workspaces and matches
+		// X-Workspace-ID against the user's available workspaces, syncing the
+		// matched workspace into our local DB on first hit (so seller_cabinets
+		// and friends can foreign-key against a real local UUID).
+		Authenticator:     sellicoBridgeService,
+		WorkspaceResolver: sellicoBridgeService,
 		DocsHandler:           handler.NewDocsHandler(embeddedopenapi.Spec),
 		HealthHandler:         handler.NewHealthHandler(deps.Ready),
 		AuthHandler:           handler.NewAuthHandler(authService),
