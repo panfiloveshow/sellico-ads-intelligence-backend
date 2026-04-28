@@ -47,6 +47,32 @@ export default defineConfig(({ mode }) => {
       outDir: "dist",
       sourcemap: true,
       target: "es2022",
+      // Manual chunks split the bundle into stable, cache-friendly pieces:
+      //   - react       → react/react-dom/react-router; rarely changes once installed
+      //   - mui         → ~280 KB by itself; isolating it stops every app code
+      //                   change from busting the MUI cache hit
+      //   - tanstack    → query + devtools, isolated for cache stability
+      //   - charts      → Recharts + d3 (loaded only on detail pages later)
+      //   - vendor      → catch-all for the rest of node_modules
+      //   - <anonymous> → app code (the only thing changing on every push)
+      // Targets the 500 KB warning: largest chunk drops well below 300 KB gzipped.
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return undefined;
+            if (
+              id.includes("react-router") ||
+              /node_modules\/react(-dom)?\//.test(id) ||
+              id.includes("/scheduler/") ||
+              id.includes("/use-sync-external-store/")
+            ) return "react";
+            if (id.includes("@mui/") || id.includes("@emotion/")) return "mui";
+            if (id.includes("@tanstack/")) return "tanstack";
+            if (id.includes("recharts") || id.includes("d3-")) return "charts";
+            return "vendor";
+          },
+        },
+      },
     },
     test: {
       environment: "jsdom",

@@ -2045,6 +2045,132 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/products/{id}/competitors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Competitor products extracted from SERP for this product's queries */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path: {
+                    id: components["parameters"]["Id"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Competitor list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/products/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detected change events for this product (price, photo, stock, brand) */
+        get: {
+            parameters: {
+                query?: {
+                    date_from?: components["parameters"]["DateFrom"];
+                    date_to?: components["parameters"]["DateTo"];
+                };
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path: {
+                    id: components["parameters"]["Id"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Event list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/products/{id}/seo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SEO analysis for product (title length, photo count, content score) */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path: {
+                    id: components["parameters"]["Id"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description SEO report */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/products/{id}/recommendations": {
         parameters: {
             query?: never;
@@ -2169,6 +2295,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/positions/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Time-series position history (workspace-wide) */
+        get: {
+            parameters: {
+                query?: {
+                    product_id?: string;
+                    phrase?: string;
+                    region?: string;
+                    date_from?: components["parameters"]["DateFrom"];
+                    date_to?: components["parameters"]["DateTo"];
+                };
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description History points */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/positions/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List configured position-tracking targets (product+phrase+region triplets) */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Target list */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a position-tracking target */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        product_id?: string;
+                        phrase?: string;
+                        region?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Target created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/positions/aggregate": {
         parameters: {
             query?: never;
@@ -2205,6 +2447,92 @@ export interface paths {
                     };
                 };
                 400: components["responses"]["ErrorResponse"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/serp/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SERP snapshot history for a query/region pair */
+        get: {
+            parameters: {
+                query: {
+                    phrase: string;
+                    region?: string;
+                    date_from?: components["parameters"]["DateFrom"];
+                    date_to?: components["parameters"]["DateTo"];
+                };
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Historical snapshots */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/serp/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a single SERP snapshot with full result list */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path: {
+                    id: components["parameters"]["Id"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Snapshot detail */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                404: components["responses"]["ErrorResponse"];
             };
         };
         put?: never;

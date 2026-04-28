@@ -994,6 +994,41 @@ paths:
                 $ref: "#/components/schemas/PositionListEnvelope"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/products/{id}/competitors:
+    get:
+      tags: [Products]
+      summary: Competitor products extracted from SERP for this product's queries
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Competitor list, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/products/{id}/events:
+    get:
+      tags: [Products]
+      summary: Detected change events for this product (price, photo, stock, brand)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200": { description: Event list, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/products/{id}/seo:
+    get:
+      tags: [Products]
+      summary: SEO analysis for product (title length, photo count, content score)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: SEO report, content: { application/json: { schema: { type: object } } } }
+
   /api/v1/products/{id}/recommendations:
     get:
       tags: [Products]
@@ -1074,6 +1109,47 @@ paths:
                 $ref: "#/components/schemas/PositionEnvelope"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/positions/history:
+    get:
+      tags: [Positions]
+      summary: Time-series position history (workspace-wide)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: product_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: phrase, in: query, required: false, schema: { type: string } }
+        - { name: region, in: query, required: false, schema: { type: string } }
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200": { description: History points, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/positions/targets:
+    get:
+      tags: [Positions]
+      summary: List configured position-tracking targets (product+phrase+region triplets)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      responses:
+        "200": { description: Target list, content: { application/json: { schema: { type: object } } } }
+    post:
+      tags: [Positions]
+      summary: Create a position-tracking target
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                product_id: { type: string, format: uuid }
+                phrase: { type: string }
+                region: { type: string }
+      responses:
+        "201": { description: Target created, content: { application/json: { schema: { type: object } } } }
+
   /api/v1/positions/aggregate:
     get:
       tags: [Positions]
@@ -1109,6 +1185,32 @@ paths:
                 $ref: "#/components/schemas/PositionAggregateEnvelope"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/serp/history:
+    get:
+      tags: [SERP]
+      summary: SERP snapshot history for a query/region pair
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: phrase, in: query, required: true, schema: { type: string } }
+        - { name: region, in: query, required: false, schema: { type: string } }
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200": { description: Historical snapshots, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/serp/{id}:
+    get:
+      tags: [SERP]
+      summary: Get a single SERP snapshot with full result list
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Snapshot detail, content: { application/json: { schema: { type: object } } } }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
 
   /api/v1/serp-snapshots/:
     get:

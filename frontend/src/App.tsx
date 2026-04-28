@@ -3,6 +3,7 @@ import { CircularProgress, Stack } from "@mui/material";
 
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { LoginPage } from "@/pages/auth/LoginPage";
 import { CommandCenterPage } from "@/pages/dashboard/CommandCenterPage";
 import { ProductDetailPage } from "@/pages/products/ProductDetailPage";
@@ -36,11 +37,18 @@ function RequireAuth() {
   const { user, loading } = useAuth();
   if (loading) {
     return (
-      <Stack alignItems="center" justifyContent="center" sx={{ height: "100vh" }}>
-        <CircularProgress />
+      <Stack alignItems="center" justifyContent="center" sx={{ height: "100vh" }} role="status" aria-live="polite">
+        <CircularProgress aria-label="Загрузка сессии" />
       </Stack>
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  return <Outlet />;
+  // ErrorBoundary wraps the routed content (not the layout shell) so the
+  // sidebar / topbar stay usable when a single page blows up — user can
+  // navigate away instead of seeing a full-screen crash.
+  return (
+    <ErrorBoundary>
+      <Outlet />
+    </ErrorBoundary>
+  );
 }
