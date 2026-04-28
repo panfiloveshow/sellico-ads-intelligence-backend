@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Alert, Box, CircularProgress, Stack, Typography } from "@mui/material";
+import { Link as RouterLink } from "react-router-dom";
+import { Alert, Box, Button, CircularProgress, Stack, Typography } from "@mui/material";
 
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { AttentionList } from "@/components/dashboard/AttentionList";
@@ -61,6 +62,36 @@ export function CommandCenterPage() {
       <Alert severity="error">
         Не удалось загрузить дашборд: {(error as Error).message}
       </Alert>
+    );
+  }
+
+  // Empty-cabinets onboarding: workspace exists but no WB cabinets yet —
+  // a freshly registered user lands here and sees only zeros + dashes,
+  // which is confusing. Direct them to /settings to wire up integrations.
+  const cabinetCount = data?.cabinets?.length ?? 0;
+  if (!isLoading && cabinetCount === 0) {
+    return (
+      <Stack spacing={3}>
+        <Box>
+          <Typography variant="h1">Командный центр</Typography>
+        </Box>
+        <Alert
+          severity="info"
+          action={
+            <Button component={RouterLink} to="/settings" color="inherit" size="small">
+              К настройкам
+            </Button>
+          }
+        >
+          <Typography variant="body1" sx={{ fontWeight: 500, mb: 0.5 }}>
+            Подключите первый WB-кабинет
+          </Typography>
+          <Typography variant="body2">
+            Данные появятся в течение часа после первого sync. Если кабинет идёт
+            из Sellico — discovery подцепит его автоматически.
+          </Typography>
+        </Alert>
+      </Stack>
     );
   }
 
