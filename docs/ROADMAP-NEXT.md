@@ -7,7 +7,7 @@
 - ✅ Контейнеры hardened (`cap_drop:ALL`+targeted `cap_add`, `read_only`+tmpfs, `security_opt`)
 - ✅ Бэкап БД ежедневно в 03:00 (`/opt/sellico/backups/`, 7 дней retention)
 - ✅ Memory: api ≤700 MiB (`GOMEMLIMIT`), worker ≤350 MiB
-- ⚠️ HTTPS — отложено (нет домена)
+- ✅ **HTTPS на `https://ads.sellico.ru`** — Let's Encrypt cert, HTTP/2, HSTS preload, auto-renewal через webroot (без даунтайма)
 - ⚠️ Telegram-алерты — отложено (по решению владельца)
 - ⚠️ Frontend — каркас собран, наполнения нет
 - ⚠️ Браузерное расширение — manifest hardened, но не упаковано/не подписано
@@ -236,15 +236,14 @@
 
 ---
 
-## Phase G — Когда появится домен (≤ 1 час работы)
+## Phase G — HTTPS ✅ DONE (2026-04-28)
 
-1. `dig +short твой_домен` → должно вернуть `72.56.250.9`
-2. На VPS: `sudo DOMAIN=твой_домен EMAIL=твой_email /opt/sellico/scripts/setup-ssl.sh`
-3. Удалить `/opt/sellico/docker-compose.override.yml` (тот, что mount-ит nginx.conf вместо nginx.prod.conf)
-4. `docker compose -f docker-compose.prod.yml up -d nginx` (без override)
-5. Verify: `curl -I https://твой_домен/health/ready` → 200, HSTS header present
-6. Обновить frontend `VITE_API_BASE_URL` (если frontend задеплоен)
-7. Обновить extension manifest: убрать `http://72.56.250.9/*` из `host_permissions`, оставить `https://api.sellico.ru/*`
+Закрыто. Текущее состояние:
+- `https://ads.sellico.ru` — Let's Encrypt cert (CN=ads.sellico.ru), valid till 2026-07-27
+- HTTP→HTTPS 301 redirect, HSTS `max-age=31536000; includeSubDomains; preload`, HTTP/2
+- Все security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+- Auto-renewal: systemd `certbot.timer` (active, daily) + webroot challenge через `/opt/sellico/nginx/acme` (без даунтайма) + deploy hook `/etc/letsencrypt/renewal-hooks/deploy/sellico.sh` (копирует серт + nginx reload)
+- Renewal dry-run: ✅ succeeded
 
 ---
 

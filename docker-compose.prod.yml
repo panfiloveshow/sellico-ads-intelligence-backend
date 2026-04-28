@@ -84,6 +84,10 @@ services:
     restart: always
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
+    # docker-entrypoint.sh runs as root, chowns /app/exports, then su-exec's to
+    # the unprivileged "app" user. CHOWN/FOWNER/SETUID/SETGID/DAC_OVERRIDE are
+    # the minimum capabilities for that to work after cap_drop:ALL.
+    cap_add: ["CHOWN", "FOWNER", "SETUID", "SETGID", "DAC_OVERRIDE"]
     read_only: true
     tmpfs:
       - /tmp
@@ -122,6 +126,8 @@ services:
     restart: always
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
+    # See `api` service for the rationale — same entrypoint, same cap needs.
+    cap_add: ["CHOWN", "FOWNER", "SETUID", "SETGID", "DAC_OVERRIDE"]
     read_only: true
     tmpfs:
       - /tmp
