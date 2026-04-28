@@ -208,7 +208,7 @@ GitHub Actions release flow on `extension-v*` tags. See
 | Slow `/api/v1/ads/*` | `internal/service/ads_read_loader.go` (cache hit rate, parallel query timing) |
 | WB sync stuck | `internal/integration/wb/breaker.go` state, `internal/service/sync.go` |
 | OOM | `internal/app/memlimit.go` reported limit; cgroup vs Go heap; `boundedLRU` sizes |
-| Auth refresh loop | `frontend/src/lib/authTokens.ts` single-flight + `internal/transport/middleware/auth.go` |
+| Auth refresh loop | `internal/transport/middleware/auth.go` (server-side); frontend lives in a separate repo |
 | Token decrypt failure | `internal/pkg/crypto/aes.go` — version prefix + keyring contents |
 
 ## 13. Where to look in production

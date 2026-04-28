@@ -61,4 +61,4 @@ at that point.
 
 - Spec: `openapi/openapi.yaml`
 - Drift check: `tools/check-openapi-drift/`
-- Frontend client: `frontend/src/api/client.ts`
+- Frontend consumes the spec from a separate repository (out of scope for this backend).
