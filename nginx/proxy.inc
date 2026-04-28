@@ -65,22 +65,8 @@ location = /metrics {
     add_header Content-Type application/json;
 }
 
-# SPA fallback — serve the React bundle for any unmatched path so the
-# router can render the right page client-side.
-#
-# /assets/* gets aggressive caching (vite hashes filenames, immutable for 1y)
-# index.html itself is no-cache so deploys take effect immediately on the
-# user's next page load.
-location /assets/ {
-    root /var/www/sellico-frontend;
-    expires 1y;
-    add_header Cache-Control "public, immutable";
-    access_log off;
-}
-
+# Default — 404
 location / {
-    root /var/www/sellico-frontend;
-    index index.html;
-    try_files $uri /index.html;
-    add_header Cache-Control "no-cache" always;
+    return 404 '{"data":null,"errors":[{"code":"NOT_FOUND","message":"not found"}]}';
+    add_header Content-Type application/json;
 }

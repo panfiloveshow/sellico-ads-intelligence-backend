@@ -20,9 +20,6 @@ services:
       - ./nginx/proxy.inc:/etc/nginx/conf.d/proxy.inc:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./nginx/acme:/var/www/certbot:ro
-      # SPA bundle — built locally with `pnpm build`, rsync'd to /opt/sellico/frontend/dist.
-      # Mounted read-only so a corrupt deploy can't be modified by the running container.
-      - ./frontend/dist:/var/www/sellico-frontend:ro
     depends_on:
       api:
         condition: service_healthy
