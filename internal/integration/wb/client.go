@@ -69,8 +69,19 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 }
 
 // ValidateToken performs a lightweight authenticated request to verify the token.
+//
+// We hit /adv/v1/promotion/count — a stable, low-cost endpoint on the
+// advert API that requires the same auth surface as the rest of the data
+// we read. The previous probe (/adv/v2/config/categories) was removed by
+// WB sometime in 2025 and now returns 404 "path not found" for every
+// caller, which bricked POST /seller-cabinets for all new tenants.
+//
+// /promotion/count returns a small JSON listing all active campaigns in
+// 5–6 categories — a few hundred bytes, no rate-limit pressure, and the
+// only failure modes are 401 (bad token) / 403 (no advert scope), which
+// is exactly what we want to surface as "validation failed".
 func (c *Client) ValidateToken(ctx context.Context, token string) error {
-	_, err := c.GetCategoryConfig(ctx, token)
+	_, _, err := c.doRequest(ctx, "GET", "/adv/v1/promotion/count", token, nil)
 	return err
 }
 
