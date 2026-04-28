@@ -7,14 +7,9 @@ import { MetricsGrid } from "@/components/detail/MetricsGrid";
 import { RelatedEntities } from "@/components/detail/RelatedEntities";
 import { useAdsProduct } from "@/api/queries/ads";
 import { useWorkspaces } from "@/api/queries/workspaces";
+import { trailingDays } from "@/lib/format/dates";
 
-function defaultDateRange() {
-  const today = new Date();
-  const past = new Date(today);
-  past.setDate(past.getDate() - 27);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { dateFrom: fmt(past), dateTo: fmt(today) };
-}
+const defaultDateRange = () => trailingDays(28);
 
 const healthChipColor: Record<string, "default" | "success" | "warning" | "error"> = {
   healthy: "success",

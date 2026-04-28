@@ -8,16 +8,11 @@ import { TopProductsTable, TopCampaignsTable, TopQueriesTable } from "@/componen
 import { useAdsOverview } from "@/api/queries/ads";
 import { useWorkspaces } from "@/api/queries/workspaces";
 import { formatCompact, formatMoney, formatNumber } from "@/lib/format/numbers";
+import { trailingDays } from "@/lib/format/dates";
 
 // MVP date range: trailing 28 days. Settings page (Sprint 7) will let users
 // pick a custom range and pin it to URL params.
-function defaultDateRange() {
-  const today = new Date();
-  const past = new Date(today);
-  past.setDate(past.getDate() - 27);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { dateFrom: fmt(past), dateTo: fmt(today) };
-}
+const defaultDateRange = () => trailingDays(28);
 
 /**
  * Sprint 6 — Command Center.
