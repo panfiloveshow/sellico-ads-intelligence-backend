@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -55,7 +56,10 @@ func (s *SellerCabinetService) Create(ctx context.Context, workspaceID uuid.UUID
 
 	// Validate the token by making a test request to WB API.
 	if err := s.tokenValidator.ValidateToken(ctx, apiToken); err != nil {
-		return nil, apperror.New(apperror.ErrValidation, "WB API token validation failed; check that the token is correct and has required permissions")
+		// Surface WB's actual error to the caller — generic "validation failed"
+		// makes diagnosing token issues (expired, missing scope, network) impossible
+		// from the outside. The underlying err already wraps WB status + URL.
+		return nil, apperror.New(apperror.ErrValidation, fmt.Sprintf("WB API token validation failed: %v", err))
 	}
 
 	// Save to DB.
