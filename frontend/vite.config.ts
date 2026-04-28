@@ -1,34 +1,57 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "node:path";
 
-// During dev, requests to /api and /openapi.yaml are proxied to the local
-// Go backend so we don't fight CORS. In production, nginx serves the static
-// build under the same origin as the API, so no proxy is needed.
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+// VITE_API_TARGET picks the backend the dev server proxies to:
+//   - https://ads.sellico.ru — production API (default; works without local Go stack)
+//   - http://localhost:8080  — when running `go run ./cmd/api` alongside vite
+//
+// `secure: false` only matters for self-signed local certs; with the Let's Encrypt
+// production cert the request already validates fine, the flag is a no-op there.
+//
+// `changeOrigin: true` rewrites the Host header so nginx in production matches
+// its server_name (otherwise it'd see Host: localhost:5173 and 404).
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "VITE_");
+  const apiTarget = env.VITE_API_TARGET ?? "https://ads.sellico.ru";
+
+  return {
+    plugins: [react()],
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
     },
-  },
-  server: {
-    port: 5173,
-    host: true,
-    proxy: {
-      "/api": "http://localhost:8080",
-      "/openapi.yaml": "http://localhost:8080",
-      "/docs": "http://localhost:8080",
+    server: {
+      port: 5173,
+      host: true,
+      proxy: {
+        "/api": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: true,
+        },
+        "/openapi.yaml": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: true,
+        },
+        "/docs": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: true,
+        },
+      },
     },
-  },
-  build: {
-    outDir: "dist",
-    sourcemap: true,
-    target: "es2022",
-  },
-  test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: ["./src/test-setup.ts"],
-  },
+    build: {
+      outDir: "dist",
+      sourcemap: true,
+      target: "es2022",
+    },
+    test: {
+      environment: "jsdom",
+      globals: true,
+      setupFiles: ["./src/test-setup.ts"],
+    },
+  };
 });

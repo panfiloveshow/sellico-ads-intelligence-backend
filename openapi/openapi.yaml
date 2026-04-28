@@ -564,6 +564,188 @@ paths:
         "400":
           $ref: "#/components/responses/ErrorResponse"
 
+  # --- Campaign actions (lifecycle + minus-/plus-phrase management) ---
+  /api/v1/campaigns/{id}/start:
+    post:
+      tags: [Campaigns]
+      summary: Start (activate) campaign in WB cabinet
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Started, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/pause:
+    post:
+      tags: [Campaigns]
+      summary: Pause campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Paused, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/stop:
+    post:
+      tags: [Campaigns]
+      summary: Stop campaign permanently
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Stopped, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/bids:
+    get:
+      tags: [Campaigns]
+      summary: Current bids (per phrase) for campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Bid list, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/campaigns/{id}/bid-history:
+    get:
+      tags: [Campaigns]
+      summary: Bid change history for campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200": { description: History entries, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/campaigns/{id}/daily-stats:
+    get:
+      tags: [Campaigns]
+      summary: Daily aggregated stats for campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - { name: date_from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: date_to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        "200": { description: Per-day stats, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/campaigns/{id}/plus-phrases:
+    get:
+      tags: [Campaigns]
+      summary: List plus-phrases (forced-match search terms) for campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Plus-phrase list, content: { application/json: { schema: { type: object } } } }
+    post:
+      tags: [Campaigns]
+      summary: Add plus-phrases (write-access required)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phrases: { type: array, items: { type: string } }
+      responses:
+        "200": { description: Added, content: { application/json: { schema: { type: object } } } }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/plus-phrases/{phraseId}:
+    delete:
+      tags: [Campaigns]
+      summary: Remove a plus-phrase
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - { name: phraseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+
+  /api/v1/campaigns/{id}/minus-phrases:
+    get:
+      tags: [Campaigns]
+      summary: List minus-phrases (negative keywords)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Minus-phrase list, content: { application/json: { schema: { type: object } } } }
+    post:
+      tags: [Campaigns]
+      summary: Add minus-phrases (write-access required)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phrases: { type: array, items: { type: string } }
+      responses:
+        "200": { description: Added, content: { application/json: { schema: { type: object } } } }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/minus-phrases/{phraseId}:
+    delete:
+      tags: [Campaigns]
+      summary: Remove a minus-phrase
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - { name: phraseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+
+  /api/v1/recommendations/{id}/apply:
+    post:
+      tags: [Recommendations]
+      summary: Apply a recommendation (executes the suggested action against WB)
+      description: |
+        Atomically applies the suggested change (e.g. raise/lower bid,
+        add minus-phrase). On success the recommendation status flips to
+        `applied`. The actual WB API call uses the cabinet's stored token.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationEnvelope"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "409":
+          description: Cannot apply (recommendation already resolved/dismissed, or upstream WB error)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
   /api/v1/phrases/:
     get:
       tags: [Phrases]

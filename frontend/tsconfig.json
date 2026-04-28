@@ -22,6 +22,11 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
 
+    // Vite handles bundling; we only use tsc for type-checking. Without
+    // noEmit, `tsc -b` (build script) writes .js / .d.ts next to every .tsx
+    // source file and pollutes the working tree.
+    "noEmit": true,
+
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]

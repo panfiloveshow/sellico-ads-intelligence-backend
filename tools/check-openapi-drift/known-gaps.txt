@@ -23,17 +23,8 @@
 + /api/v1/cabinets/{id}/campaigns
 + /api/v1/cabinets/{id}/products
 + /api/v1/cabinets/{id}/sync
+# /api/v1/campaigns/{id}/{start,pause,stop,bids,bid-history,daily-stats,plus-phrases,minus-phrases} — documented (Phase F.2 sync, 2026-04-28)
 + /api/v1/campaigns
-+ /api/v1/campaigns/{id}/bid-history
-+ /api/v1/campaigns/{id}/bids
-+ /api/v1/campaigns/{id}/daily-stats
-+ /api/v1/campaigns/{id}/minus-phrases
-+ /api/v1/campaigns/{id}/minus-phrases/{phraseId}
-+ /api/v1/campaigns/{id}/pause
-+ /api/v1/campaigns/{id}/plus-phrases
-+ /api/v1/campaigns/{id}/plus-phrases/{phraseId}
-+ /api/v1/campaigns/{id}/start
-+ /api/v1/campaigns/{id}/stop
 + /api/v1/competitors
 + /api/v1/competitors/extract
 + /api/v1/delivery/collect
@@ -62,8 +53,8 @@
 + /api/v1/products/{id}/competitors
 + /api/v1/products/{id}/events
 + /api/v1/products/{id}/seo
+# /api/v1/recommendations/{id}/apply — documented (Phase F.2 sync, 2026-04-28)
 + /api/v1/recommendations
-+ /api/v1/recommendations/{id}/apply
 + /api/v1/seller-cabinets
 + /api/v1/seo/analyze
 + /api/v1/serp-snapshots
