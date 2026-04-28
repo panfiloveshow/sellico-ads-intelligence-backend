@@ -16,36 +16,11 @@
 # ---- Documented but route TBD ----
 - /api/v1/audit-logs
 
-# ---- Routes wired but not yet documented (added during the autobidder merge) ----
-# /api/v1/ads/* — documented (Phase F.2 sync, 2026-04-27)
+# ---- /api/v1/cabinets/* — legacy alias of /api/v1/seller-cabinets/*. Routes to the
+# same handlers; intentionally undocumented to discourage new clients from binding to
+# the alias. Remove from the router (and from this file) once no caller uses it. ----
 + /api/v1/cabinets
 + /api/v1/cabinets/{id}
 + /api/v1/cabinets/{id}/campaigns
 + /api/v1/cabinets/{id}/products
 + /api/v1/cabinets/{id}/sync
-# /api/v1/campaigns/{id}/{start,pause,stop,bids,bid-history,daily-stats,plus-phrases,minus-phrases} — documented (Phase F.2 sync, 2026-04-28)
-+ /api/v1/campaigns
-+ /api/v1/competitors
-+ /api/v1/competitors/extract
-+ /api/v1/delivery/collect
-+ /api/v1/exports
-# /api/v1/extension/* (9 routes) — documented (Phase F.2 sync, 2026-04-28)
-+ /api/v1/job-runs
-+ /api/v1/keyword-clusters
-+ /api/v1/keywords
-+ /api/v1/keywords/cluster
-+ /api/v1/keywords/collect
-+ /api/v1/phrases
-+ /api/v1/phrases/{id}/daily-stats
-+ /api/v1/positions
-+ /api/v1/product-events
-+ /api/v1/products
-# /api/v1/recommendations/{id}/apply — documented (Phase F.2 sync, 2026-04-28)
-+ /api/v1/recommendations
-+ /api/v1/seller-cabinets
-+ /api/v1/seo/analyze
-+ /api/v1/serp-snapshots
-+ /api/v1/strategies
-+ /api/v1/strategies/{id}
-+ /api/v1/strategies/{id}/attach
-+ /api/v1/strategies/{id}/bindings/{bindingId}

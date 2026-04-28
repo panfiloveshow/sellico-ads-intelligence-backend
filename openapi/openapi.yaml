@@ -2017,6 +2017,391 @@ paths:
           description: Not found
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
+  # --- Strategies ---
+  /api/v1/strategies/:
+    get:
+      tags: [Strategies]
+      summary: List bidding strategies
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Strategy page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Strategies]
+      summary: Create a bidding strategy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Strategy"
+      responses:
+        "201":
+          description: Strategy created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/strategies/{id}:
+    get:
+      tags: [Strategies]
+      summary: Get strategy by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Strategy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    put:
+      tags: [Strategies]
+      summary: Update strategy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Strategy"
+      responses:
+        "200":
+          description: Strategy updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags: [Strategies]
+      summary: Delete strategy
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/strategies/{id}/attach:
+    post:
+      tags: [Strategies]
+      summary: Attach a strategy to a campaign or product
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                campaign_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                product_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        "201":
+          description: Binding created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyBinding"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/strategies/{id}/bindings/{bindingId}:
+    delete:
+      tags: [Strategies]
+      summary: Detach a strategy binding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - name: bindingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Binding removed
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # --- Semantics: Keywords + Clusters ---
+  /api/v1/keywords:
+    get:
+      tags: [Semantics]
+      summary: List collected keywords
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Keyword page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeywordListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/keywords/collect:
+    post:
+      tags: [Semantics]
+      summary: Collect keywords from existing campaign phrases
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Number of keywords imported
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      imported: { type: integer }
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/keywords/cluster:
+    post:
+      tags: [Semantics]
+      summary: Auto-cluster collected keywords by semantic similarity
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Clustering result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      clusters_created: { type: integer }
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/keyword-clusters:
+    get:
+      tags: [Semantics]
+      summary: List keyword clusters
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Cluster page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeywordClusterListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # --- Competitors ---
+  /api/v1/competitors:
+    get:
+      tags: [Competitors]
+      summary: List tracked competitors
+      description: Optional product_id query narrows the list to a single product's competitors.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: product_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Competitor page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompetitorListEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/competitors/extract:
+    post:
+      tags: [Competitors]
+      summary: Extract competitors from latest SERP snapshots
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Number of competitors discovered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      competitors_found: { type: integer }
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # --- Delivery (WB price/promo collector) ---
+  /api/v1/delivery/collect:
+    post:
+      tags: [Delivery]
+      summary: Trigger one-shot delivery/promo collection for the workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Number of products updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      products_collected: { type: integer }
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # --- SEO ---
+  /api/v1/seo/analyze:
+    post:
+      tags: [SEO]
+      summary: Analyze SEO across all workspace products
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200":
+          description: Analysis count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      analyzed: { type: integer }
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # --- Product events (workspace-scoped feed) ---
+  /api/v1/product-events:
+    get:
+      tags: [Products]
+      summary: List product events across the workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Product event page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { type: object }
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+
+  # --- Phrase daily-stats alias ---
+  /api/v1/phrases/{id}/daily-stats:
+    get:
+      tags: [Phrases]
+      summary: Phrase stats — daily-stats alias
+      description: Identical to /api/v1/phrases/{id}/stats; kept for parity with /campaigns/{id}/daily-stats naming.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Stats time series
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { type: object }
+
   # --- SSE Events ---
   /api/v1/events:
     get:
@@ -3344,3 +3729,148 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/RecommendationThresholds"
+
+    StrategyParams:
+      type: object
+      description: Polymorphic — set fields relevant to the strategy type.
+      properties:
+        target_acos: { type: number, format: double }
+        target_roas: { type: number, format: double }
+        max_acos: { type: number, format: double }
+        base_multiplier: { type: number, format: double }
+        hourly_multipliers:
+          type: object
+          additionalProperties: { type: number, format: double }
+        weekday_multipliers:
+          type: object
+          additionalProperties: { type: number, format: double }
+        min_bid: { type: integer }
+        max_bid: { type: integer }
+        max_change_percent: { type: number, format: double }
+        min_clicks: { type: integer }
+        lookback_days: { type: integer }
+
+    Strategy:
+      type: object
+      required: [name, type, seller_cabinet_id]
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        name: { type: string }
+        type:
+          type: string
+          enum: [acos, roas, anti_sliv, dayparting, recommendation]
+        params:
+          $ref: "#/components/schemas/StrategyParams"
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/StrategyBinding"
+
+    StrategyBinding:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        strategy_id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid, nullable: true }
+        product_id: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    StrategyListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Strategy"
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    Keyword:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        query: { type: string }
+        normalized: { type: string }
+        frequency: { type: integer }
+        frequency_trend:
+          type: string
+          enum: [rising, falling, stable]
+        cluster_id: { type: string, format: uuid, nullable: true }
+        source: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    KeywordListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Keyword"
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    KeywordCluster:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        name: { type: string }
+        main_keyword: { type: string }
+        keyword_count: { type: integer }
+        total_frequency: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        keywords:
+          type: array
+          items:
+            $ref: "#/components/schemas/Keyword"
+
+    KeywordClusterListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeywordCluster"
+        meta:
+          $ref: "#/components/schemas/Meta"
+
+    Competitor:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        product_id: { type: string, format: uuid }
+        competitor_nm_id: { type: integer, format: int64 }
+        competitor_title: { type: string }
+        competitor_brand: { type: string }
+        competitor_price: { type: integer, format: int64 }
+        competitor_rating: { type: number, format: double }
+        competitor_reviews_count: { type: integer }
+        competitor_image_url: { type: string }
+        query: { type: string }
+        region: { type: string }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        last_position: { type: integer }
+        our_position: { type: integer }
+        source: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CompetitorListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Competitor"
+        meta:
+          $ref: "#/components/schemas/Meta"
