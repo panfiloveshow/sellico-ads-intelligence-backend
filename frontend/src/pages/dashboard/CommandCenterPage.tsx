@@ -3,6 +3,7 @@ import { Alert, Box, CircularProgress, Stack, Typography } from "@mui/material";
 
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { AttentionList } from "@/components/dashboard/AttentionList";
+import { TopProductsTable, TopCampaignsTable, TopQueriesTable } from "@/components/dashboard/TopEntitiesTable";
 import { useAdsOverview } from "@/api/queries/ads";
 import { useWorkspaces } from "@/api/queries/workspaces";
 import { formatCompact, formatMoney, formatNumber } from "@/lib/format/numbers";
@@ -116,7 +117,26 @@ export function CommandCenterPage() {
         <AttentionList items={data?.attention} loading={isLoading} />
       </Box>
 
-      {/* TODO Sprint 6 follow-up: Top products / campaigns / queries (DataGrid). */}
+      <Stack direction={{ xs: "column", lg: "row" }} spacing={2}>
+        <TopProductsTable
+          title="Топ товаров"
+          items={data?.top_products}
+          loading={isLoading}
+          emptyHint="Товары появятся после первого sync с WB."
+        />
+        <TopCampaignsTable
+          title="Топ кампаний"
+          items={data?.top_campaigns}
+          loading={isLoading}
+          emptyHint="Кампании появятся после первого sync."
+        />
+        <TopQueriesTable
+          title="Топ фраз"
+          items={data?.top_queries}
+          loading={isLoading}
+          emptyHint="Фразы появятся после индексации."
+        />
+      </Stack>
     </Stack>
   );
 }

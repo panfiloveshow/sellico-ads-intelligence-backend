@@ -5,6 +5,9 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { LoginPage } from "@/pages/auth/LoginPage";
 import { CommandCenterPage } from "@/pages/dashboard/CommandCenterPage";
+import { ProductDetailPage } from "@/pages/products/ProductDetailPage";
+import { CampaignDetailPage } from "@/pages/campaigns/CampaignDetailPage";
+import { QueryDetailPage } from "@/pages/queries/QueryDetailPage";
 
 export function App() {
   return (
@@ -14,6 +17,9 @@ export function App() {
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
             <Route path="/" element={<CommandCenterPage />} />
+            <Route path="/products/:id" element={<ProductDetailPage />} />
+            <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
+            <Route path="/queries/:id" element={<QueryDetailPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>
