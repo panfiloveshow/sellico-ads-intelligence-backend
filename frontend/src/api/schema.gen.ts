@@ -3040,6 +3040,424 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/extension/session/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a live capture session
+         * @description Browser extension calls this on page load to register itself.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Session created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/page-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish current WB page context (cabinet ID, campaign ID from URL) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        url?: string;
+                        cabinet_external_id?: string;
+                        campaign_external_id?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Recorded */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/bid-snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit a bid snapshot captured from the WB cabinet UI */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        campaign_external_id?: string;
+                        phrase?: string;
+                        /** @description kopecks */
+                        bid?: number;
+                        /** Format: date-time */
+                        captured_at?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Snapshot stored */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/position-snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit a search-position snapshot captured from WB SERP */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        product_wb_id?: number;
+                        phrase?: string;
+                        position?: number;
+                        page?: number;
+                        /** Format: date-time */
+                        captured_at?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Snapshot stored */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/ui-signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generic UI interaction signal (clicks on bid input, etc.) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        signal_type?: string;
+                        payload?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Signal recorded */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/network-captures/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bulk-upload XHR captures from the extension's page-bridge */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        captures?: {
+                            url?: string;
+                            method?: string;
+                            status?: number;
+                            response_body?: string;
+                            /** Format: date-time */
+                            captured_at?: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Batch accepted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/widgets/campaign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compact widget data for a WB campaign page
+         * @description Used by the extension's content script to render the floating
+         *     Sellico widget overlaid on seller.wildberries.ru/campaigns/{id}.
+         *     Returns the smallest payload needed for the widget — KPI summary,
+         *     latest recommendations for the campaign, suggested bid changes.
+         */
+        get: {
+            parameters: {
+                query: {
+                    campaign_external_id: string;
+                };
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Widget payload */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/widgets/product": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compact widget data for a WB product page */
+        get: {
+            parameters: {
+                query: {
+                    product_wb_id: number;
+                };
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Widget payload */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/extension/widgets/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compact widget data for a WB search results page */
+        get: {
+            parameters: {
+                query: {
+                    phrase: string;
+                };
+                header: {
+                    /** @description Active workspace for tenant-scoped endpoints. */
+                    "X-Workspace-ID": components["parameters"]["WorkspaceHeader"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Widget payload */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;

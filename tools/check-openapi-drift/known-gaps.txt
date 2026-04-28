@@ -29,15 +29,7 @@
 + /api/v1/competitors/extract
 + /api/v1/delivery/collect
 + /api/v1/exports
-+ /api/v1/extension/bid-snapshots
-+ /api/v1/extension/network-captures/batch
-+ /api/v1/extension/page-context
-+ /api/v1/extension/position-snapshots
-+ /api/v1/extension/session/start
-+ /api/v1/extension/ui-signals
-+ /api/v1/extension/widgets/campaign
-+ /api/v1/extension/widgets/product
-+ /api/v1/extension/widgets/search
+# /api/v1/extension/* (9 routes) — documented (Phase F.2 sync, 2026-04-28)
 + /api/v1/job-runs
 + /api/v1/keyword-clusters
 + /api/v1/keywords

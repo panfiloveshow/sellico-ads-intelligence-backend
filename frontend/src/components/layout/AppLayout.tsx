@@ -1,8 +1,7 @@
 import { AppBar, Box, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Toolbar, Typography } from "@mui/material";
 import LogoutIcon from "@mui/icons-material/Logout";
 import DashboardIcon from "@mui/icons-material/Dashboard";
-import CampaignIcon from "@mui/icons-material/Campaign";
-import InventoryIcon from "@mui/icons-material/Inventory2";
+import LightbulbIcon from "@mui/icons-material/Lightbulb";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -10,10 +9,13 @@ import { useAuth } from "@/lib/auth";
 
 const SIDEBAR_WIDTH = 220;
 
+// Sprint 6 nav: dashboard + recommendations + settings only.
+// Campaigns/products list pages get their own sidebar entries when the
+// dedicated list pages land (Sprint 7); for now they're reachable via
+// drill-down from the dashboard.
 const NAV = [
   { to: "/", label: "Командный центр", icon: <DashboardIcon /> },
-  { to: "/campaigns", label: "Кампании", icon: <CampaignIcon /> },
-  { to: "/products", label: "Товары", icon: <InventoryIcon /> },
+  { to: "/recommendations", label: "Рекомендации", icon: <LightbulbIcon /> },
   { to: "/settings", label: "Настройки", icon: <SettingsIcon /> },
 ];
 

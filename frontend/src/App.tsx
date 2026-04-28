@@ -8,6 +8,8 @@ import { CommandCenterPage } from "@/pages/dashboard/CommandCenterPage";
 import { ProductDetailPage } from "@/pages/products/ProductDetailPage";
 import { CampaignDetailPage } from "@/pages/campaigns/CampaignDetailPage";
 import { QueryDetailPage } from "@/pages/queries/QueryDetailPage";
+import { RecommendationsPage } from "@/pages/recommendations/RecommendationsPage";
+import { SettingsPage } from "@/pages/settings/SettingsPage";
 
 export function App() {
   return (
@@ -20,6 +22,8 @@ export function App() {
             <Route path="/products/:id" element={<ProductDetailPage />} />
             <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
             <Route path="/queries/:id" element={<QueryDetailPage />} />
+            <Route path="/recommendations" element={<RecommendationsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>

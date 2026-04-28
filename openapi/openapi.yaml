@@ -1567,6 +1567,159 @@ paths:
               schema:
                 $ref: "#/components/schemas/ExtensionVersionEnvelope"
 
+  # --- Extension live capture (browser extension publishes events here) ---
+  /api/v1/extension/session/start:
+    post:
+      tags: [Extension]
+      summary: Start a live capture session
+      description: Browser extension calls this on page load to register itself.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      responses:
+        "201": { description: Session created, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/page-context:
+    post:
+      tags: [Extension]
+      summary: Publish current WB page context (cabinet ID, campaign ID from URL)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string }
+                cabinet_external_id: { type: string }
+                campaign_external_id: { type: string }
+      responses:
+        "200": { description: Recorded, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/bid-snapshots:
+    post:
+      tags: [Extension]
+      summary: Submit a bid snapshot captured from the WB cabinet UI
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                campaign_external_id: { type: string }
+                phrase: { type: string }
+                bid: { type: integer, description: kopecks }
+                captured_at: { type: string, format: date-time }
+      responses:
+        "201": { description: Snapshot stored, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/position-snapshots:
+    post:
+      tags: [Extension]
+      summary: Submit a search-position snapshot captured from WB SERP
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                product_wb_id: { type: integer }
+                phrase: { type: string }
+                position: { type: integer }
+                page: { type: integer }
+                captured_at: { type: string, format: date-time }
+      responses:
+        "201": { description: Snapshot stored, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/ui-signals:
+    post:
+      tags: [Extension]
+      summary: Generic UI interaction signal (clicks on bid input, etc.)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                signal_type: { type: string }
+                payload: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Signal recorded, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/network-captures/batch:
+    post:
+      tags: [Extension]
+      summary: Bulk-upload XHR captures from the extension's page-bridge
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                captures:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url: { type: string }
+                      method: { type: string }
+                      status: { type: integer }
+                      response_body: { type: string }
+                      captured_at: { type: string, format: date-time }
+      responses:
+        "200": { description: Batch accepted, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/widgets/campaign:
+    get:
+      tags: [Extension]
+      summary: Compact widget data for a WB campaign page
+      description: |
+        Used by the extension's content script to render the floating
+        Sellico widget overlaid on seller.wildberries.ru/campaigns/{id}.
+        Returns the smallest payload needed for the widget — KPI summary,
+        latest recommendations for the campaign, suggested bid changes.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: campaign_external_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Widget payload, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/widgets/product:
+    get:
+      tags: [Extension]
+      summary: Compact widget data for a WB product page
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: product_wb_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Widget payload, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/widgets/search:
+    get:
+      tags: [Extension]
+      summary: Compact widget data for a WB search results page
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: phrase, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Widget payload, content: { application/json: { schema: { type: object } } } }
+
   # --- Workspace Settings ---
   /api/v1/settings:
     get:
