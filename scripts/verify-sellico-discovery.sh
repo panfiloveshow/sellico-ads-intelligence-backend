@@ -46,6 +46,11 @@ set -euo pipefail
 API_BASE="${API_BASE:-https://ads.sellico.ru}"
 SELLICO_BASE="${SELLICO_BASE:-https://sellico.ru/api}"
 TIMEOUT="${TIMEOUT:-300}"
+# SSH wrapper — defaults to plain ssh, override via SSH_CMD for sshpass / a custom key.
+# Examples:
+#   SSH_CMD="sshpass -e ssh"   # password from $SSHPASS env
+#   SSH_CMD="ssh -i ~/.ssh/deploy_key"
+SSH_CMD="${SSH_CMD:-ssh}"
 
 [ -n "${SELLICO_API_TOKEN:-}" ] || {
   echo "ERROR: SELLICO_API_TOKEN required (the service-account bearer)" >&2
@@ -72,7 +77,7 @@ step "Pre-flight: API healthy + worker shows discovery ENABLED"
 curl -sS -m 5 "${API_BASE}/health/ready" | jq -e '.data.status == "ready"' >/dev/null \
   && ok "API healthy" || fail "API /health/ready not ready"
 
-worker_log=$(ssh -o ConnectTimeout=10 "$SSH_HOST" \
+worker_log=$($SSH_CMD -o ConnectTimeout=10 "$SSH_HOST" \
   "docker logs sellico-worker-1 --since 24h 2>&1 | grep -E 'service-account.*(enabled|NOT configured)' | tail -1") \
   || fail "could not SSH to $SSH_HOST"
 
@@ -91,8 +96,11 @@ step "Query sellico.ru /collector/integrations directly (sanity)"
 upstream=$(curl -sS -m 10 -H "Authorization: Bearer $SELLICO_API_TOKEN" \
   -H "Accept: application/json" "${SELLICO_BASE}/collector/integrations") \
   || fail "Sellico API unreachable from this machine"
-upstream_total=$(echo "$upstream" | jq 'length // 0')
-upstream_wb=$(echo "$upstream" | jq '[.[] | select(.type == "WildBerries" or .type == "wildberries")] | length // 0')
+# Sellico returns either {data: [...]} or a bare array; same item may carry
+# `marketplace` (list view) or `type` (detail view). Normalise both.
+upstream_items=$(echo "$upstream" | jq '(.data // .)')
+upstream_total=$(echo "$upstream_items" | jq 'length // 0')
+upstream_wb=$(echo "$upstream_items" | jq '[.[] | select((.marketplace // .type) | ascii_downcase | . == "wildberries" or . == "wb")] | length // 0')
 ok "Sellico has $upstream_total integrations total, $upstream_wb of type WildBerries"
 [ "$upstream_wb" -gt 0 ] || warn "no WB integrations on Sellico side — backend has nothing to import"
 
@@ -103,9 +111,13 @@ step "Trigger worker discovery sweep (asynq sweep task) — instead of waiting u
 # we trigger it via the admin /job-runs/refresh-integrations endpoint if present,
 # or fall back to docker-exec trigger. For now we just restart the worker — the
 # bootstrap path runs the sweep immediately on startup.
-ssh "$SSH_HOST" "docker compose -f /opt/sellico/docker-compose.prod.yml restart worker" >/dev/null
-sleep 8
-ok "worker restarted; discovery should run within first sweep cycle"
+if [ "${SKIP_WORKER_RESTART:-0}" = "1" ]; then
+  ok "skipping worker restart (SKIP_WORKER_RESTART=1) — assuming discovery already ran"
+else
+  $SSH_CMD "$SSH_HOST" "docker compose -f /opt/sellico/docker-compose.prod.yml restart worker" >/dev/null
+  sleep 8
+  ok "worker restarted; discovery should run within first sweep cycle"
+fi
 
 # Wait briefly for the sweep to make at least one HTTP call upstream.
 sleep 12
