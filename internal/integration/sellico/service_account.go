@@ -139,12 +139,40 @@ func (c *Client) CurrentUser(ctx context.Context, token string) (map[string]any,
 	return user, nil
 }
 
-// GetIntegrations calls GET /api/get-integrations/{workspace?} with the
-// service-account bearer. Pass an empty workspaceID to fetch ALL integrations
-// across the platform (per docs, allowed only for service accounts).
+// CollectorIntegrations calls GET /api/collector/integrations with the
+// service-account bearer. This is the canonical endpoint for service-account
+// "collector" workloads (per backandrules.md, "Integration Status Fields"
+// section, dated 2026-04-02): it returns every integration across the
+// platform in a single response, no per-workspace round-trips needed.
 //
-// This is the workhorse of the auto-discovery worker job: the service account
-// can enumerate any tenant's integrations without holding their personal token.
+// Workhorse of the auto-discovery worker job: the worker calls this once,
+// groups results by WorkspaceID, and upserts into the local seller_cabinets
+// table — much cheaper than the older /get-integrations/{ws} call which
+// required one HTTP round-trip per known workspace.
+func (c *Client) CollectorIntegrations(ctx context.Context, serviceToken string) ([]IntegrationFull, error) {
+	payload, err := c.get(ctx, "/collector/integrations", serviceToken)
+	if err != nil {
+		return nil, err
+	}
+	items := unwrapList(payload)
+	out := make([]IntegrationFull, 0, len(items))
+	for _, item := range items {
+		integration := parseIntegrationFull(item)
+		if integration.ID == "" {
+			continue
+		}
+		out = append(out, integration)
+	}
+	return out, nil
+}
+
+// GetIntegrations calls GET /api/get-integrations/{workspace?} with the
+// service-account bearer. DEPRECATED in favour of CollectorIntegrations,
+// which is the modern equivalent that doesn't require a workspace param.
+// Kept for compatibility with code that still wants the per-workspace
+// fetch shape.
+//
+// Pass an empty workspaceID to fetch ALL integrations across the platform.
 func (c *Client) GetIntegrations(ctx context.Context, serviceToken, workspaceID string) ([]IntegrationFull, error) {
 	path := "/get-integrations"
 	if workspaceID != "" {

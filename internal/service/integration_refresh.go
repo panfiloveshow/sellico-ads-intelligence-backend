@@ -141,111 +141,108 @@ func (s *IntegrationRefreshService) RefreshAllWorkspaces(ctx context.Context) er
 	return nil
 }
 
-// RefreshViaServiceAccount enumerates every local workspace that has an
-// external_workspace_id (i.e. a known Sellico work_space_id) and asks the
-// service-account API for its integrations. WB-typed integrations that
-// carry a non-empty api_key are upserted as local seller_cabinets,
-// encrypted with the workspace's encryption key.
+// RefreshViaServiceAccount fetches every integration in one shot from the
+// Sellico /collector/integrations endpoint (per backandrules.md: the canonical
+// service-account "collector" feed), groups them by Sellico work_space_id,
+// joins each group to the local workspace via external_workspace_id, and
+// upserts WB-typed integrations as encrypted local seller_cabinets.
 //
-// On a 401 from upstream the service token is invalidated and the call
-// is retried once — covers the "static token rotated" case without an
-// ops restart for fresh login-mode deployments.
+// One HTTP round-trip regardless of how many workspaces we manage. On 401 the
+// service token is invalidated and the call retried once — covers static-token
+// rotation without an ops restart.
 //
-// Workspaces without an external_workspace_id are skipped (we don't know
-// which Sellico workspace to ask about). They surface in logs so ops can
-// fix the wiring.
+// Integrations whose Sellico work_space_id has no matching local workspace
+// are silently dropped (the operator hasn't linked that tenant yet).
+// Integrations missing an api_key are fetched in detail via /get-integration/{id}
+// — the list endpoint may strip secrets for premium-gated tenants.
 func (s *IntegrationRefreshService) RefreshViaServiceAccount(ctx context.Context) error {
 	if s.tokenManager == nil {
 		return fmt.Errorf("integration_refresh: service-account manager not configured (call WithServiceAccount)")
 	}
 
-	workspaces, err := s.queries.ListWorkspacesWithExternalID(ctx, 1000)
-	if err != nil {
-		return fmt.Errorf("list workspaces with external id: %w", err)
-	}
-
-	var refreshed, skipped, failed int
-	for _, ws := range workspaces {
-		if !ws.ExternalWorkspaceID.Valid || ws.ExternalWorkspaceID.String == "" {
-			skipped++
-			continue
-		}
-		workspaceID := uuidFromPgtype(ws.WorkspaceID)
-		externalID := ws.ExternalWorkspaceID.String
-
-		if err := s.refreshWorkspaceViaService(ctx, workspaceID, externalID); err != nil {
-			s.logger.Warn().
-				Err(err).
-				Str("workspace_id", workspaceID.String()).
-				Str("external_workspace_id", externalID).
-				Msg("service-account refresh failed for workspace")
-			failed++
-			continue
-		}
-		refreshed++
-	}
-
-	s.logger.Info().
-		Int("refreshed", refreshed).
-		Int("skipped_no_external_id", skipped).
-		Int("failed", failed).
-		Int("total", len(workspaces)).
-		Msg("service-account integration refresh complete")
-	return nil
-}
-
-func (s *IntegrationRefreshService) refreshWorkspaceViaService(ctx context.Context, workspaceID uuid.UUID, externalWorkspaceID string) error {
 	token, err := s.tokenManager.Get(ctx)
 	if err != nil {
 		return fmt.Errorf("get service token: %w", err)
 	}
 
-	integrations, err := s.sellicoClient.GetIntegrations(ctx, token, externalWorkspaceID)
+	integrations, err := s.sellicoClient.CollectorIntegrations(ctx, token)
 	if err == sellico.ErrUnauthorized {
 		s.tokenManager.Invalidate()
 		token, err = s.tokenManager.Get(ctx)
 		if err != nil {
 			return fmt.Errorf("re-fetch service token after 401: %w", err)
 		}
-		integrations, err = s.sellicoClient.GetIntegrations(ctx, token, externalWorkspaceID)
+		integrations, err = s.sellicoClient.CollectorIntegrations(ctx, token)
 	}
 	if err != nil {
-		return fmt.Errorf("get integrations: %w", err)
+		return fmt.Errorf("collector/integrations: %w", err)
 	}
 
+	// Build external_workspace_id → local UUID map so we can join each
+	// integration to a known tenant in O(1).
+	workspaces, err := s.queries.ListWorkspacesWithExternalID(ctx, 5000)
+	if err != nil {
+		return fmt.Errorf("list workspaces with external id: %w", err)
+	}
+	wsByExternalID := make(map[string]uuid.UUID, len(workspaces))
+	for _, ws := range workspaces {
+		if ws.ExternalWorkspaceID.Valid && ws.ExternalWorkspaceID.String != "" {
+			wsByExternalID[ws.ExternalWorkspaceID.String] = uuidFromPgtype(ws.WorkspaceID)
+		}
+	}
+
+	var upserted, unknownWorkspace, nonWB, missingKey, errors int
 	for _, integration := range integrations {
 		if integration.Type != "WildBerries" {
+			nonWB++
+			continue
+		}
+		localWorkspaceID, ok := wsByExternalID[integration.WorkspaceID]
+		if !ok {
+			unknownWorkspace++
 			continue
 		}
 		apiKey := integration.APIKey
 		if apiKey == "" {
-			// List response may strip api_key for premium-gated tenants;
-			// the per-id endpoint always returns it.
 			full, err := s.sellicoClient.GetIntegration(ctx, token, integration.ID)
 			if err != nil {
 				s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("failed to fetch full integration")
+				errors++
 				continue
 			}
 			apiKey = full.APIKey
 		}
 		if apiKey == "" {
-			s.logger.Warn().Str("integration_id", integration.ID).Msg("WB integration has no api_key, skipping")
+			missingKey++
 			continue
 		}
 		encrypted, err := crypto.Encrypt(apiKey, s.encryptionKey)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("failed to encrypt api_key")
+			errors++
 			continue
 		}
 		if _, err := s.queries.UpsertSellicoSellerCabinet(ctx, sqlcgen.UpsertSellicoSellerCabinetParams{
-			WorkspaceID:           uuidToPgtype(workspaceID),
+			WorkspaceID:           uuidToPgtype(localWorkspaceID),
 			Name:                  integration.Name,
 			EncryptedToken:        encrypted,
 			ExternalIntegrationID: textToPgtype(integration.ID),
 		}); err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("upsert seller_cabinet failed")
+			errors++
+			continue
 		}
+		upserted++
 	}
+
+	s.logger.Info().
+		Int("total_integrations", len(integrations)).
+		Int("wb_upserted", upserted).
+		Int("non_wb_skipped", nonWB).
+		Int("unknown_workspace_skipped", unknownWorkspace).
+		Int("missing_api_key", missingKey).
+		Int("errors", errors).
+		Msg("service-account integration refresh complete")
 	return nil
 }
 

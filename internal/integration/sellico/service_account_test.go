@@ -11,6 +11,44 @@ import (
 	"time"
 )
 
+func TestCollectorIntegrations(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/collector/integrations" {
+			t.Errorf("unexpected path %q (expected /collector/integrations)", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer svc-tok" {
+			t.Errorf("missing/wrong service-account bearer")
+		}
+		_, _ = w.Write([]byte(`[
+			{"id":1,"work_space_id":42,"name":"WB Store A","type":"WildBerries","api_key":"key-A"},
+			{"id":2,"work_space_id":7,"name":"WB Store B","type":"WildBerries","api_key":"key-B"},
+			{"id":3,"work_space_id":42,"name":"OZ Store","type":"OZON","api_key":"key-O","client_id":"c1"}
+		]`))
+	}))
+	defer srv.Close()
+
+	cli := NewClient(srv.URL, time.Second)
+	out, err := cli.CollectorIntegrations(context.Background(), "svc-tok")
+	if err != nil {
+		t.Fatalf("CollectorIntegrations: %v", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("expected 3 integrations, got %d", len(out))
+	}
+	if out[0].WorkspaceID != "42" || out[1].WorkspaceID != "7" {
+		t.Errorf("workspace_id mis-parsed: %+v", out)
+	}
+	wbCount := 0
+	for _, i := range out {
+		if i.Type == "WildBerries" {
+			wbCount++
+		}
+	}
+	if wbCount != 2 {
+		t.Errorf("expected 2 WB integrations, got %d", wbCount)
+	}
+}
+
 func TestGetIntegrations_NoWorkspace(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/get-integrations" {
