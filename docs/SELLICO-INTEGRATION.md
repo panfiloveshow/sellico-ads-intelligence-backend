@@ -28,10 +28,17 @@ user-supplied bearer where the upstream requires it:
 |---|---|---|
 | `Login(email, password)` | `POST /api/login` | none |
 | `CurrentUser(userToken)` | `GET /api/user` | user bearer |
-| `GetIntegrations(serviceToken, workspaceID?)` | `GET /api/get-integrations/{ws?}` | service bearer |
+| **`CollectorIntegrations(serviceToken)`** ⭐ | `GET /api/collector/integrations` | service bearer |
+| `GetIntegrations(serviceToken, workspaceID?)` (deprecated) | `GET /api/get-integrations/{ws?}` | service bearer |
 | `GetIntegration(serviceToken, id)` | `GET /api/get-integration/{id}` | service bearer |
 | `CheckPermission(serviceToken, params)` | `GET /api/check-permission` | service bearer + body |
 | `CreateActivity(userToken, ws, payload)` | `POST /api/workspaces/{ws}/activities` | user bearer |
+| `ListWorkspaceIntegrations(userToken, ws)` | `GET /api/workspaces/{ws}/integrations` | user bearer |
+
+**Discovery uses `CollectorIntegrations`** — single HTTP call returns every
+integration on the platform; `IntegrationRefreshService` groups them by
+Sellico work_space_id and joins to local workspaces via `external_workspace_id`.
+Much cheaper than the per-workspace loop the legacy `GetIntegrations` required.
 
 ### `internal/integration/sellico/service_token.go`
 
