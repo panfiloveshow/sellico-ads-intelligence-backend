@@ -197,26 +197,26 @@ func (s *IntegrationRefreshService) RefreshViaServiceAccount(ctx context.Context
 			nonWB++
 			continue
 		}
-		localWorkspaceID, ok := wsByExternalID[integration.WorkspaceID]
+		// /collector/integrations strips work_space_id and may strip the api_key
+		// (premium-gated). We always re-fetch via /get-integration/{id} for WB
+		// because that endpoint is the only one that returns work_space_id —
+		// without which we cannot join to a local workspace.
+		full, err := s.sellicoClient.GetIntegration(ctx, token, integration.ID)
+		if err != nil {
+			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("failed to fetch full integration")
+			errors++
+			continue
+		}
+		localWorkspaceID, ok := wsByExternalID[full.WorkspaceID]
 		if !ok {
 			unknownWorkspace++
 			continue
 		}
-		apiKey := integration.APIKey
-		if apiKey == "" {
-			full, err := s.sellicoClient.GetIntegration(ctx, token, integration.ID)
-			if err != nil {
-				s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("failed to fetch full integration")
-				errors++
-				continue
-			}
-			apiKey = full.APIKey
-		}
-		if apiKey == "" {
+		if full.APIKey == "" {
 			missingKey++
 			continue
 		}
-		encrypted, err := crypto.Encrypt(apiKey, s.encryptionKey)
+		encrypted, err := crypto.Encrypt(full.APIKey, s.encryptionKey)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("failed to encrypt api_key")
 			errors++
@@ -224,9 +224,9 @@ func (s *IntegrationRefreshService) RefreshViaServiceAccount(ctx context.Context
 		}
 		if _, err := s.queries.UpsertSellicoSellerCabinet(ctx, sqlcgen.UpsertSellicoSellerCabinetParams{
 			WorkspaceID:           uuidToPgtype(localWorkspaceID),
-			Name:                  integration.Name,
+			Name:                  full.Name,
 			EncryptedToken:        encrypted,
-			ExternalIntegrationID: textToPgtype(integration.ID),
+			ExternalIntegrationID: textToPgtype(full.ID),
 		}); err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("upsert seller_cabinet failed")
 			errors++
