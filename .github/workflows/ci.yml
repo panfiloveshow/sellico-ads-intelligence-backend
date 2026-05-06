@@ -34,6 +34,9 @@ jobs:
       - name: OpenAPI ↔ router drift check
         run: go run ./tools/check-openapi-drift
 
+      - name: Prepare compose env
+        run: cp .env.prod.example .env
+
       - name: Validate compose files
         run: |
           docker compose -f docker-compose.yml config --quiet
