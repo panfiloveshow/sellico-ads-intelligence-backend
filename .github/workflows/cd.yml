@@ -92,17 +92,31 @@ jobs:
             cd "${DEPLOY_PATH:-/opt/sellico}"
             tmpdir="$(mktemp -d)"
             trap 'rm -rf "$tmpdir"' EXIT
-            curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/archive/${GITHUB_SHA}.tar.gz" -o "$tmpdir/source.tar.gz"
+            archive_url="https://github.com/${GITHUB_REPOSITORY}/archive/${GITHUB_SHA}.tar.gz"
+            if command -v curl >/dev/null 2>&1; then
+              curl -fsSL "$archive_url" -o "$tmpdir/source.tar.gz"
+            else
+              wget -qO "$tmpdir/source.tar.gz" "$archive_url"
+            fi
             tar -xzf "$tmpdir/source.tar.gz" -C "$tmpdir"
             srcdir="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-            cp "$srcdir/docker-compose.prod.yml" ./docker-compose.prod.yml
-            mkdir -p ./migrations
-            cp "$srcdir"/migrations/* ./migrations/
+            cat > "$tmpdir/deploy.override.yml" <<EOF
+            services:
+              api:
+                image: ghcr.io/${GITHUB_REPOSITORY}-api:latest
+                build: null
+              worker:
+                image: ghcr.io/${GITHUB_REPOSITORY}-worker:latest
+                build: null
+              migrate:
+                volumes:
+                  - $srcdir/migrations:/migrations:ro
+            EOF
             # Token is read from env — never echoed, never interpolated.
             printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            docker compose -f docker-compose.prod.yml pull api worker
-            docker compose -f docker-compose.prod.yml run --rm migrate
-            docker compose -f docker-compose.prod.yml up -d api worker
+            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" pull api worker
+            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" run --rm migrate
+            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" up -d api worker
             docker logout ghcr.io
             docker image prune -f
         env:
