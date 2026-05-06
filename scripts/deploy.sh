@@ -78,6 +78,9 @@ case "${1:-update}" in
     docker compose -f "$COMPOSE_FILE" build api worker
     log "Images built"
 
+    docker compose -f "$COMPOSE_FILE" run --rm migrate
+    log "Migrations applied"
+
     # Bring up everything in the default profile (api, worker, postgres, redis,
     # nginx, prometheus, grafana, cadvisor, node-exporter). Alertmanager stays
     # off — it's behind the "alerts" profile and requires Telegram bot setup.

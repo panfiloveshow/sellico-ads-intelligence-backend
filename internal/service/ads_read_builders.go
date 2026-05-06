@@ -368,10 +368,8 @@ func (s *AdsReadService) querySummariesForPhrases(data *adsWorkspaceData, phrase
 func (s *AdsReadService) buildQuerySummary(data *adsWorkspaceData, phrase domain.Phrase, campaign domain.Campaign, relatedProducts []domain.Product, dateFrom, dateTo time.Time) domain.QueryPerformanceSummary {
 	cabinet := data.cabinets[campaign.SellerCabinetID]
 	metrics := aggregatePhraseStats(data.phraseStatsByID[phrase.ID], dateFrom, dateTo)
-	metrics.DataMode = "exact"
 	previousFrom, previousTo := previousPeriodRange(dateFrom, dateTo)
 	previousMetrics := aggregatePhraseStats(data.phraseStatsByID[phrase.ID], previousFrom, previousTo)
-	previousMetrics.DataMode = "exact"
 	periodCompare := buildPeriodCompare(metrics, previousMetrics)
 	signalCategory, healthStatus, healthReason, primaryAction := classifyQuerySignal(phrase, metrics)
 	priorityScore := scoreQueryPriority(signalCategory, metrics, periodCompare)
@@ -407,15 +405,27 @@ func (s *AdsReadService) buildQuerySummary(data *adsWorkspaceData, phrase domain
 }
 
 func (s *AdsReadService) aggregateProductMetrics(data *adsWorkspaceData, productID uuid.UUID, campaigns []domain.Campaign, dateFrom, dateTo time.Time) (domain.AdsMetricsSummary, *string) {
+	if stats := data.productStatsByID[productID]; len(stats) > 0 {
+		return aggregateProductStats(stats, dateFrom, dateTo), nil
+	}
+
 	if len(campaigns) == 0 {
 		return domain.AdsMetricsSummary{DataMode: "unavailable"}, nil
 	}
 
 	metrics := domain.AdsMetricsSummary{}
 	mode := "exact"
+	exactCampaigns := 0
+	sharedCampaigns := 0
 	for _, campaign := range campaigns {
-		if len(data.campaignProductIDs[campaign.ID]) > 1 {
+		productIDs := data.campaignProductIDs[campaign.ID]
+		if len(productIDs) == 0 || !containsUUID(productIDs, productID) {
+			continue
+		}
+		if len(productIDs) > 1 {
+			sharedCampaigns++
 			mode = "shared"
+			continue
 		}
 		campaignMetrics := aggregateCampaignStats(data.campaignStatsByID[campaign.ID], dateFrom, dateTo)
 		metrics.Impressions += campaignMetrics.Impressions
@@ -423,13 +433,29 @@ func (s *AdsReadService) aggregateProductMetrics(data *adsWorkspaceData, product
 		metrics.Spend += campaignMetrics.Spend
 		metrics.Orders += campaignMetrics.Orders
 		metrics.Revenue += campaignMetrics.Revenue
+		exactCampaigns++
 	}
 	metrics = finalizeMetrics(metrics, mode)
-	if mode != "shared" {
+	if sharedCampaigns == 0 {
 		return metrics, nil
 	}
-	note := "Метрики товара рассчитаны по связанным кампаниям. Если в кампании несколько товаров, расход и выручка считаются как shared campaign data."
+	if exactCampaigns == 0 {
+		metrics = finalizeMetrics(domain.AdsMetricsSummary{}, "shared")
+	}
+	note := fmt.Sprintf(
+		"Товар связан с %d multi-product камп. Их расход и выручка нельзя честно отнести к одному артикулу, поэтому они не включены в товарные KPI.",
+		sharedCampaigns,
+	)
 	return metrics, &note
+}
+
+func containsUUID(items []uuid.UUID, target uuid.UUID) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 // aggregateCampaignStats sums all campaign stats.

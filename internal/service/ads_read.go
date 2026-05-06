@@ -104,6 +104,7 @@ type adsWorkspaceData struct {
 	products           []domain.Product
 	phrases            []domain.Phrase
 	campaignStatsByID  map[uuid.UUID][]domain.CampaignStat
+	productStatsByID   map[uuid.UUID][]domain.ProductStat
 	phraseStatsByID    map[uuid.UUID][]domain.PhraseStat
 	campaignProductIDs map[uuid.UUID][]uuid.UUID
 	productCampaignIDs map[uuid.UUID][]uuid.UUID

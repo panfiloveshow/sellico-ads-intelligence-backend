@@ -50,6 +50,8 @@ func classifyCampaignHealth(metrics domain.AdsMetricsSummary, productsCount, que
 
 func classifyQuerySignal(phrase domain.Phrase, metrics domain.AdsMetricsSummary) (string, string, *string, *string) {
 	switch {
+	case metrics.DataMode == "unavailable":
+		return "insufficient_data", "insufficient_data", stringPtr("По запросу пока нет строк статистики за выбранный период."), stringPtr("Проверьте последний sync normquery stats и не принимайте авто-решения по этой фразе.")
 	case metrics.Spend >= 500 && metrics.Clicks >= 5 && metrics.CTR < 0.01:
 		return "waste", "waste", stringPtr("Запрос уже тратит бюджет, но даёт слабое вовлечение."), stringPtr("Снизьте ставку или уберите запрос из активного приоритета.")
 	case metrics.Impressions >= 200 && metrics.Clicks == 0:

@@ -33,11 +33,41 @@ func aggregateCampaignStats(stats []domain.CampaignStat, _, _ time.Time) domain.
 // aggregatePhraseStats sums all phrase stats.
 // Date filtering is already done at SQL level.
 func aggregatePhraseStats(stats []domain.PhraseStat, _, _ time.Time) domain.AdsMetricsSummary {
+	if len(stats) == 0 {
+		return domain.AdsMetricsSummary{DataMode: "unavailable"}
+	}
+
 	result := domain.AdsMetricsSummary{}
 	for _, stat := range stats {
 		result.Impressions += stat.Impressions
 		result.Clicks += stat.Clicks
 		result.Spend += stat.Spend
+	}
+	return finalizeMetrics(result, "exact")
+}
+
+func aggregateProductStats(stats []domain.ProductStat, _, _ time.Time) domain.AdsMetricsSummary {
+	if len(stats) == 0 {
+		return domain.AdsMetricsSummary{DataMode: "unavailable"}
+	}
+
+	result := domain.AdsMetricsSummary{}
+	for _, stat := range stats {
+		result.Impressions += stat.Impressions
+		result.Clicks += stat.Clicks
+		result.Spend += stat.Spend
+		if stat.Orders != nil {
+			result.Orders += *stat.Orders
+		}
+		if stat.Revenue != nil {
+			result.Revenue += *stat.Revenue
+		}
+		if stat.Atbs != nil {
+			result.Atbs += *stat.Atbs
+		}
+		if stat.Canceled != nil {
+			result.Canceled += *stat.Canceled
+		}
 	}
 	return finalizeMetrics(result, "exact")
 }

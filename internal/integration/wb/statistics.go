@@ -27,10 +27,23 @@ type wbFullStatsResponse []struct {
 		SumPriceAlt  *float64 `json:"sumPrice"`
 		OrdersSumAlt *float64 `json:"ordersSum"`
 		Atbs         *int64   `json:"atbs"`     // Добавления в корзину
-		Canceled     *int64   `json:"canceled"`  // Технические отмены
-		CPC          *float64 `json:"cpc"`       // Стоимость клика
-		CTR          *float64 `json:"ctr"`       // Кликабельность
-		CR           *float64 `json:"cr"`        // Конверсия
+		Canceled     *int64   `json:"canceled"` // Технические отмены
+		CPC          *float64 `json:"cpc"`      // Стоимость клика
+		CTR          *float64 `json:"ctr"`      // Кликабельность
+		CR           *float64 `json:"cr"`       // Конверсия
+		NMS          []struct {
+			NmID      int64    `json:"nmId"`
+			Name      string   `json:"name"`
+			Views     int64    `json:"views"`
+			Clicks    int64    `json:"clicks"`
+			Sum       float64  `json:"sum"`
+			Orders    *int64   `json:"orders"`
+			SHKs      *int64   `json:"shks"`
+			SumPrice  *float64 `json:"sum_price"`
+			SumPrice2 *float64 `json:"sumPrice"`
+			Atbs      *int64   `json:"atbs"`
+			Canceled  *int64   `json:"canceled"`
+		} `json:"nms"`
 	} `json:"days"`
 }
 
@@ -63,6 +76,26 @@ func (c *Client) GetCampaignStats(ctx context.Context, token string, campaignIDs
 
 		for _, campaign := range batch {
 			for _, day := range campaign.Days {
+				productStats := make([]WBProductStatDTO, 0, len(day.NMS))
+				for _, nm := range day.NMS {
+					if nm.NmID == 0 {
+						continue
+					}
+					productStats = append(productStats, WBProductStatDTO{
+						NmID:     nm.NmID,
+						Name:     nm.Name,
+						Date:     day.Date,
+						Views:    nm.Views,
+						Clicks:   nm.Clicks,
+						Sum:      nm.Sum,
+						Orders:   nm.Orders,
+						SHKs:     nm.SHKs,
+						Revenue:  firstFloat64Ptr(nm.SumPrice, nm.SumPrice2),
+						SumPrice: firstFloat64Ptr(nm.SumPrice, nm.SumPrice2),
+						Atbs:     nm.Atbs,
+						Canceled: nm.Canceled,
+					})
+				}
 				result = append(result, WBCampaignStatDTO{
 					AdvertID:     int(campaign.AdvertID),
 					Date:         day.Date,
@@ -77,6 +110,7 @@ func (c *Client) GetCampaignStats(ctx context.Context, token string, campaignIDs
 					CPC:          day.CPC,
 					CTR:          day.CTR,
 					CR:           day.CR,
+					Products:     productStats,
 				})
 			}
 		}

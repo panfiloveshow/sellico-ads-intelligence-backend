@@ -130,7 +130,7 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		for _, dto := range campaigns {
 			campaign := wb.MapCampaignDTO(dto, workspaceID, cabinet.cabinet.ID)
 			activeWBIDs = append(activeWBIDs, campaign.WBCampaignID)
-			if _, upsertErr := s.queries.UpsertCampaign(ctx, sqlcgen.UpsertCampaignParams{
+			row, upsertErr := s.queries.UpsertCampaign(ctx, sqlcgen.UpsertCampaignParams{
 				WorkspaceID:     uuidToPgtype(campaign.WorkspaceID),
 				SellerCabinetID: uuidToPgtype(campaign.SellerCabinetID),
 				WbCampaignID:    campaign.WBCampaignID,
@@ -140,9 +140,15 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 				BidType:         campaign.BidType,
 				PaymentType:     campaign.PaymentType,
 				DailyBudget:     int64PtrToPgInt8(campaign.DailyBudget),
-			}); upsertErr != nil {
+			})
+			if upsertErr != nil {
 				summary.addIssue("campaigns.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "upsert: %v", upsertErr)
 				continue
+			}
+			if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, dto.NMIDs); linkErr != nil {
+				summary.addIssue("campaign_products.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "link products: %v", linkErr)
+			} else if linked > 0 {
+				s.logger.Debug().Int("links", linked).Int64("campaign_id", campaign.WBCampaignID).Msg("campaign products linked")
 			}
 			summary.Campaigns++
 		}
@@ -231,7 +237,7 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 		for _, campaignDTO := range campaigns {
 			campaign := wb.MapCampaignDTO(campaignDTO, workspaceID, cabinet.cabinet.ID)
 			activeWBIDs = append(activeWBIDs, campaign.WBCampaignID)
-			if _, upsertErr := s.queries.UpsertCampaign(ctx, sqlcgen.UpsertCampaignParams{
+			row, upsertErr := s.queries.UpsertCampaign(ctx, sqlcgen.UpsertCampaignParams{
 				WorkspaceID:     uuidToPgtype(campaign.WorkspaceID),
 				SellerCabinetID: uuidToPgtype(campaign.SellerCabinetID),
 				WbCampaignID:    campaign.WBCampaignID,
@@ -241,9 +247,15 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 				BidType:         campaign.BidType,
 				PaymentType:     campaign.PaymentType,
 				DailyBudget:     int64PtrToPgInt8(campaign.DailyBudget),
-			}); upsertErr != nil {
+			})
+			if upsertErr != nil {
 				summary.addIssue("campaigns.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "failed to upsert campaign: %v", upsertErr)
 				continue
+			}
+			if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, campaignDTO.NMIDs); linkErr != nil {
+				summary.addIssue("campaign_products.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "link products: %v", linkErr)
+			} else if linked > 0 {
+				s.logger.Debug().Int("links", linked).Int64("campaign_id", campaign.WBCampaignID).Msg("campaign products linked")
 			}
 			summary.Campaigns++
 		}
@@ -335,6 +347,9 @@ func (s *SyncService) SyncCampaignStats(ctx context.Context, workspaceID uuid.UU
 				continue
 			}
 			summary.CampaignStats++
+			if productStatsErr := s.upsertProductStatsFromCampaignStat(ctx, workspaceID, cabinet.cabinet.ID, campaign, statDTO); productStatsErr != nil {
+				summary.addIssue("product_stats.upsert", fmt.Sprintf("%d", statDTO.AdvertID), "upsert product stats: %v", productStatsErr)
+			}
 		}
 
 		if err := s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID)); err != nil {
@@ -343,6 +358,94 @@ func (s *SyncService) SyncCampaignStats(ctx context.Context, workspaceID uuid.UU
 	}
 
 	return summary, summary.Error()
+}
+
+func (s *SyncService) upsertCampaignProductLinks(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaign sqlcgen.Campaign, nmIDs []int64) (int, error) {
+	linked := 0
+	for _, nmID := range nmIDs {
+		if nmID == 0 {
+			continue
+		}
+		productRow, err := s.queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			WbProductID:     nmID,
+			Title:           fmt.Sprintf("Артикул %d", nmID),
+			Brand:           pgtype.Text{},
+			Category:        pgtype.Text{},
+			ImageUrl:        pgtype.Text{},
+			Price:           pgtype.Int8{},
+		})
+		if err != nil {
+			return linked, err
+		}
+		if _, err := s.queries.UpsertCampaignProduct(ctx, sqlcgen.UpsertCampaignProductParams{
+			CampaignID:      campaign.ID,
+			ProductID:       productRow.ID,
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			WbCampaignID:    campaign.WbCampaignID,
+			WbProductID:     nmID,
+		}); err != nil {
+			return linked, err
+		}
+		linked++
+	}
+	return linked, nil
+}
+
+func (s *SyncService) upsertProductStatsFromCampaignStat(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaign sqlcgen.Campaign, statDTO wb.WBCampaignStatDTO) error {
+	for _, productDTO := range statDTO.Products {
+		productRow, err := s.queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			WbProductID:     productDTO.NmID,
+			Title:           productTitleFromStat(productDTO),
+			Brand:           pgtype.Text{},
+			Category:        pgtype.Text{},
+			ImageUrl:        pgtype.Text{},
+			Price:           pgtype.Int8{},
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := s.queries.UpsertCampaignProduct(ctx, sqlcgen.UpsertCampaignProductParams{
+			CampaignID:      campaign.ID,
+			ProductID:       productRow.ID,
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			WbCampaignID:    campaign.WbCampaignID,
+			WbProductID:     productDTO.NmID,
+		}); err != nil {
+			return err
+		}
+		stat, err := wb.MapProductStatDTO(productDTO, uuidFromPgtype(productRow.ID), uuidFromPgtype(campaign.ID))
+		if err != nil {
+			return err
+		}
+		if _, err := s.queries.UpsertProductStat(ctx, sqlcgen.UpsertProductStatParams{
+			ProductID:   uuidToPgtype(stat.ProductID),
+			CampaignID:  uuidToPgtype(stat.CampaignID),
+			Date:        pgDate(stat.Date),
+			Impressions: stat.Impressions,
+			Clicks:      stat.Clicks,
+			Spend:       stat.Spend,
+			Orders:      int64PtrToPgInt8(stat.Orders),
+			Revenue:     int64PtrToPgInt8(stat.Revenue),
+			Atbs:        int64PtrToPgInt8(stat.Atbs),
+			Canceled:    int64PtrToPgInt8(stat.Canceled),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func productTitleFromStat(dto wb.WBProductStatDTO) string {
+	if dto.Name != "" {
+		return dto.Name
+	}
+	return fmt.Sprintf("Артикул %d", dto.NmID)
 }
 
 func (s *SyncService) SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (SyncSummary, error) {
@@ -635,6 +738,9 @@ func (s *SyncService) syncCampaignStatsForCabinet(ctx context.Context, workspace
 			continue
 		}
 		summary.CampaignStats++
+		if productStatsErr := s.upsertProductStatsFromCampaignStat(ctx, workspaceID, cabinetID, campaign, statDTO); productStatsErr != nil {
+			summary.addIssue("product_stats.upsert", fmt.Sprintf("%d", statDTO.AdvertID), "upsert product stats: %v", productStatsErr)
+		}
 	}
 	return summary, summary.Error()
 }

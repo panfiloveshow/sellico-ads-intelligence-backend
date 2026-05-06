@@ -50,7 +50,9 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	var productRows []sqlcgen.Product
 	var phraseRows []sqlcgen.Phrase
 	var campaignStatRows []sqlcgen.CampaignStat
+	var productStatRows []sqlcgen.ProductStat
 	var phraseStatRows []sqlcgen.PhraseStat
+	var campaignProductRows []sqlcgen.CampaignProduct
 	var extensionEvidence *workspaceExtensionEvidence
 	var lastAutoSync *domain.SellerCabinetAutoSyncSummary
 
@@ -91,9 +93,21 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	})
 	g.Go(func() error {
 		var err error
+		productStatRows, err = s.queries.ListProductStatsByWorkspaceDateRange(gctx, sqlcgen.ListProductStatsByWorkspaceDateRangeParams{
+			WorkspaceID: workspaceUUID(workspaceID), DateFrom: pgDate(dateFrom), DateTo: pgDate(dateTo),
+		})
+		return err
+	})
+	g.Go(func() error {
+		var err error
 		phraseStatRows, err = s.queries.ListPhraseStatsByWorkspaceDateRange(gctx, sqlcgen.ListPhraseStatsByWorkspaceDateRangeParams{
 			WorkspaceID: workspaceUUID(workspaceID), DateFrom: dateFrom, DateTo: dateTo,
 		})
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		campaignProductRows, err = s.queries.ListCampaignProductsByWorkspace(gctx, uuidToPgtype(workspaceID))
 		return err
 	})
 	g.Go(func() error {
@@ -121,6 +135,7 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 		products:           make([]domain.Product, 0, len(productRows)),
 		phrases:            make([]domain.Phrase, 0, len(phraseRows)),
 		campaignStatsByID:  make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
+		productStatsByID:   make(map[uuid.UUID][]domain.ProductStat, len(productRows)),
 		phraseStatsByID:    make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
 		campaignProductIDs: make(map[uuid.UUID][]uuid.UUID),
 		productCampaignIDs: make(map[uuid.UUID][]uuid.UUID),
@@ -152,12 +167,16 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 		stat := campaignStatFromSqlc(row)
 		data.campaignStatsByID[stat.CampaignID] = append(data.campaignStatsByID[stat.CampaignID], stat)
 	}
+	for _, row := range productStatRows {
+		stat := productStatFromSqlc(row)
+		data.productStatsByID[stat.ProductID] = append(data.productStatsByID[stat.ProductID], stat)
+	}
 	for _, row := range phraseStatRows {
 		stat := phraseStatFromSqlc(row)
 		data.phraseStatsByID[stat.PhraseID] = append(data.phraseStatsByID[stat.PhraseID], stat)
 	}
 
-	s.attachCampaignProducts(ctx, data, workspaceID)
+	s.attachCampaignProducts(ctx, data, campaignProductRows)
 
 	// Store in cache
 	s.cacheMu.Lock()
@@ -178,20 +197,12 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 // attachCampaignProducts links products to campaigns using local DB data only.
 // Uses seller_cabinet_id as the join key (products and campaigns from the same cabinet are related).
 // This avoids live WB API calls on every read request (audit fix: CRITICAL — was O(cabinets) HTTP calls per read).
-func (s *AdsReadService) attachCampaignProducts(_ context.Context, data *adsWorkspaceData, _ uuid.UUID) {
-	// Group product IDs by cabinet for fast lookup
-	productIDsByCabinet := make(map[uuid.UUID][]uuid.UUID)
-	for _, product := range data.products {
-		productIDsByCabinet[product.SellerCabinetID] = append(productIDsByCabinet[product.SellerCabinetID], product.ID)
-	}
-
-	// Link campaigns to products in the same cabinet (store IDs only to save memory)
-	for _, campaign := range data.campaigns {
-		cabinetProductIDs := productIDsByCabinet[campaign.SellerCabinetID]
-		data.campaignProductIDs[campaign.ID] = cabinetProductIDs
-		for _, productID := range cabinetProductIDs {
-			data.productCampaignIDs[productID] = append(data.productCampaignIDs[productID], campaign.ID)
-		}
+func (s *AdsReadService) attachCampaignProducts(_ context.Context, data *adsWorkspaceData, links []sqlcgen.CampaignProduct) {
+	for _, link := range links {
+		campaignID := uuidFromPgtype(link.CampaignID)
+		productID := uuidFromPgtype(link.ProductID)
+		data.campaignProductIDs[campaignID] = append(data.campaignProductIDs[campaignID], productID)
+		data.productCampaignIDs[productID] = append(data.productCampaignIDs[productID], campaignID)
 	}
 }
 

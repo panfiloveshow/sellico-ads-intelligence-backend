@@ -142,6 +142,37 @@ func productFromSqlc(p sqlcgen.Product) domain.Product {
 	}
 }
 
+func productStatFromSqlc(s sqlcgen.ProductStat) domain.ProductStat {
+	result := domain.ProductStat{
+		ID:          uuidFromPgtype(s.ID),
+		ProductID:   uuidFromPgtype(s.ProductID),
+		CampaignID:  uuidFromPgtype(s.CampaignID),
+		Date:        s.Date.Time,
+		Impressions: s.Impressions,
+		Clicks:      s.Clicks,
+		Spend:       s.Spend,
+		CreatedAt:   s.CreatedAt.Time,
+		UpdatedAt:   s.UpdatedAt.Time,
+	}
+	if s.Orders.Valid {
+		v := s.Orders.Int64
+		result.Orders = &v
+	}
+	if s.Revenue.Valid {
+		v := s.Revenue.Int64
+		result.Revenue = &v
+	}
+	if s.Atbs.Valid {
+		v := s.Atbs.Int64
+		result.Atbs = &v
+	}
+	if s.Canceled.Valid {
+		v := s.Canceled.Int64
+		result.Canceled = &v
+	}
+	return result
+}
+
 func positionFromSqlc(p sqlcgen.Position) domain.Position {
 	return domain.Position{
 		ID:          uuidFromPgtype(p.ID),

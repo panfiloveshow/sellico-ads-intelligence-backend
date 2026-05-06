@@ -148,6 +148,47 @@ func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (do
 	}, nil
 }
 
+// MapProductStatDTO converts a nested WB fullstats nm row to a domain ProductStat.
+func MapProductStatDTO(dto WBProductStatDTO, productID, campaignID uuid.UUID) (domain.ProductStat, error) {
+	date, err := parseWBDate(dto.Date)
+	if err != nil {
+		return domain.ProductStat{}, fmt.Errorf("parse product stat date %q: %w", dto.Date, err)
+	}
+
+	now := time.Now()
+	var orders *int64
+	if dto.SHKs != nil {
+		value := *dto.SHKs
+		orders = &value
+	} else if dto.Orders != nil {
+		value := *dto.Orders
+		orders = &value
+	}
+	var revenue *int64
+	if dto.Revenue != nil {
+		value := roundRubles(*dto.Revenue)
+		revenue = &value
+	} else if dto.SumPrice != nil {
+		value := roundRubles(*dto.SumPrice)
+		revenue = &value
+	}
+	return domain.ProductStat{
+		ID:          uuid.New(),
+		ProductID:   productID,
+		CampaignID:  campaignID,
+		Date:        date,
+		Impressions: dto.Views,
+		Clicks:      dto.Clicks,
+		Spend:       roundRubles(dto.Sum),
+		Orders:      orders,
+		Revenue:     revenue,
+		Atbs:        dto.Atbs,
+		Canceled:    dto.Canceled,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, nil
+}
+
 // MapProductDTO converts a WBProductDTO to a domain Product.
 func MapProductDTO(dto WBProductDTO, workspaceID, sellerCabinetID uuid.UUID) domain.Product {
 	now := time.Now()

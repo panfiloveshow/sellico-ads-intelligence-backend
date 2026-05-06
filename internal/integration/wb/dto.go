@@ -19,19 +19,36 @@ type WBCampaignDTO struct {
 
 // WBCampaignStatDTO represents campaign statistics from the WB Advertising API.
 type WBCampaignStatDTO struct {
-	AdvertID     int      `json:"advertId"`
-	Date         string   `json:"date"`
-	Views        int64    `json:"views"`
-	Clicks       int64    `json:"clicks"`
-	Sum          float64  `json:"sum"`
-	Orders       *int64   `json:"orders,omitempty"`
-	OrderedItems *int64   `json:"ordered_items,omitempty"`
-	Revenue      *float64 `json:"revenue,omitempty"`
-	Atbs         *int64   `json:"atbs,omitempty"`     // Добавления в корзину
-	Canceled     *int64   `json:"canceled,omitempty"`  // Технические отмены
-	CR           *float64 `json:"cr,omitempty"`        // Конверсия
-	CPC          *float64 `json:"cpc,omitempty"`       // Стоимость клика (коп)
-	CTR          *float64 `json:"ctr,omitempty"`       // Кликабельность
+	AdvertID     int                `json:"advertId"`
+	Date         string             `json:"date"`
+	Views        int64              `json:"views"`
+	Clicks       int64              `json:"clicks"`
+	Sum          float64            `json:"sum"`
+	Orders       *int64             `json:"orders,omitempty"`
+	OrderedItems *int64             `json:"ordered_items,omitempty"`
+	Revenue      *float64           `json:"revenue,omitempty"`
+	Atbs         *int64             `json:"atbs,omitempty"`     // Добавления в корзину
+	Canceled     *int64             `json:"canceled,omitempty"` // Технические отмены
+	CR           *float64           `json:"cr,omitempty"`       // Конверсия
+	CPC          *float64           `json:"cpc,omitempty"`      // Стоимость клика (коп)
+	CTR          *float64           `json:"ctr,omitempty"`      // Кликабельность
+	Products     []WBProductStatDTO `json:"products,omitempty"`
+}
+
+// WBProductStatDTO represents product-level statistics nested inside fullstats days/apps.
+type WBProductStatDTO struct {
+	NmID     int64    `json:"nmId"`
+	Name     string   `json:"name"`
+	Date     string   `json:"date"`
+	Views    int64    `json:"views"`
+	Clicks   int64    `json:"clicks"`
+	Sum      float64  `json:"sum"`
+	Orders   *int64   `json:"orders,omitempty"`
+	SHKs     *int64   `json:"shks,omitempty"`
+	Revenue  *float64 `json:"revenue,omitempty"`
+	SumPrice *float64 `json:"sum_price,omitempty"`
+	Atbs     *int64   `json:"atbs,omitempty"`
+	Canceled *int64   `json:"canceled,omitempty"`
 }
 
 // WBSearchClusterStatDTOExtended has additional fields from normquery v1.

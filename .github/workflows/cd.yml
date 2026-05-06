@@ -85,14 +85,17 @@ jobs:
           # MITM and DNS hijack on the deploy path. Get the fingerprint with:
           #   ssh-keyscan -t ed25519 <host> | ssh-keygen -lf - -E sha256
           fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
-          envs: GHCR_TOKEN,GHCR_USER,DEPLOY_PATH
+          envs: GHCR_TOKEN,GHCR_USER,DEPLOY_PATH,GITHUB_SHA
           script_stop: true
           script: |
             set -euo pipefail
             cd "${DEPLOY_PATH:-/opt/sellico}"
+            git fetch --prune origin main
+            git checkout -B main "$GITHUB_SHA"
             # Token is read from env — never echoed, never interpolated.
             printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker compose -f docker-compose.prod.yml pull api worker
+            docker compose -f docker-compose.prod.yml run --rm migrate
             docker compose -f docker-compose.prod.yml up -d api worker
             docker logout ghcr.io
             docker image prune -f
