@@ -51,6 +51,7 @@ services:
     read_only: true
 
   api:
+    image: ${API_IMAGE:-ghcr.io/panfiloveshow/sellico-ads-intelligence-backend-api:latest}
     build:
       context: .
       args:
@@ -97,6 +98,7 @@ services:
           memory: 1G
 
   worker:
+    image: ${WORKER_IMAGE:-ghcr.io/panfiloveshow/sellico-ads-intelligence-backend-worker:latest}
     build:
       context: .
       args:

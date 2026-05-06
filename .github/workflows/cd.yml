@@ -90,8 +90,14 @@ jobs:
           script: |
             set -euo pipefail
             cd "${DEPLOY_PATH:-/opt/sellico}"
-            git fetch --prune origin main
-            git checkout -B main "$GITHUB_SHA"
+            tmpdir="$(mktemp -d)"
+            trap 'rm -rf "$tmpdir"' EXIT
+            curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/archive/${GITHUB_SHA}.tar.gz" -o "$tmpdir/source.tar.gz"
+            tar -xzf "$tmpdir/source.tar.gz" -C "$tmpdir"
+            srcdir="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+            cp "$srcdir/docker-compose.prod.yml" ./docker-compose.prod.yml
+            mkdir -p ./migrations
+            cp "$srcdir"/migrations/* ./migrations/
             # Token is read from env — never echoed, never interpolated.
             printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker compose -f docker-compose.prod.yml pull api worker
