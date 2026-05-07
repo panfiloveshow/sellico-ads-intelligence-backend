@@ -17,34 +17,39 @@ const fullStatsBatchSize = 25
 type wbFullStatsResponse []struct {
 	AdvertID int64 `json:"advertId"`
 	Days     []struct {
-		Date         string   `json:"date"`
-		Views        int64    `json:"views"`
-		Clicks       int64    `json:"clicks"`
-		Sum          float64  `json:"sum"`
-		Orders       *int64   `json:"orders"`
-		SHKs         *int64   `json:"shks"`
-		SumPrice     *float64 `json:"sum_price"`
-		SumPriceAlt  *float64 `json:"sumPrice"`
-		OrdersSumAlt *float64 `json:"ordersSum"`
-		Atbs         *int64   `json:"atbs"`     // Добавления в корзину
-		Canceled     *int64   `json:"canceled"` // Технические отмены
-		CPC          *float64 `json:"cpc"`      // Стоимость клика
-		CTR          *float64 `json:"ctr"`      // Кликабельность
-		CR           *float64 `json:"cr"`       // Конверсия
-		NMS          []struct {
-			NmID      int64    `json:"nmId"`
-			Name      string   `json:"name"`
-			Views     int64    `json:"views"`
-			Clicks    int64    `json:"clicks"`
-			Sum       float64  `json:"sum"`
-			Orders    *int64   `json:"orders"`
-			SHKs      *int64   `json:"shks"`
-			SumPrice  *float64 `json:"sum_price"`
-			SumPrice2 *float64 `json:"sumPrice"`
-			Atbs      *int64   `json:"atbs"`
-			Canceled  *int64   `json:"canceled"`
-		} `json:"nms"`
+		Date         string          `json:"date"`
+		Views        int64           `json:"views"`
+		Clicks       int64           `json:"clicks"`
+		Sum          float64         `json:"sum"`
+		Orders       *int64          `json:"orders"`
+		SHKs         *int64          `json:"shks"`
+		SumPrice     *float64        `json:"sum_price"`
+		SumPriceAlt  *float64        `json:"sumPrice"`
+		OrdersSumAlt *float64        `json:"ordersSum"`
+		Atbs         *int64          `json:"atbs"`     // Добавления в корзину
+		Canceled     *int64          `json:"canceled"` // Технические отмены
+		CPC          *float64        `json:"cpc"`      // Стоимость клика
+		CTR          *float64        `json:"ctr"`      // Кликабельность
+		CR           *float64        `json:"cr"`       // Конверсия
+		NMS          []wbFullStatsNM `json:"nms"`
+		Apps         []struct {
+			NMS []wbFullStatsNM `json:"nms"`
+		} `json:"apps"`
 	} `json:"days"`
+}
+
+type wbFullStatsNM struct {
+	NmID      int64    `json:"nmId"`
+	Name      string   `json:"name"`
+	Views     int64    `json:"views"`
+	Clicks    int64    `json:"clicks"`
+	Sum       float64  `json:"sum"`
+	Orders    *int64   `json:"orders"`
+	SHKs      *int64   `json:"shks"`
+	SumPrice  *float64 `json:"sum_price"`
+	SumPrice2 *float64 `json:"sumPrice"`
+	Atbs      *int64   `json:"atbs"`
+	Canceled  *int64   `json:"canceled"`
 }
 
 // GetCampaignStats fetches daily campaign statistics from the WB Advertising API.
@@ -76,26 +81,7 @@ func (c *Client) GetCampaignStats(ctx context.Context, token string, campaignIDs
 
 		for _, campaign := range batch {
 			for _, day := range campaign.Days {
-				productStats := make([]WBProductStatDTO, 0, len(day.NMS))
-				for _, nm := range day.NMS {
-					if nm.NmID == 0 {
-						continue
-					}
-					productStats = append(productStats, WBProductStatDTO{
-						NmID:     nm.NmID,
-						Name:     nm.Name,
-						Date:     day.Date,
-						Views:    nm.Views,
-						Clicks:   nm.Clicks,
-						Sum:      nm.Sum,
-						Orders:   nm.Orders,
-						SHKs:     nm.SHKs,
-						Revenue:  firstFloat64Ptr(nm.SumPrice, nm.SumPrice2),
-						SumPrice: firstFloat64Ptr(nm.SumPrice, nm.SumPrice2),
-						Atbs:     nm.Atbs,
-						Canceled: nm.Canceled,
-					})
-				}
+				productStats := productStatsFromFullStatsDay(day.Date, day.NMS, day.Apps)
 				result = append(result, WBCampaignStatDTO{
 					AdvertID:     int(campaign.AdvertID),
 					Date:         day.Date,
@@ -117,6 +103,48 @@ func (c *Client) GetCampaignStats(ctx context.Context, token string, campaignIDs
 	}
 
 	return result, nil
+}
+
+func productStatsFromFullStatsDay(date string, dayNMS []wbFullStatsNM, apps []struct {
+	NMS []wbFullStatsNM `json:"nms"`
+}) []WBProductStatDTO {
+	byNMID := make(map[int64]WBProductStatDTO, len(dayNMS))
+	add := func(nm wbFullStatsNM) {
+		if nm.NmID == 0 {
+			return
+		}
+		current := byNMID[nm.NmID]
+		current.NmID = nm.NmID
+		if current.Name == "" {
+			current.Name = nm.Name
+		}
+		current.Date = date
+		current.Views += nm.Views
+		current.Clicks += nm.Clicks
+		current.Sum += nm.Sum
+		current.Orders = sumOptionalInt64(current.Orders, nm.Orders)
+		current.SHKs = sumOptionalInt64(current.SHKs, nm.SHKs)
+		current.Revenue = sumOptionalFloat64(current.Revenue, firstFloat64Ptr(nm.SumPrice, nm.SumPrice2))
+		current.SumPrice = sumOptionalFloat64(current.SumPrice, firstFloat64Ptr(nm.SumPrice, nm.SumPrice2))
+		current.Atbs = sumOptionalInt64(current.Atbs, nm.Atbs)
+		current.Canceled = sumOptionalInt64(current.Canceled, nm.Canceled)
+		byNMID[nm.NmID] = current
+	}
+
+	for _, nm := range dayNMS {
+		add(nm)
+	}
+	for _, app := range apps {
+		for _, nm := range app.NMS {
+			add(nm)
+		}
+	}
+
+	result := make([]WBProductStatDTO, 0, len(byNMID))
+	for _, stat := range byNMID {
+		result = append(result, stat)
+	}
+	return result
 }
 
 func (c *Client) getCampaignStatsBatch(ctx context.Context, token string, campaignIDs []int, dateFrom, dateTo string) (wbFullStatsResponse, error) {
@@ -198,4 +226,26 @@ func firstFloat64Ptr(values ...*float64) *float64 {
 		}
 	}
 	return nil
+}
+
+func sumOptionalInt64(left, right *int64) *int64 {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	value := *left + *right
+	return &value
+}
+
+func sumOptionalFloat64(left, right *float64) *float64 {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	value := *left + *right
+	return &value
 }

@@ -60,7 +60,7 @@ func TestGetCampaignStats_Success(t *testing.T) {
 		assert.Equal(t, "2025-01-01", r.URL.Query().Get("beginDate"))
 		assert.Equal(t, "2025-01-31", r.URL.Query().Get("endDate"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5,"orders":4,"shks":7,"sum_price":1250.4}]}]`))
+		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5,"orders":4,"shks":7,"sum_price":1250.4,"apps":[{"appType":1,"nms":[{"nmId":111,"name":"One","views":40,"clicks":4,"sum":20,"orders":1,"shks":1,"sum_price":300,"atbs":2}]},{"appType":32,"nms":[{"nmId":111,"name":"One","views":60,"clicks":6,"sum":30.5,"orders":3,"shks":6,"sum_price":950.4,"atbs":5}]}]}]}]`))
 	}))
 	defer server.Close()
 
@@ -77,6 +77,15 @@ func TestGetCampaignStats_Success(t *testing.T) {
 	assert.Equal(t, int64(7), *result[0].OrderedItems)
 	require.NotNil(t, result[0].Revenue)
 	assert.Equal(t, 1250.4, *result[0].Revenue)
+	require.Len(t, result[0].Products, 1)
+	assert.Equal(t, int64(111), result[0].Products[0].NmID)
+	assert.Equal(t, int64(100), result[0].Products[0].Views)
+	assert.Equal(t, int64(10), result[0].Products[0].Clicks)
+	assert.Equal(t, 50.5, result[0].Products[0].Sum)
+	require.NotNil(t, result[0].Products[0].SHKs)
+	assert.Equal(t, int64(7), *result[0].Products[0].SHKs)
+	require.NotNil(t, result[0].Products[0].SumPrice)
+	assert.Equal(t, 1250.4, *result[0].Products[0].SumPrice)
 }
 
 func TestGetCampaignStats_SplitsOnClient400(t *testing.T) {
