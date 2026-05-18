@@ -20,6 +20,16 @@ import (
 
 const syncBatchLimit = int32(10000)
 
+func wbStatsDateRange(now time.Time) (string, string) {
+	location, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		location = time.FixedZone("MSK", 3*60*60)
+	}
+	nowMSK := now.In(location)
+	yesterday := time.Date(nowMSK.Year(), nowMSK.Month(), nowMSK.Day(), 0, 0, 0, 0, location).AddDate(0, 0, -1)
+	return yesterday.AddDate(0, 0, -30).Format(exportDateLayout), yesterday.Format(exportDateLayout)
+}
+
 type WBSyncClient interface {
 	ListCampaigns(ctx context.Context, token string) ([]wb.WBCampaignDTO, error)
 	GetCampaignStats(ctx context.Context, token string, campaignIDs []int, dateFrom, dateTo string) ([]wb.WBCampaignStatDTO, error)
@@ -290,8 +300,7 @@ func (s *SyncService) SyncCampaignStats(ctx context.Context, workspaceID uuid.UU
 		return SyncSummary{}, err
 	}
 
-	dateFrom := time.Now().UTC().AddDate(0, 0, -30).Format(exportDateLayout)
-	dateTo := time.Now().UTC().Format(exportDateLayout)
+	dateFrom, dateTo := wbStatsDateRange(time.Now())
 	summary := SyncSummary{Cabinets: len(cabinets)}
 
 	for _, cabinet := range cabinets {
@@ -310,8 +319,9 @@ func (s *SyncService) SyncCampaignStats(ctx context.Context, workspaceID uuid.UU
 		wbIDs := make([]int, 0, len(campaigns))
 		campaignByWBID := make(map[int]sqlcgen.Campaign, len(campaigns))
 		for _, campaign := range campaigns {
-			// Only active/paused — skip 90% of inactive campaigns to avoid rate limits
-			if campaign.Status != "active" && campaign.Status != "paused" {
+			// WB fullstats is available for statuses 7, 9, 11:
+			// completed, active, and paused.
+			if campaign.Status != "active" && campaign.Status != "paused" && campaign.Status != "completed" {
 				continue
 			}
 			wbIDs = append(wbIDs, int(campaign.WbCampaignID))
@@ -766,20 +776,19 @@ func (s *SyncService) syncCampaignStatsForCabinet(ctx context.Context, workspace
 
 	summary := SyncSummary{Cabinets: 1}
 
-	// Only fetch stats for active/paused campaigns (673 → ~83, saves 90% API calls)
+	// WB fullstats is available for completed/active/paused campaigns.
 	campaignIDs := make([]int, 0, len(campaigns))
 	campaignMap := make(map[int]sqlcgen.Campaign)
 	for _, c := range campaigns {
-		if c.Status != "active" && c.Status != "paused" {
+		if c.Status != "active" && c.Status != "paused" && c.Status != "completed" {
 			continue
 		}
 		campaignIDs = append(campaignIDs, int(c.WbCampaignID))
 		campaignMap[int(c.WbCampaignID)] = c
 	}
-	s.logger.Info().Int("active_campaigns", len(campaignIDs)).Int("total_campaigns", len(campaigns)).Msg("[sync] stats: filtered to active campaigns")
+	s.logger.Info().Int("eligible_campaigns", len(campaignIDs)).Int("total_campaigns", len(campaigns)).Msg("[sync] stats: filtered to WB fullstats-eligible campaigns")
 
-	dateFrom := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
-	dateTo := time.Now().Format("2006-01-02")
+	dateFrom, dateTo := wbStatsDateRange(time.Now())
 
 	stats, fetchErr := s.wbClient.GetCampaignStats(ctx, token, campaignIDs, dateFrom, dateTo)
 	if fetchErr != nil {
