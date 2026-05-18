@@ -24,3 +24,8 @@
 + /api/v1/cabinets/{id}/campaigns
 + /api/v1/cabinets/{id}/products
 + /api/v1/cabinets/{id}/sync
+
+# ---- Temporary WB normquery diagnostics endpoint; internal-only while debugging
+# production phrase stats ingestion. Document or remove once the incident is closed. ----
++ /api/v1/ads/debug/normquery
++ /api/v1/workspaces/{workspaceId}/ads-intelligence/wb/debug/normquery
