@@ -467,97 +467,13 @@ func (s *SyncService) SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (S
 
 	summary := SyncSummary{Cabinets: len(cabinets)}
 	for _, cabinet := range cabinets {
-		campaigns, fetchErr := s.queries.ListCampaignsBySellerCabinet(ctx, sqlcgen.ListCampaignsBySellerCabinetParams{
-			SellerCabinetID: uuidToPgtype(cabinet.cabinet.ID),
-			Limit:           syncBatchLimit,
-			Offset:          0,
-		})
-		if fetchErr != nil {
-			return summary, apperror.New(apperror.ErrInternal, "failed to list campaigns for cabinet")
-		}
-
-		// Fetch WB campaigns ONCE per cabinet to get NMIDs
-		wbCampaigns, wbErr := s.wbClient.ListCampaigns(ctx, cabinet.token)
-		nmIDMap := make(map[int][]int64)
-		if wbErr == nil {
-			for _, wbCamp := range wbCampaigns {
-				nmIDMap[wbCamp.AdvertID] = wbCamp.NMIDs
-			}
-		}
-
-		for _, campaign := range campaigns {
-			if campaign.Status != "active" && campaign.Status != "paused" {
-				continue
-			}
-			nmIDs := nmIDMap[int(campaign.WbCampaignID)]
-			if len(nmIDs) == 0 {
-				continue
-			}
-			clusters, clusterErr := s.wbClient.ListSearchClustersWithNMIDs(ctx, cabinet.token, int(campaign.WbCampaignID), nmIDs)
-			if clusterErr != nil {
-				summary.addIssue("phrases.list_clusters", fmt.Sprintf("%d", campaign.WbCampaignID), "list search clusters: %v", clusterErr)
-				continue
-			}
-
-			phraseIDsByCluster := make(map[int64]uuid.UUID, len(clusters))
-			for _, clusterDTO := range clusters {
-				if clusterDTO.ClusterID == nil {
-					continue
-				}
-				phrase := wb.MapSearchClusterDTO(clusterDTO, uuidFromPgtype(campaign.ID), workspaceID)
-				row, upsertErr := s.queries.UpsertPhrase(ctx, sqlcgen.UpsertPhraseParams{
-					CampaignID:  uuidToPgtype(phrase.CampaignID),
-					WorkspaceID: uuidToPgtype(phrase.WorkspaceID),
-					WbClusterID: int64PtrToPgInt8(phrase.WBClusterID),
-					WbNormQuery: phrase.WBNormQuery,
-					Keyword:     phrase.Keyword,
-					Count:       intPtrToPgInt4(phrase.Count),
-					CurrentBid:  int64PtrToPgInt8(phrase.CurrentBid),
-				})
-				if upsertErr != nil {
-					summary.addIssue("phrases.upsert", fmt.Sprintf("%d", *clusterDTO.ClusterID), "failed to upsert phrase: %v", upsertErr)
-					continue
-				}
-				phraseIDsByCluster[*clusterDTO.ClusterID] = uuidFromPgtype(row.ID)
-				summary.Phrases++
-			}
-
-			stats, statsErr := s.wbClient.GetSearchClusterStats(ctx, cabinet.token, int(campaign.WbCampaignID))
-			if statsErr != nil {
-				summary.addIssue("phrase_stats.fetch", fmt.Sprintf("%d", campaign.WbCampaignID), "get search cluster stats: %v", statsErr)
-				continue
-			}
-
-			for _, statDTO := range stats {
-				if statDTO.ClusterID == nil {
-					continue
-				}
-				phraseID, ok := phraseIDsByCluster[*statDTO.ClusterID]
-				if !ok {
-					summary.SkippedCampaign++
-					continue
-				}
-				stat, mapErr := wb.MapSearchClusterStatDTO(statDTO, phraseID)
-				if mapErr != nil {
-					summary.addIssue("phrase_stats.map", fmt.Sprintf("%d", *statDTO.ClusterID), "map phrase stat: %v", mapErr)
-					continue
-				}
-				if _, upsertErr := s.queries.UpsertPhraseStat(ctx, sqlcgen.UpsertPhraseStatParams{
-					PhraseID:    uuidToPgtype(stat.PhraseID),
-					Date:        pgDate(stat.Date),
-					Impressions: stat.Impressions,
-					Clicks:      stat.Clicks,
-					Spend:       stat.Spend,
-				}); upsertErr != nil {
-					summary.addIssue("phrase_stats.upsert", stat.PhraseID.String(), "failed to upsert phrase stat: %v", upsertErr)
-					continue
-				}
-				summary.PhraseStats++
-			}
-		}
-
-		if err := s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID)); err != nil {
-			summary.addIssue("seller_cabinet.sync_mark", cabinet.cabinet.ID.String(), "failed to update sync timestamp: %v", err)
+		cabinetSummary, syncErr := s.syncPhrasesForCabinet(ctx, workspaceID, cabinet.cabinet.ID, cabinet.token)
+		summary.Phrases += cabinetSummary.Phrases
+		summary.PhraseStats += cabinetSummary.PhraseStats
+		summary.SkippedCampaign += cabinetSummary.SkippedCampaign
+		summary.Issues = append(summary.Issues, cabinetSummary.Issues...)
+		if syncErr != nil {
+			summary.addIssue("phrases.sync", cabinet.cabinet.ID.String(), "sync phrases: %v", syncErr)
 		}
 	}
 
@@ -825,7 +741,8 @@ func (s *SyncService) syncCampaignStatsForCabinet(ctx context.Context, workspace
 }
 
 // syncPhrasesForCabinet syncs phrases only for campaigns belonging to a specific cabinet.
-// Optimized: fetches ListCampaigns ONCE to get all NMIDs, then uses WithNMIDs methods.
+// It uses persisted real campaign_products pairs as the advertId:nmId source and
+// does not fall back to legacy normquery/list rows.
 func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) (SyncSummary, error) {
 	campaigns, err := s.queries.ListCampaignsBySellerCabinet(ctx, sqlcgen.ListCampaignsBySellerCabinetParams{
 		SellerCabinetID: uuidToPgtype(cabinetID),
@@ -836,18 +753,28 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 		return SyncSummary{}, err
 	}
 
-	// Fetch all WB campaigns ONCE to get NMIDs mapping (saves N extra API calls)
-	wbCampaigns, wbErr := s.wbClient.ListCampaigns(ctx, token)
-	nmIDMap := make(map[int][]int64)
-	if wbErr == nil {
-		for _, wbCamp := range wbCampaigns {
-			nmIDMap[wbCamp.AdvertID] = wbCamp.NMIDs
-		}
-	} else {
-		s.logger.Warn().Err(wbErr).Msg("[sync] failed to fetch WB campaigns for NMIDs, will skip normquery")
-	}
-
 	summary := SyncSummary{Cabinets: 1}
+	campaignProducts, linkErr := s.queries.ListCampaignProductsByWorkspace(ctx, uuidToPgtype(workspaceID))
+	nmIDMap := make(map[int][]int64)
+	seenCampaignProducts := make(map[int]map[int64]struct{})
+	if linkErr != nil {
+		summary.addIssue("campaign_products.list", cabinetID.String(), "list campaign product pairs: %v", linkErr)
+		return summary, summary.Error()
+	}
+	for _, link := range campaignProducts {
+		if uuidFromPgtype(link.SellerCabinetID) != cabinetID {
+			continue
+		}
+		wbCampaignID := int(link.WbCampaignID)
+		if seenCampaignProducts[wbCampaignID] == nil {
+			seenCampaignProducts[wbCampaignID] = make(map[int64]struct{})
+		}
+		if _, seen := seenCampaignProducts[wbCampaignID][link.WbProductID]; seen {
+			continue
+		}
+		seenCampaignProducts[wbCampaignID][link.WbProductID] = struct{}{}
+		nmIDMap[wbCampaignID] = append(nmIDMap[wbCampaignID], link.WbProductID)
+	}
 	for _, campaign := range campaigns {
 		if campaign.Status != "active" && campaign.Status != "paused" && campaign.Status != "completed" {
 			continue
