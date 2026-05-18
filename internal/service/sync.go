@@ -20,6 +20,11 @@ import (
 
 const syncBatchLimit = int32(10000)
 
+const (
+	normQueryCampaignRequestDelay = 20 * time.Second
+	normQueryRateLimitCooldown    = 60 * time.Second
+)
+
 func wbStatsDateRange(now time.Time) (string, string) {
 	location, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {
@@ -775,6 +780,7 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 		seenCampaignProducts[wbCampaignID][link.WbProductID] = struct{}{}
 		nmIDMap[wbCampaignID] = append(nmIDMap[wbCampaignID], link.WbProductID)
 	}
+	normQueryRequests := 0
 	for _, campaign := range campaigns {
 		if campaign.Status != "active" && campaign.Status != "paused" && campaign.Status != "completed" {
 			continue
@@ -786,15 +792,26 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 			continue // No products linked — skip
 		}
 
-		if summary.PhraseStats > 0 {
-			if err := sleepWithContext(ctx, 7*time.Second); err != nil {
+		if normQueryRequests > 0 {
+			if err := sleepWithContext(ctx, normQueryCampaignRequestDelay); err != nil {
 				return summary, err
 			}
 		}
 
 		clusterStats, statsErr := s.wbClient.GetSearchClusterStatsWithNMIDs(ctx, token, wbCampaignID, nmIDs)
+		normQueryRequests++
 		if statsErr != nil {
 			summary.addIssue("phrase_stats.fetch", fmt.Sprintf("%d", wbCampaignID), "stats: %v", statsErr)
+			if isNormQueryRateLimitError(statsErr) {
+				s.logger.Warn().
+					Err(statsErr).
+					Int("advertId", wbCampaignID).
+					Dur("cooldown", normQueryRateLimitCooldown).
+					Msg("[NQ] rate limited, cooling down before next campaign")
+				if err := sleepWithContext(ctx, normQueryRateLimitCooldown); err != nil {
+					return summary, err
+				}
+			}
 			continue
 		}
 		phraseIDsByNormQuery := make(map[string]uuid.UUID, len(clusterStats))
@@ -839,6 +856,14 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 
 	s.logger.Info().Int("phrases", summary.Phrases).Int("phrase_stats", summary.PhraseStats).Msg("[sync] phrases+stats done for cabinet")
 	return summary, summary.Error()
+}
+
+func isNormQueryRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "429") || strings.Contains(message, "rate limited")
 }
 
 // syncProductsForCabinet syncs products only for a specific cabinet.
