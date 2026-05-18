@@ -57,7 +57,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepExtendedRecommendations, processor.HandleSweepExtendedRecommendations)
 
 	server := asynq.NewServer(redisOpt, asynq.Config{
-		Concurrency:     12,
+		Concurrency:     1,
 		ShutdownTimeout: 30 * time.Second,
 		Queues: map[string]int{
 			QueueWBSync:          1,
