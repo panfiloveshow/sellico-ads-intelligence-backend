@@ -38,7 +38,7 @@ func mapBidType(bt int) string {
 	case 1:
 		return domain.BidTypeUnified
 	default:
-		return domain.BidTypeManual
+		return domain.BidTypeUnknown
 	}
 }
 
@@ -111,6 +111,9 @@ func MapSearchClusterDTO(dto WBSearchClusterDTO, campaignID, workspaceID uuid.UU
 	if len(dto.Keywords) > 0 {
 		keyword = dto.Keywords[0]
 	}
+	if keyword == "" {
+		keyword = dto.NormQuery
+	}
 
 	count := dto.Count
 	bid := dto.Bid
@@ -119,7 +122,9 @@ func MapSearchClusterDTO(dto WBSearchClusterDTO, campaignID, workspaceID uuid.UU
 		ID:          uuid.New(),
 		CampaignID:  campaignID,
 		WorkspaceID: workspaceID,
+		WBProductID: nonZeroInt64Ptr(dto.NmID),
 		WBClusterID: dto.ClusterID,
+		WBNormQuery: keyword,
 		Keyword:     keyword,
 		Count:       &count,
 		CurrentBid:  &bid,
@@ -143,6 +148,11 @@ func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (do
 		Impressions: dto.Views,
 		Clicks:      dto.Clicks,
 		Spend:       roundRubles(dto.Sum),
+		Atbs:        nonZeroInt64Ptr(dto.Atbs),
+		Orders:      nonZeroInt64Ptr(dto.Orders),
+		CPC:         nonZeroFloat64Ptr(dto.CPC),
+		CPM:         nonZeroFloat64Ptr(dto.CPM),
+		AvgPos:      nonZeroFloat64Ptr(dto.AvgPos),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
@@ -212,6 +222,20 @@ func MapProductDTO(dto WBProductDTO, workspaceID, sellerCabinetID uuid.UUID) dom
 
 func stringPtr(value string) *string {
 	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func nonZeroInt64Ptr(value int64) *int64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
+}
+
+func nonZeroFloat64Ptr(value float64) *float64 {
+	if value == 0 {
 		return nil
 	}
 	return &value

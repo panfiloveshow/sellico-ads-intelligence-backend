@@ -1,15 +1,20 @@
 -- name: CreatePhraseStat :one
-INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: UpsertPhraseStat :one
-INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (phrase_id, date) DO UPDATE SET
     impressions = EXCLUDED.impressions,
     clicks = EXCLUDED.clicks,
     spend = EXCLUDED.spend,
+    atbs = EXCLUDED.atbs,
+    orders = EXCLUDED.orders,
+    cpc = EXCLUDED.cpc,
+    cpm = EXCLUDED.cpm,
+    avg_pos = EXCLUDED.avg_pos,
     updated_at = now()
 RETURNING *;
 

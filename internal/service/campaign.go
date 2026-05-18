@@ -177,6 +177,14 @@ func campaignStatFromSqlc(s sqlcgen.CampaignStat) domain.CampaignStat {
 		v := s.Revenue.Int64
 		result.Revenue = &v
 	}
+	if s.Atbs.Valid {
+		v := s.Atbs.Int64
+		result.Atbs = &v
+	}
+	if s.Canceled.Valid {
+		v := s.Canceled.Int64
+		result.Canceled = &v
+	}
 	return result
 }
 
@@ -185,10 +193,22 @@ func phraseFromSqlc(p sqlcgen.Phrase) domain.Phrase {
 		ID:          uuidFromPgtype(p.ID),
 		CampaignID:  uuidFromPgtype(p.CampaignID),
 		WorkspaceID: uuidFromPgtype(p.WorkspaceID),
-		WBClusterID: p.WbClusterID,
+		WBNormQuery: p.WbNormQuery,
 		Keyword:     p.Keyword,
 		CreatedAt:   p.CreatedAt.Time,
 		UpdatedAt:   p.UpdatedAt.Time,
+	}
+	if p.ProductID.Valid {
+		v := uuidFromPgtype(p.ProductID)
+		result.ProductID = &v
+	}
+	if p.WbProductID.Valid {
+		v := p.WbProductID.Int64
+		result.WBProductID = &v
+	}
+	if p.WbClusterID.Valid {
+		v := p.WbClusterID.Int64
+		result.WBClusterID = &v
 	}
 	if p.Count.Valid {
 		v := int(p.Count.Int32)

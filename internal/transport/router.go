@@ -18,29 +18,29 @@ type RateLimitOpts struct {
 
 // RouterDeps holds all dependencies needed to construct the router.
 type RouterDeps struct {
-	CORSAllowOrigins []string
-	RateLimit        RateLimitOpts
-	JWTSecret             string
-	MembershipChecker     middleware.MembershipChecker
-	WorkspaceResolver     middleware.WorkspaceResolver
-	Authenticator         middleware.Authenticator
-	DocsHandler           *handler.DocsHandler
-	HealthHandler         *handler.HealthHandler
-	AuthHandler           *handler.AuthHandler
-	WorkspaceHandler      *handler.WorkspaceHandler
-	SellerCabinetHandler  *handler.SellerCabinetHandler
-	AdsReadHandler        *handler.AdsReadHandler
-	CampaignHandler       *handler.CampaignHandler
-	PhraseHandler         *handler.PhraseHandler
-	BidHandler            *handler.BidHandler
-	ProductHandler        *handler.ProductHandler
-	PositionHandler       *handler.PositionHandler
-	SERPHandler           *handler.SERPHandler
-	RecommendationHandler *handler.RecommendationHandler
-	ExportHandler         *handler.ExportHandler
-	ExtensionHandler      *handler.ExtensionHandler
-	AuditLogHandler       *handler.AuditLogHandler
-	JobRunHandler         *handler.JobRunHandler
+	CORSAllowOrigins         []string
+	RateLimit                RateLimitOpts
+	JWTSecret                string
+	MembershipChecker        middleware.MembershipChecker
+	WorkspaceResolver        middleware.WorkspaceResolver
+	Authenticator            middleware.Authenticator
+	DocsHandler              *handler.DocsHandler
+	HealthHandler            *handler.HealthHandler
+	AuthHandler              *handler.AuthHandler
+	WorkspaceHandler         *handler.WorkspaceHandler
+	SellerCabinetHandler     *handler.SellerCabinetHandler
+	AdsReadHandler           *handler.AdsReadHandler
+	CampaignHandler          *handler.CampaignHandler
+	PhraseHandler            *handler.PhraseHandler
+	BidHandler               *handler.BidHandler
+	ProductHandler           *handler.ProductHandler
+	PositionHandler          *handler.PositionHandler
+	SERPHandler              *handler.SERPHandler
+	RecommendationHandler    *handler.RecommendationHandler
+	ExportHandler            *handler.ExportHandler
+	ExtensionHandler         *handler.ExtensionHandler
+	AuditLogHandler          *handler.AuditLogHandler
+	JobRunHandler            *handler.JobRunHandler
 	EventsHandler            *handler.EventsHandler
 	WorkspaceSettingsHandler *handler.WorkspaceSettingsHandler
 	StrategyHandler          *handler.StrategyHandler
@@ -145,6 +145,11 @@ func NewRouter(deps RouterDeps) chi.Router {
 				} else {
 					ws.Get("/", notImplemented)
 				}
+				if deps.AdsReadHandler != nil {
+					ws.Get("/ads-intelligence/wb/debug/normquery", deps.AdsReadHandler.DebugNormQuery)
+				} else {
+					ws.Get("/ads-intelligence/wb/debug/normquery", notImplemented)
+				}
 
 				// Members management — owner/manager only
 				ws.Route("/members", func(members chi.Router) {
@@ -225,6 +230,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						a.Get("/campaigns/{id}", deps.AdsReadHandler.GetCampaign)
 						a.Get("/queries", deps.AdsReadHandler.ListQueries)
 						a.Get("/queries/{id}", deps.AdsReadHandler.GetQuery)
+						a.Get("/debug/normquery", deps.AdsReadHandler.DebugNormQuery)
 					} else {
 						a.Get("/overview", notImplemented)
 						a.Get("/products", notImplemented)
@@ -233,6 +239,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						a.Get("/campaigns/{id}", notImplemented)
 						a.Get("/queries", notImplemented)
 						a.Get("/queries/{id}", notImplemented)
+						a.Get("/debug/normquery", notImplemented)
 					}
 				})
 

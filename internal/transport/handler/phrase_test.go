@@ -60,6 +60,7 @@ func TestPhraseList_Success(t *testing.T) {
 	workspaceID := uuid.New()
 	campaignID := uuid.New()
 	now := time.Now()
+	clusterID := int64(123)
 	mock := &mockPhraseService{
 		listFn: func(_ context.Context, wsID uuid.UUID, filter service.PhraseListFilter, limit, offset int32) ([]domain.Phrase, error) {
 			assert.Equal(t, workspaceID, wsID)
@@ -71,7 +72,7 @@ func TestPhraseList_Success(t *testing.T) {
 				ID:          uuid.New(),
 				CampaignID:  uuid.New(),
 				WorkspaceID: workspaceID,
-				WBClusterID: 123,
+				WBClusterID: &clusterID,
 				Keyword:     "iphone case",
 				CreatedAt:   now,
 				UpdatedAt:   now,
@@ -136,6 +137,7 @@ func TestPhraseGet_Success(t *testing.T) {
 	workspaceID := uuid.New()
 	phraseID := uuid.New()
 	now := time.Now()
+	clusterID := int64(123)
 	mock := &mockPhraseService{
 		listFn: func(context.Context, uuid.UUID, service.PhraseListFilter, int32, int32) ([]domain.Phrase, error) {
 			return nil, nil
@@ -147,7 +149,7 @@ func TestPhraseGet_Success(t *testing.T) {
 				ID:          phraseID,
 				CampaignID:  uuid.New(),
 				WorkspaceID: workspaceID,
-				WBClusterID: 123,
+				WBClusterID: &clusterID,
 				Keyword:     "iphone case",
 				CreatedAt:   now,
 				UpdatedAt:   now,

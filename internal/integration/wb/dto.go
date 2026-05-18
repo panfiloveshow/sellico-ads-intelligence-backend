@@ -57,11 +57,15 @@ type WBSearchClusterStatDTOExtended struct {
 	AvgPos *float64 `json:"avg_pos,omitempty"` // Средняя позиция
 	Atbs   *int64   `json:"atbs,omitempty"`    // Добавления в корзину
 	Orders *int64   `json:"orders,omitempty"`  // Заказы
+	CPC    *float64 `json:"cpc,omitempty"`     // CPC from WB
+	CPM    *float64 `json:"cpm,omitempty"`     // CPM from WB
 }
 
 // WBSearchClusterDTO represents a Search Cluster from the WB Advertising API.
 type WBSearchClusterDTO struct {
-	ClusterID int64    `json:"id"`
+	ClusterID *int64   `json:"id,omitempty"`
+	NmID      int64    `json:"nmId"`
+	NormQuery string   `json:"norm_query"`
 	Keywords  []string `json:"keywords"`
 	Count     int      `json:"count"`
 	Bid       int64    `json:"bid"`
@@ -69,11 +73,19 @@ type WBSearchClusterDTO struct {
 
 // WBSearchClusterStatDTO represents Search Cluster statistics from the WB API.
 type WBSearchClusterStatDTO struct {
-	ClusterID int64   `json:"id"`
+	ClusterID *int64  `json:"id,omitempty"`
+	AdvertID  int64   `json:"advertId"`
+	NmID      int64   `json:"nmId"`
+	NormQuery string  `json:"norm_query"`
 	Date      string  `json:"date"`
 	Views     int64   `json:"views"`
 	Clicks    int64   `json:"clicks"`
 	Sum       float64 `json:"sum"`
+	Atbs      int64   `json:"atbs"`
+	Orders    int64   `json:"orders"`
+	CPC       float64 `json:"cpc"`
+	CPM       float64 `json:"cpm"`
+	AvgPos    float64 `json:"avg_pos"`
 }
 
 // WBBidDTO represents recommended bids from the WB Advertising API.

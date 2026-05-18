@@ -378,12 +378,15 @@ func (r *phraseRows) Scan(dest ...any) error {
 	*dest[0].(*pgtype.UUID) = item.ID
 	*dest[1].(*pgtype.UUID) = item.CampaignID
 	*dest[2].(*pgtype.UUID) = item.WorkspaceID
-	*dest[3].(*int64) = item.WbClusterID
-	*dest[4].(*string) = item.Keyword
-	*dest[5].(*pgtype.Int4) = item.Count
-	*dest[6].(*pgtype.Int8) = item.CurrentBid
-	*dest[7].(*pgtype.Timestamptz) = item.CreatedAt
-	*dest[8].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[3].(*pgtype.UUID) = item.ProductID
+	*dest[4].(*pgtype.Int8) = item.WbProductID
+	*dest[5].(*pgtype.Int8) = item.WbClusterID
+	*dest[6].(*string) = item.WbNormQuery
+	*dest[7].(*string) = item.Keyword
+	*dest[8].(*pgtype.Int4) = item.Count
+	*dest[9].(*pgtype.Int8) = item.CurrentBid
+	*dest[10].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[11].(*pgtype.Timestamptz) = item.UpdatedAt
 	return nil
 }
 
@@ -574,8 +577,13 @@ func phraseStatToRow(item sqlcgen.PhraseStat) pgx.Row {
 		*dest[3].(*int64) = item.Impressions
 		*dest[4].(*int64) = item.Clicks
 		*dest[5].(*int64) = item.Spend
-		*dest[6].(*pgtype.Timestamptz) = item.CreatedAt
-		*dest[7].(*pgtype.Timestamptz) = item.UpdatedAt
+		*dest[6].(*pgtype.Int8) = item.Atbs
+		*dest[7].(*pgtype.Int8) = item.Orders
+		*dest[8].(*pgtype.Float8) = item.Cpc
+		*dest[9].(*pgtype.Float8) = item.Cpm
+		*dest[10].(*pgtype.Float8) = item.AvgPos
+		*dest[11].(*pgtype.Timestamptz) = item.CreatedAt
+		*dest[12].(*pgtype.Timestamptz) = item.UpdatedAt
 		return nil
 	}}
 }
@@ -727,7 +735,13 @@ func (r *phraseStatBatchRows) Scan(dest ...any) error {
 	*dest[3].(*int64) = item.Impressions
 	*dest[4].(*int64) = item.Clicks
 	*dest[5].(*int64) = item.Spend
-	*dest[6].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[6].(*pgtype.Int8) = item.Atbs
+	*dest[7].(*pgtype.Int8) = item.Orders
+	*dest[8].(*pgtype.Float8) = item.Cpc
+	*dest[9].(*pgtype.Float8) = item.Cpm
+	*dest[10].(*pgtype.Float8) = item.AvgPos
+	*dest[11].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[12].(*pgtype.Timestamptz) = item.UpdatedAt
 	return nil
 }
 

@@ -60,6 +60,8 @@ type AdsReadService struct {
 	entityLimit int32
 	statsLimit  int32
 
+	backendVersion string
+
 	cacheMu   sync.RWMutex
 	dataCache map[string]cachedWorkspaceData
 	loadGroup singleflight.Group
@@ -82,15 +84,24 @@ func WithAdsReadLimits(entityLimit, statsLimit int) AdsReadOption {
 	}
 }
 
+func WithAdsReadBackendVersion(version string) AdsReadOption {
+	return func(s *AdsReadService) {
+		if version != "" {
+			s.backendVersion = version
+		}
+	}
+}
+
 func NewAdsReadService(queries *sqlcgen.Queries, wbClient WBSyncClient, encryptionKey []byte, logger zerolog.Logger, opts ...AdsReadOption) *AdsReadService {
 	s := &AdsReadService{
-		queries:       queries,
-		wbClient:      wbClient,
-		encryptionKey: encryptionKey,
-		logger:        logger.With().Str("component", "ads_read_service").Logger(),
-		dataCache:     make(map[string]cachedWorkspaceData),
-		entityLimit:   defaultAdsReadEntityLimit,
-		statsLimit:    defaultAdsReadStatsLimit,
+		queries:        queries,
+		wbClient:       wbClient,
+		encryptionKey:  encryptionKey,
+		logger:         logger.With().Str("component", "ads_read_service").Logger(),
+		dataCache:      make(map[string]cachedWorkspaceData),
+		entityLimit:    defaultAdsReadEntityLimit,
+		statsLimit:     defaultAdsReadStatsLimit,
+		backendVersion: "dev",
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -99,18 +110,25 @@ func NewAdsReadService(queries *sqlcgen.Queries, wbClient WBSyncClient, encrypti
 }
 
 type adsWorkspaceData struct {
-	cabinets           map[uuid.UUID]domain.SellerCabinet
-	campaigns          []domain.Campaign
-	products           []domain.Product
-	phrases            []domain.Phrase
-	campaignStatsByID  map[uuid.UUID][]domain.CampaignStat
-	productStatsByID   map[uuid.UUID][]domain.ProductStat
-	phraseStatsByID    map[uuid.UUID][]domain.PhraseStat
-	campaignProductIDs map[uuid.UUID][]uuid.UUID
-	productCampaignIDs map[uuid.UUID][]uuid.UUID
-	campaignPhrases    map[uuid.UUID][]domain.Phrase
-	lastAutoSync       *domain.SellerCabinetAutoSyncSummary
-	extensionEvidence  *workspaceExtensionEvidence
+	cabinets            map[uuid.UUID]domain.SellerCabinet
+	campaigns           []domain.Campaign
+	products            []domain.Product
+	phrases             []domain.Phrase
+	campaignStatsByID   map[uuid.UUID][]domain.CampaignStat
+	productStatsByID    map[uuid.UUID][]domain.ProductStat
+	productStatsByLink  map[productCampaignKey][]domain.ProductStat
+	productBusinessByID map[uuid.UUID][]domain.ProductBusinessSummary
+	phraseStatsByID     map[uuid.UUID][]domain.PhraseStat
+	campaignProductIDs  map[uuid.UUID][]uuid.UUID
+	productCampaignIDs  map[uuid.UUID][]uuid.UUID
+	campaignPhrases     map[uuid.UUID][]domain.Phrase
+	lastAutoSync        *domain.SellerCabinetAutoSyncSummary
+	extensionEvidence   *workspaceExtensionEvidence
+}
+
+type productCampaignKey struct {
+	productID  uuid.UUID
+	campaignID uuid.UUID
 }
 
 // OverviewFilter optionally scopes the overview dashboard to a single seller cabinet.
@@ -224,6 +242,7 @@ func (s *AdsReadService) ListQuerySummaries(ctx context.Context, workspaceID uui
 		return nil, err
 	}
 	result := s.buildQuerySummaries(data, dateFrom, dateTo, filter)
+	s.logNormQueryReadRows(result)
 	sortQuerySummaries(result)
 	return result, nil
 }

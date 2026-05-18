@@ -29,6 +29,7 @@ const (
 const (
 	BidTypeManual  = "manual"
 	BidTypeUnified = "unified"
+	BidTypeUnknown = "unknown"
 )
 
 // --- Campaign payment type constants ---
@@ -153,18 +154,22 @@ type WorkspaceMember struct {
 }
 
 type SellerCabinetAutoSyncSummary struct {
-	JobRunID       uuid.UUID  `json:"job_run_id"`
-	Status         string     `json:"status"`
-	ResultState    string     `json:"result_state"`
-	FreshnessState string     `json:"freshness_state"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	Cabinets       int        `json:"cabinets"`
-	Campaigns      int        `json:"campaigns"`
-	CampaignStats  int        `json:"campaign_stats"`
-	Phrases        int        `json:"phrases"`
-	PhraseStats    int        `json:"phrase_stats"`
-	Products       int        `json:"products"`
-	SyncIssues     int        `json:"sync_issues"`
+	JobRunID        uuid.UUID  `json:"job_run_id"`
+	Status          string     `json:"status"`
+	ResultState     string     `json:"result_state"`
+	FreshnessState  string     `json:"freshness_state"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	Cabinets        int        `json:"cabinets"`
+	Campaigns       int        `json:"campaigns"`
+	CampaignStats   int        `json:"campaign_stats"`
+	ProductStats    int        `json:"product_stats"`
+	CampaignBudgets int        `json:"campaign_budgets"`
+	BusinessOrders  int        `json:"business_orders"`
+	BusinessSales   int        `json:"business_sales"`
+	Phrases         int        `json:"phrases"`
+	PhraseStats     int        `json:"phrase_stats"`
+	Products        int        `json:"products"`
+	SyncIssues      int        `json:"sync_issues"`
 }
 
 // SellerCabinet represents a connected Wildberries seller account.
@@ -219,15 +224,18 @@ type CampaignStat struct {
 
 // Phrase represents a search cluster (keyword phrase) linked to a campaign.
 type Phrase struct {
-	ID          uuid.UUID `json:"id"`
-	CampaignID  uuid.UUID `json:"campaign_id"`
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	WBClusterID int64     `json:"wb_cluster_id"`
-	Keyword     string    `json:"keyword"`
-	Count       *int      `json:"count,omitempty"`
-	CurrentBid  *int64    `json:"current_bid,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID  `json:"id"`
+	CampaignID  uuid.UUID  `json:"campaign_id"`
+	WorkspaceID uuid.UUID  `json:"workspace_id"`
+	ProductID   *uuid.UUID `json:"product_id,omitempty"`
+	WBProductID *int64     `json:"wb_product_id,omitempty"`
+	WBClusterID *int64     `json:"wb_cluster_id,omitempty"`
+	WBNormQuery string     `json:"wb_norm_query"`
+	Keyword     string     `json:"keyword"`
+	Count       *int       `json:"count,omitempty"`
+	CurrentBid  *int64     `json:"current_bid,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // PhraseStat represents daily statistics for a phrase.
@@ -238,6 +246,11 @@ type PhraseStat struct {
 	Impressions int64     `json:"impressions"`
 	Clicks      int64     `json:"clicks"`
 	Spend       int64     `json:"spend"`
+	Atbs        *int64    `json:"atbs,omitempty"`
+	Orders      *int64    `json:"orders,omitempty"`
+	CPC         *float64  `json:"cpc,omitempty"`
+	CPM         *float64  `json:"cpm,omitempty"`
+	AvgPos      *float64  `json:"avg_pos,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -585,12 +598,30 @@ type AdsMetricsSummary struct {
 	Canceled       int64   `json:"canceled"` // Технические отмены
 	CTR            float64 `json:"ctr"`
 	CPC            float64 `json:"cpc"`
+	CPM            float64 `json:"cpm"`
 	CPO            float64 `json:"cpo"`
 	ROAS           float64 `json:"roas"`
 	DRR            float64 `json:"drr"` // ДРР = Spend/Revenue × 100%
 	ConversionRate float64 `json:"conversion_rate"`
 	CartRate       float64 `json:"cart_rate"` // Корзина = Atbs/Clicks
+	AvgPosition    float64 `json:"avg_position"`
 	DataMode       string  `json:"data_mode"`
+}
+
+type ProductBusinessSummary struct {
+	Date            time.Time `json:"-"`
+	Orders          int64     `json:"orders"`
+	CanceledOrders  int64     `json:"canceled_orders"`
+	Sales           int64     `json:"sales"`
+	Returns         int64     `json:"returns"`
+	OrderedRevenue  int64     `json:"ordered_revenue"`
+	SoldRevenue     int64     `json:"sold_revenue"`
+	ReturnedRevenue int64     `json:"returned_revenue"`
+	BuyoutRate      float64   `json:"buyout_rate"`
+	ReturnRate      float64   `json:"return_rate"`
+	AdSpend         int64     `json:"ad_spend"`
+	AdToSoldRevenue float64   `json:"ad_to_sold_revenue"`
+	DataMode        string    `json:"data_mode"`
 }
 
 type AdsMetricsDelta struct {
@@ -649,34 +680,39 @@ type CabinetSummary struct {
 }
 
 type ProductAdsSummary struct {
-	ID               uuid.UUID         `json:"id"`
-	WorkspaceID      uuid.UUID         `json:"workspace_id"`
-	SellerCabinetID  uuid.UUID         `json:"seller_cabinet_id"`
-	IntegrationID    *string           `json:"integration_id,omitempty"`
-	IntegrationName  string            `json:"integration_name"`
-	CabinetName      string            `json:"cabinet_name"`
-	WBProductID      int64             `json:"wb_product_id"`
-	Title            string            `json:"title"`
-	Brand            *string           `json:"brand,omitempty"`
-	Category         *string           `json:"category,omitempty"`
-	ImageURL         *string           `json:"image_url,omitempty"`
-	Price            *int64            `json:"price,omitempty"`
-	CampaignsCount   int               `json:"campaigns_count"`
-	QueriesCount     int               `json:"queries_count"`
-	HealthStatus     string            `json:"health_status"`
-	HealthReason     *string           `json:"health_reason,omitempty"`
-	PrimaryAction    *string           `json:"primary_action,omitempty"`
-	FreshnessState   string            `json:"freshness_state"`
-	Performance      AdsMetricsSummary `json:"performance"`
-	PeriodCompare    *AdsPeriodCompare `json:"period_compare,omitempty"`
-	RelatedCampaigns []AdsEntityRef    `json:"related_campaigns,omitempty"`
-	TopQueries       []AdsEntityRef    `json:"top_queries,omitempty"`
-	WasteQueries     []AdsEntityRef    `json:"waste_queries,omitempty"`
-	WinningQueries   []AdsEntityRef    `json:"winning_queries,omitempty"`
-	Evidence         *SourceEvidence   `json:"evidence,omitempty"`
-	DataCoverageNote *string           `json:"data_coverage_note,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	ID               uuid.UUID              `json:"id"`
+	WorkspaceID      uuid.UUID              `json:"workspace_id"`
+	SellerCabinetID  uuid.UUID              `json:"seller_cabinet_id"`
+	IntegrationID    *string                `json:"integration_id,omitempty"`
+	IntegrationName  string                 `json:"integration_name"`
+	CabinetName      string                 `json:"cabinet_name"`
+	CampaignID       *uuid.UUID             `json:"campaign_id,omitempty"`
+	CampaignName     *string                `json:"campaign_name,omitempty"`
+	WBCampaignID     *int64                 `json:"wb_campaign_id,omitempty"`
+	RowKey           string                 `json:"row_key,omitempty"`
+	WBProductID      int64                  `json:"wb_product_id"`
+	Title            string                 `json:"title"`
+	Brand            *string                `json:"brand,omitempty"`
+	Category         *string                `json:"category,omitempty"`
+	ImageURL         *string                `json:"image_url,omitempty"`
+	Price            *int64                 `json:"price,omitempty"`
+	CampaignsCount   int                    `json:"campaigns_count"`
+	QueriesCount     int                    `json:"queries_count"`
+	HealthStatus     string                 `json:"health_status"`
+	HealthReason     *string                `json:"health_reason,omitempty"`
+	PrimaryAction    *string                `json:"primary_action,omitempty"`
+	FreshnessState   string                 `json:"freshness_state"`
+	Performance      AdsMetricsSummary      `json:"performance"`
+	Business         ProductBusinessSummary `json:"business"`
+	PeriodCompare    *AdsPeriodCompare      `json:"period_compare,omitempty"`
+	RelatedCampaigns []AdsEntityRef         `json:"related_campaigns,omitempty"`
+	TopQueries       []AdsEntityRef         `json:"top_queries,omitempty"`
+	WasteQueries     []AdsEntityRef         `json:"waste_queries,omitempty"`
+	WinningQueries   []AdsEntityRef         `json:"winning_queries,omitempty"`
+	Evidence         *SourceEvidence        `json:"evidence,omitempty"`
+	DataCoverageNote *string                `json:"data_coverage_note,omitempty"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
 type CampaignPerformanceSummary struct {
@@ -713,13 +749,17 @@ type QueryPerformanceSummary struct {
 	ID              uuid.UUID         `json:"id"`
 	WorkspaceID     uuid.UUID         `json:"workspace_id"`
 	CampaignID      uuid.UUID         `json:"campaign_id"`
+	ProductID       *uuid.UUID        `json:"product_id,omitempty"`
 	SellerCabinetID uuid.UUID         `json:"seller_cabinet_id"`
 	IntegrationID   *string           `json:"integration_id,omitempty"`
 	IntegrationName string            `json:"integration_name"`
 	CabinetName     string            `json:"cabinet_name"`
 	CampaignName    string            `json:"campaign_name"`
 	WBCampaignID    int64             `json:"wb_campaign_id"`
-	WBClusterID     int64             `json:"wb_cluster_id"`
+	ProductName     *string           `json:"product_name,omitempty"`
+	WBProductID     *int64            `json:"wb_product_id,omitempty"`
+	WBClusterID     *int64            `json:"wb_cluster_id,omitempty"`
+	WBNormQuery     string            `json:"wb_norm_query"`
 	Keyword         string            `json:"keyword"`
 	CurrentBid      *int64            `json:"current_bid,omitempty"`
 	ClusterSize     *int              `json:"cluster_size,omitempty"`
@@ -742,12 +782,29 @@ type AdsOverview struct {
 	LastAutoSync       *SellerCabinetAutoSyncSummary `json:"last_auto_sync,omitempty"`
 	PerformanceCompare *AdsPeriodCompare             `json:"performance_compare,omitempty"`
 	Evidence           *SourceEvidence               `json:"evidence,omitempty"`
+	DataStatus         AdsDataStatus                 `json:"data_status"`
 	Cabinets           []CabinetSummary              `json:"cabinets"`
 	Attention          []AttentionItem               `json:"attention"`
 	TopProducts        []ProductAdsSummary           `json:"top_products"`
 	TopCampaigns       []CampaignPerformanceSummary  `json:"top_campaigns"`
 	TopQueries         []QueryPerformanceSummary     `json:"top_queries"`
 	Totals             AdsOverviewTotals             `json:"totals"`
+}
+
+type AdsDataStatus struct {
+	State                    string     `json:"state"`
+	Reason                   string     `json:"reason"`
+	FreshnessState           string     `json:"freshness_state"`
+	LastSyncedAt             *time.Time `json:"last_synced_at,omitempty"`
+	HasConnectedCabinet      bool       `json:"has_connected_cabinet"`
+	HasCampaigns             bool       `json:"has_campaigns"`
+	HasCurrentStats          bool       `json:"has_current_stats"`
+	CampaignsWithStats       int        `json:"campaigns_with_stats"`
+	CampaignsTotal           int        `json:"campaigns_total"`
+	ProductsWithBusinessData int        `json:"products_with_business_data"`
+	ProductsTotal            int        `json:"products_total"`
+	QueriesWithStats         int        `json:"queries_with_stats"`
+	QueriesTotal             int        `json:"queries_total"`
 }
 
 type AdsOverviewTotals struct {

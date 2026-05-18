@@ -212,13 +212,26 @@ func (s *AdsReadService) buildCampaignSummaries(data *adsWorkspaceData, dateFrom
 }
 
 func (s *AdsReadService) buildQuerySummaries(data *adsWorkspaceData, dateFrom, dateTo time.Time, filter QuerySummaryFilter) []domain.QueryPerformanceSummary {
-	result := make([]domain.QueryPerformanceSummary, 0, len(data.phrases))
+	result := make([]domain.QueryPerformanceSummary, 0, len(data.phraseStatsByID))
 	campaignByID := make(map[uuid.UUID]domain.Campaign, len(data.campaigns))
 	for _, campaign := range data.campaigns {
 		campaignByID[campaign.ID] = campaign
 	}
+	productByID := data.productByIDMap()
+	phraseByID := make(map[uuid.UUID]domain.Phrase, len(data.phrases))
 
 	for _, phrase := range data.phrases {
+		phraseByID[phrase.ID] = phrase
+	}
+
+	for phraseID, stats := range data.phraseStatsByID {
+		if len(stats) == 0 {
+			continue
+		}
+		phrase, ok := phraseByID[phraseID]
+		if !ok {
+			continue
+		}
 		campaign, ok := campaignByID[phrase.CampaignID]
 		if !ok {
 			continue
@@ -233,12 +246,17 @@ func (s *AdsReadService) buildQuerySummaries(data *adsWorkspaceData, dateFrom, d
 			continue
 		}
 
-		relatedProducts := data.lookupCampaignProducts(campaign.ID)
-		if filter.ProductID != nil && !containsProductID(relatedProducts, *filter.ProductID) {
-			continue
+		relatedProducts := productsForPhrase(productByID, phrase)
+		if filter.ProductID != nil {
+			if phrase.ProductID == nil || *phrase.ProductID != *filter.ProductID {
+				continue
+			}
 		}
 
 		summary := s.buildQuerySummary(data, phrase, campaign, relatedProducts, dateFrom, dateTo)
+		if !isStatsBackedNormQuerySummary(summary) {
+			continue
+		}
 		if !matchesQueryView(filter.View, summary) {
 			continue
 		}
@@ -351,6 +369,7 @@ func (s *AdsReadService) querySummariesForPhrases(data *adsWorkspaceData, phrase
 	for _, campaign := range data.campaigns {
 		campaignByID[campaign.ID] = campaign
 	}
+	productByID := data.productByIDMap()
 
 	result := make([]domain.QueryPerformanceSummary, 0, len(phrases))
 	for _, phrase := range dedupePhrases(phrases) {
@@ -358,11 +377,82 @@ func (s *AdsReadService) querySummariesForPhrases(data *adsWorkspaceData, phrase
 		if !ok {
 			continue
 		}
-		result = append(result, s.buildQuerySummary(data, phrase, campaign, data.lookupCampaignProducts(campaign.ID), dateFrom, dateTo))
+		summary := s.buildQuerySummary(data, phrase, campaign, productsForPhrase(productByID, phrase), dateFrom, dateTo)
+		if !isStatsBackedNormQuerySummary(summary) {
+			continue
+		}
+		result = append(result, summary)
 	}
 
 	sortQuerySummaries(result)
 	return result
+}
+
+func isStatsBackedNormQuerySummary(summary domain.QueryPerformanceSummary) bool {
+	return summary.Performance.DataMode != "unavailable" &&
+		summary.WBProductID != nil &&
+		strings.TrimSpace(summary.WBNormQuery) != ""
+}
+
+func (s *AdsReadService) logNormQueryReadRows(rows []domain.QueryPerformanceSummary) {
+	withNMID := 0
+	withCampaign := 0
+	withProduct := 0
+	withStats := 0
+	for _, row := range rows {
+		if row.WBProductID != nil {
+			withNMID++
+		}
+		if row.WBCampaignID != 0 && row.CampaignName != "" {
+			withCampaign++
+		}
+		if row.ProductID != nil || row.ProductName != nil {
+			withProduct++
+		}
+		if row.Performance.DataMode != "unavailable" {
+			withStats++
+		}
+	}
+	s.logger.Info().
+		Int("total", len(rows)).
+		Int("withNmId", withNMID).
+		Int("withCampaign", withCampaign).
+		Int("withProduct", withProduct).
+		Int("withStats", withStats).
+		Interface("sample", sampleQueryRows(rows, 5)).
+		Msg("[NQ READ] rows")
+}
+
+func sampleQueryRows(rows []domain.QueryPerformanceSummary, limit int) []map[string]interface{} {
+	if len(rows) < limit {
+		limit = len(rows)
+	}
+	sample := make([]map[string]interface{}, 0, limit)
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		var wbProductID interface{} = nil
+		if row.WBProductID != nil {
+			wbProductID = *row.WBProductID
+		}
+		var productName interface{} = nil
+		if row.ProductName != nil {
+			productName = *row.ProductName
+		}
+		sample = append(sample, map[string]interface{}{
+			"campaignId":   row.WBCampaignID,
+			"campaignName": row.CampaignName,
+			"nmId":         wbProductID,
+			"productName":  productName,
+			"normQuery":    row.WBNormQuery,
+			"views":        row.Performance.Impressions,
+			"clicks":       row.Performance.Clicks,
+			"spend":        row.Performance.Spend,
+			"atbs":         row.Performance.Atbs,
+			"orders":       row.Performance.Orders,
+			"dataMode":     row.Performance.DataMode,
+		})
+	}
+	return sample
 }
 
 func (s *AdsReadService) buildQuerySummary(data *adsWorkspaceData, phrase domain.Phrase, campaign domain.Campaign, relatedProducts []domain.Product, dateFrom, dateTo time.Time) domain.QueryPerformanceSummary {
@@ -373,18 +463,37 @@ func (s *AdsReadService) buildQuerySummary(data *adsWorkspaceData, phrase domain
 	periodCompare := buildPeriodCompare(metrics, previousMetrics)
 	signalCategory, healthStatus, healthReason, primaryAction := classifyQuerySignal(phrase, metrics)
 	priorityScore := scoreQueryPriority(signalCategory, metrics, periodCompare)
+	productID := phrase.ProductID
+	productName := (*string)(nil)
+	wbProductID := phrase.WBProductID
+	if len(relatedProducts) == 1 {
+		product := relatedProducts[0]
+		productName = &product.Title
+		if productID == nil {
+			v := product.ID
+			productID = &v
+		}
+		if wbProductID == nil {
+			v := product.WBProductID
+			wbProductID = &v
+		}
+	}
 
 	return domain.QueryPerformanceSummary{
 		ID:              phrase.ID,
 		WorkspaceID:     phrase.WorkspaceID,
 		CampaignID:      phrase.CampaignID,
+		ProductID:       productID,
 		SellerCabinetID: campaign.SellerCabinetID,
 		IntegrationID:   cabinet.ExternalIntegrationID,
 		IntegrationName: cabinet.Name,
 		CabinetName:     cabinet.Name,
 		CampaignName:    campaign.Name,
 		WBCampaignID:    campaign.WBCampaignID,
+		ProductName:     productName,
+		WBProductID:     wbProductID,
 		WBClusterID:     phrase.WBClusterID,
+		WBNormQuery:     phrase.WBNormQuery,
 		Keyword:         phrase.Keyword,
 		CurrentBid:      phrase.CurrentBid,
 		ClusterSize:     phrase.Count,
@@ -402,6 +511,17 @@ func (s *AdsReadService) buildQuerySummary(data *adsWorkspaceData, phrase domain
 		CreatedAt:       phrase.CreatedAt,
 		UpdatedAt:       phrase.UpdatedAt,
 	}
+}
+
+func productsForPhrase(productByID map[uuid.UUID]domain.Product, phrase domain.Phrase) []domain.Product {
+	if phrase.ProductID == nil {
+		return nil
+	}
+	product, ok := productByID[*phrase.ProductID]
+	if !ok {
+		return nil
+	}
+	return []domain.Product{product}
 }
 
 func (s *AdsReadService) aggregateProductMetrics(data *adsWorkspaceData, productID uuid.UUID, campaigns []domain.Campaign, dateFrom, dateTo time.Time) (domain.AdsMetricsSummary, *string) {

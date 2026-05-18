@@ -4,74 +4,77 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
-// UpdateBidRequest represents a bid update for a campaign.
-type UpdateBidRequest struct {
-	AdvertID int64 `json:"advertId"`
-	Type     int   `json:"type"`
-	CPM      int   `json:"cpm"`
-	Param    int   `json:"param"`
+// UpdateCampaignBidsRequest represents bid updates for product cards in campaigns.
+type UpdateCampaignBidsRequest struct {
+	Bids []CampaignBidGroup `json:"bids"`
 }
 
-// UpdateAuctionBidRequest represents a bid update for auction campaigns (type 9).
-type UpdateAuctionBidRequest struct {
-	AdvertID int64             `json:"advertId"`
-	Bids     []AuctionBidItem `json:"bids"`
+type CampaignBidGroup struct {
+	AdvertID int64       `json:"advert_id"`
+	NMBids   []NMBidItem `json:"nm_bids"`
 }
 
-// AuctionBidItem represents a single bid for an NM item in auction campaign.
-type AuctionBidItem struct {
-	NMID int64 `json:"nmId"`
-	Bid  int   `json:"bid"`
+type NMBidItem struct {
+	NMID       int64  `json:"nm_id"`
+	BidKopecks int    `json:"bid_kopecks"`
+	Placement  string `json:"placement"`
 }
 
 // UpdateCampaignBid sends a bid update to WB API.
-// For auction campaigns (type 9), uses PATCH /adv/v0/auction/bids.
-// For promotion campaigns, uses PATCH /adv/v0/bids.
+// WB API endpoint: PATCH /api/advert/v1/bids
 func (c *Client) UpdateCampaignBid(ctx context.Context, token string, wbCampaignID int64, campaignType int, nmID int64, placement string, newBid int) error {
-	if campaignType == 9 {
-		return c.updateAuctionBid(ctx, token, wbCampaignID, nmID, newBid)
-	}
-	return c.updatePromotionBid(ctx, token, wbCampaignID, campaignType, newBid, placement)
-}
+	_ = campaignType
 
-func (c *Client) updateAuctionBid(ctx context.Context, token string, wbCampaignID int64, nmID int64, newBid int) error {
-	payload := UpdateAuctionBidRequest{
-		AdvertID: wbCampaignID,
-		Bids: []AuctionBidItem{
-			{NMID: nmID, Bid: newBid},
+	nmIDs, err := c.resolveCampaignNMIDs(ctx, token, wbCampaignID, nmID)
+	if err != nil {
+		return err
+	}
+	if placement == "" {
+		placement = "search"
+	}
+
+	nmBids := make([]NMBidItem, 0, len(nmIDs))
+	for _, itemNMID := range nmIDs {
+		nmBids = append(nmBids, NMBidItem{
+			NMID:       itemNMID,
+			BidKopecks: newBid,
+			Placement:  placement,
+		})
+	}
+
+	payload := UpdateCampaignBidsRequest{
+		Bids: []CampaignBidGroup{
+			{AdvertID: wbCampaignID, NMBids: nmBids},
 		},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal auction bid request: %w", err)
+		return fmt.Errorf("marshal campaign bid request: %w", err)
 	}
 
-	_, _, err = c.doRequest(ctx, "PATCH", "/adv/v0/auction/bids", token, bytes.NewReader(body))
+	_, _, err = c.doRequest(ctx, "PATCH", "/api/advert/v1/bids", token, bytes.NewReader(body))
 	return err
 }
 
-func (c *Client) updatePromotionBid(ctx context.Context, token string, wbCampaignID int64, campaignType int, newBid int, placement string) error {
-	param := 6 // search
-	if placement == "recommendations" {
-		param = 8
+func (c *Client) resolveCampaignNMIDs(ctx context.Context, token string, wbCampaignID int64, nmID int64) ([]int64, error) {
+	if nmID != 0 {
+		return []int64{nmID}, nil
 	}
 
-	payload := UpdateBidRequest{
-		AdvertID: wbCampaignID,
-		Type:     campaignType,
-		CPM:      newBid,
-		Param:    param,
-	}
-	body, err := json.Marshal(payload)
+	campaigns, err := c.ListCampaigns(ctx, token)
 	if err != nil {
-		return fmt.Errorf("marshal promotion bid request: %w", err)
+		return nil, err
 	}
-
-	_, _, err = c.doRequest(ctx, "PATCH", "/adv/v0/bids", token, bytes.NewReader(body))
-	return err
+	for _, campaign := range campaigns {
+		if int64(campaign.AdvertID) == wbCampaignID && len(campaign.NMIDs) > 0 {
+			return campaign.NMIDs, nil
+		}
+	}
+	return nil, errors.New("campaign nm ids not found")
 }
 
 // StartCampaign starts a WB campaign.
@@ -97,26 +100,31 @@ func (c *Client) StopCampaign(ctx context.Context, token string, wbCampaignID in
 
 // SetClusterBids updates bids for search query clusters (normquery).
 type ClusterBidRequest struct {
-	AdvertID int64            `json:"id"`
-	Clusters []ClusterBidItem `json:"clusters"`
+	Bids []ClusterBidItem `json:"bids"`
 }
 
 type ClusterBidItem struct {
-	Query string `json:"query"`
-	Bid   int    `json:"bid"`
+	AdvertID  int64  `json:"advert_id,omitempty"`
+	NMID      int64  `json:"nm_id,omitempty"`
+	NormQuery string `json:"norm_query"`
+	Bid       int    `json:"bid"`
 }
 
 // SetClusterBids sets bids for specific search clusters.
 func (c *Client) SetClusterBids(ctx context.Context, token string, wbCampaignID int64, clusters []ClusterBidItem) error {
+	bids := make([]ClusterBidItem, 0, len(clusters))
+	for _, cluster := range clusters {
+		cluster.AdvertID = wbCampaignID
+		bids = append(bids, cluster)
+	}
 	payload := ClusterBidRequest{
-		AdvertID: wbCampaignID,
-		Clusters: clusters,
+		Bids: bids,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal cluster bid request: %w", err)
 	}
 
-	_, _, err = c.doRequest(ctx, "PATCH", "/adv/v0/normquery/set-bids", token, bytes.NewReader(body))
+	_, _, err = c.doRequest(ctx, "POST", "/adv/v0/normquery/bids", token, bytes.NewReader(body))
 	return err
 }

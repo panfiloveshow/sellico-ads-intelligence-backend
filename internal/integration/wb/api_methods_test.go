@@ -2,6 +2,8 @@ package wb
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,7 +62,7 @@ func TestGetCampaignStats_Success(t *testing.T) {
 		assert.Equal(t, "2025-01-01", r.URL.Query().Get("beginDate"))
 		assert.Equal(t, "2025-01-31", r.URL.Query().Get("endDate"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5,"orders":4,"shks":7,"sum_price":1250.4,"apps":[{"appType":1,"nms":[{"nmId":111,"name":"One","views":40,"clicks":4,"sum":20,"orders":1,"shks":1,"sum_price":300,"atbs":2}]},{"appType":32,"nms":[{"nmId":111,"name":"One","views":60,"clicks":6,"sum":30.5,"orders":3,"shks":6,"sum_price":950.4,"atbs":5}]}]}]}]`))
+		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5,"orders":4,"shks":7,"sum_price":1250.4}]}]`))
 	}))
 	defer server.Close()
 
@@ -77,15 +79,31 @@ func TestGetCampaignStats_Success(t *testing.T) {
 	assert.Equal(t, int64(7), *result[0].OrderedItems)
 	require.NotNil(t, result[0].Revenue)
 	assert.Equal(t, 1250.4, *result[0].Revenue)
-	require.Len(t, result[0].Products, 1)
+}
+
+func TestGetCampaignStats_ExtractsAndAggregatesAppProductStats(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v3/fullstats", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"advertId":1,"days":[{"date":"2025-01-01","views":100,"clicks":10,"sum":50.5,"apps":[{"nms":[{"nmId":111,"name":"Петля","views":10,"clicks":2,"sum":5.5,"orders":1,"sum_price":100}]},{"nms":[{"nmId":111,"name":"Петля","views":20,"clicks":3,"sum":7.5,"orders":2,"sum_price":200},{"nmId":222,"name":"Направляющая","views":5,"clicks":1,"sum":2.0}]}]}]}]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	result, err := client.GetCampaignStats(context.Background(), "token", []int{1}, "2025-01-01", "2025-01-31")
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Len(t, result[0].Products, 2)
 	assert.Equal(t, int64(111), result[0].Products[0].NmID)
-	assert.Equal(t, int64(100), result[0].Products[0].Views)
-	assert.Equal(t, int64(10), result[0].Products[0].Clicks)
-	assert.Equal(t, 50.5, result[0].Products[0].Sum)
-	require.NotNil(t, result[0].Products[0].SHKs)
-	assert.Equal(t, int64(7), *result[0].Products[0].SHKs)
-	require.NotNil(t, result[0].Products[0].SumPrice)
-	assert.Equal(t, 1250.4, *result[0].Products[0].SumPrice)
+	assert.Equal(t, int64(30), result[0].Products[0].Views)
+	assert.Equal(t, int64(5), result[0].Products[0].Clicks)
+	assert.Equal(t, 13.0, result[0].Products[0].Sum)
+	require.NotNil(t, result[0].Products[0].Orders)
+	assert.Equal(t, int64(3), *result[0].Products[0].Orders)
+	require.NotNil(t, result[0].Products[0].Revenue)
+	assert.Equal(t, 300.0, *result[0].Products[0].Revenue)
+	assert.Equal(t, int64(222), result[0].Products[1].NmID)
 }
 
 func TestGetCampaignStats_SplitsOnClient400(t *testing.T) {
@@ -108,6 +126,29 @@ func TestGetCampaignStats_SplitsOnClient400(t *testing.T) {
 	assert.Len(t, stats, 2)
 }
 
+func TestGetCampaignStats_ChunksCampaignIDsByFullstatsLimit(t *testing.T) {
+	var batches [][]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v3/fullstats", r.URL.Path)
+		batches = append(batches, strings.Split(r.URL.Query().Get("ids"), ","))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	campaignIDs := make([]int, 88)
+	for i := range campaignIDs {
+		campaignIDs[i] = i + 1
+	}
+	_, err := client.GetCampaignStats(context.Background(), "token", campaignIDs, "2025-01-01", "2025-01-31")
+
+	require.NoError(t, err)
+	require.Len(t, batches, 2)
+	assert.Len(t, batches[0], 50)
+	assert.Len(t, batches[1], 38)
+}
+
 func TestListSearchClusters_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -115,10 +156,10 @@ func TestListSearchClusters_Success(t *testing.T) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111}]}]}`))
-		case "/adv/v0/normquery/stats":
+		case "/adv/v1/normquery/stats":
 			assert.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"stats":[{"advert_id":42,"nm_id":111,"stats":[{"norm_query":"shoes","views":500,"clicks":25,"cpc":120}]}]}`))
+			w.Write([]byte(`{"items":[{"advertId":42,"nmId":111,"dailyStats":[{"date":"2025-05-06","stat":{"normQuery":"shoes","views":500,"clicks":25,"cpc":120}}]}]}`))
 		case "/adv/v0/normquery/get-bids":
 			assert.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
@@ -134,7 +175,8 @@ func TestListSearchClusters_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	assert.NotZero(t, result[0].ClusterID)
+	assert.Nil(t, result[0].ClusterID)
+	assert.Equal(t, "shoes", result[0].NormQuery)
 	assert.Equal(t, []string{"shoes"}, result[0].Keywords)
 	assert.Equal(t, 500, result[0].Count)
 	assert.Equal(t, int64(150), result[0].Bid)
@@ -147,10 +189,10 @@ func TestGetSearchClusterStats_Success(t *testing.T) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111}]}]}`))
-		case "/adv/v0/normquery/stats":
+		case "/adv/v1/normquery/stats":
 			assert.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"stats":[{"advert_id":42,"nm_id":111,"stats":[{"norm_query":"shoes","views":200,"clicks":20,"cpc":150}]}]}`))
+			w.Write([]byte(`{"items":[{"advertId":42,"nmId":111,"dailyStats":[{"date":"2025-05-06","stat":{"normQuery":"shoes","views":200,"clicks":20,"spend":30}}]}]}`))
 		case "/adv/v0/normquery/get-bids":
 			assert.Equal(t, http.MethodPost, r.Method)
 			w.WriteHeader(http.StatusOK)
@@ -171,12 +213,80 @@ func TestGetSearchClusterStats_Success(t *testing.T) {
 	assert.Equal(t, 30.0, result[0].Sum)
 }
 
+func TestGetSearchClusterStats_ParsesSnakeCaseDailyStats(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/advert/v2/adverts":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpc"},"nm_settings":[{"nm_id":111}]}]}`))
+		case "/adv/v1/normquery/stats":
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"items":[{"advert_id":42,"nm_id":111,"daily_stats":[{"date":"2025-05-06T00:00:00+03:00","app_type_stats":[{"app_type":1,"stats":[{"norm_query":"pouchman backpack","views":200,"clicks":20,"orders":3,"spend":30,"avg_pos":7.1}]}]}]}]}`))
+		case "/adv/v0/normquery/get-bids":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"bids":[{"advert_id":42,"nm_id":111,"bid":150,"norm_query":"pouchman backpack"}]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	result, err := client.GetSearchClusterStats(context.Background(), "token", 42)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "pouchman backpack", result[0].NormQuery)
+	assert.Equal(t, int64(200), result[0].Views)
+	assert.Equal(t, int64(20), result[0].Clicks)
+	assert.Equal(t, 30.0, result[0].Sum)
+}
+
+func TestGetSearchClusterStatsWithNMIDs_ChunksNormQueryStatsItems(t *testing.T) {
+	var batches []normQueryStatsRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/adv/v1/normquery/stats":
+			assert.Equal(t, http.MethodPost, r.Method)
+			var req normQueryStatsRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			batches = append(batches, req)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"items":[]}`))
+		case "/adv/v0/normquery/get-bids":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"bids":[]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	nmIDs := make([]int64, 101)
+	for i := range nmIDs {
+		nmIDs[i] = int64(1000 + i)
+	}
+	_, err := client.GetSearchClusterStatsWithNMIDs(context.Background(), "token", 42, nmIDs)
+
+	require.NoError(t, err)
+	require.Len(t, batches, 2)
+	require.Len(t, batches[0].Items, 100)
+	require.Len(t, batches[1].Items, 1)
+	assert.Equal(t, int64(42), batches[0].Items[0].AdvertID)
+	assert.Equal(t, int64(1000), batches[0].Items[0].NMID)
+	assert.Equal(t, int64(1100), batches[1].Items[0].NMID)
+}
+
 func TestGetRecommendedBids_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/recommended-bids", r.URL.Path)
-		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/advert/v0/bids/recommendations", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "1", r.URL.Query().Get("advertId"))
+		assert.Equal(t, "111", r.URL.Query().Get("nmId"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"nmId":111,"competitiveBid":500,"leadershipBid":800}]`))
+		w.Write([]byte(`{"advertId":1,"nmId":111,"base":{"competitiveBid":{"bidKopecks":50000},"leadersBid":{"bidKopecks":80000}}}`))
 	}))
 	defer server.Close()
 
@@ -185,25 +295,73 @@ func TestGetRecommendedBids_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	assert.Equal(t, int64(500), result[0].CompetitiveBid)
-	assert.Equal(t, int64(800), result[0].LeadershipBid)
+	assert.Equal(t, int64(50000), result[0].CompetitiveBid)
+	assert.Equal(t, int64(80000), result[0].LeadershipBid)
 }
 
-func TestGetCategoryConfig_Success(t *testing.T) {
+func TestSetClusterBids_UsesCurrentEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/config/categories", r.URL.Path)
+		assert.Equal(t, "/adv/v0/normquery/bids", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.JSONEq(t, `{"bids":[{"advert_id":42,"nm_id":111,"norm_query":"shoes","bid":150}]}`, readRequestBody(t, r))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":10,"name":"Electronics","cpmMin":50}]`))
+		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
 
 	client := newTestClient(server.URL)
-	result, err := client.GetCategoryConfig(context.Background(), "token")
+	err := client.SetClusterBids(context.Background(), "token", 42, []ClusterBidItem{
+		{NMID: 111, NormQuery: "shoes", Bid: 150},
+	})
 
 	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, "Electronics", result[0].Name)
-	assert.Equal(t, int64(50), result[0].CPMMin)
+}
+
+func TestUpdateCampaignBid_UsesCurrentEndpointWithExplicitNMID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/advert/v1/bids", r.URL.Path)
+		assert.Equal(t, http.MethodPatch, r.Method)
+		assert.JSONEq(t, `{"bids":[{"advert_id":42,"nm_bids":[{"nm_id":111,"bid_kopecks":250,"placement":"search"}]}]}`, readRequestBody(t, r))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.UpdateCampaignBid(context.Background(), "token", 42, 9, 111, "search", 250)
+
+	require.NoError(t, err)
+}
+
+func TestUpdateCampaignBid_ResolvesCampaignNMIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/advert/v2/adverts":
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"adverts":[{"advertId":42,"type":9,"status":9,"settings":{"name":"Auction Test","payment_type":"cpm"},"nm_settings":[{"nm_id":111},{"nm_id":222}]}]}`))
+		case "/api/advert/v1/bids":
+			assert.Equal(t, http.MethodPatch, r.Method)
+			assert.JSONEq(t, `{"bids":[{"advert_id":42,"nm_bids":[{"nm_id":111,"bid_kopecks":250,"placement":"recommendations"},{"nm_id":222,"bid_kopecks":250,"placement":"recommendations"}]}]}`, readRequestBody(t, r))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.UpdateCampaignBid(context.Background(), "token", 42, 9, 0, "recommendations", 250)
+
+	require.NoError(t, err)
+}
+
+func readRequestBody(t *testing.T, r *http.Request) string {
+	t.Helper()
+	body, err := io.ReadAll(r.Body)
+	require.NoError(t, err)
+	return string(body)
 }
 
 func TestListProducts_Success(t *testing.T) {

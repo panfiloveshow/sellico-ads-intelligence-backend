@@ -27,6 +27,7 @@ type WBSyncClient interface {
 	ListSearchClustersWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]wb.WBSearchClusterDTO, error)
 	GetSearchClusterStats(ctx context.Context, token string, campaignID int) ([]wb.WBSearchClusterStatDTO, error)
 	GetSearchClusterStatsWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]wb.WBSearchClusterStatDTO, error)
+	DebugNormQueryStats(ctx context.Context, token string, campaignID int, nmIDs []int64, dateFrom, dateTo string) (wb.WBNormQueryStatsDebug, error)
 	ListProducts(ctx context.Context, token string) ([]wb.WBProductDTO, error)
 }
 
@@ -490,20 +491,24 @@ func (s *SyncService) SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (S
 
 			phraseIDsByCluster := make(map[int64]uuid.UUID, len(clusters))
 			for _, clusterDTO := range clusters {
+				if clusterDTO.ClusterID == nil {
+					continue
+				}
 				phrase := wb.MapSearchClusterDTO(clusterDTO, uuidFromPgtype(campaign.ID), workspaceID)
 				row, upsertErr := s.queries.UpsertPhrase(ctx, sqlcgen.UpsertPhraseParams{
 					CampaignID:  uuidToPgtype(phrase.CampaignID),
 					WorkspaceID: uuidToPgtype(phrase.WorkspaceID),
-					WbClusterID: phrase.WBClusterID,
+					WbClusterID: int64PtrToPgInt8(phrase.WBClusterID),
+					WbNormQuery: phrase.WBNormQuery,
 					Keyword:     phrase.Keyword,
 					Count:       intPtrToPgInt4(phrase.Count),
 					CurrentBid:  int64PtrToPgInt8(phrase.CurrentBid),
 				})
 				if upsertErr != nil {
-					summary.addIssue("phrases.upsert", fmt.Sprintf("%d", clusterDTO.ClusterID), "failed to upsert phrase: %v", upsertErr)
+					summary.addIssue("phrases.upsert", fmt.Sprintf("%d", *clusterDTO.ClusterID), "failed to upsert phrase: %v", upsertErr)
 					continue
 				}
-				phraseIDsByCluster[clusterDTO.ClusterID] = uuidFromPgtype(row.ID)
+				phraseIDsByCluster[*clusterDTO.ClusterID] = uuidFromPgtype(row.ID)
 				summary.Phrases++
 			}
 
@@ -514,14 +519,17 @@ func (s *SyncService) SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (S
 			}
 
 			for _, statDTO := range stats {
-				phraseID, ok := phraseIDsByCluster[statDTO.ClusterID]
+				if statDTO.ClusterID == nil {
+					continue
+				}
+				phraseID, ok := phraseIDsByCluster[*statDTO.ClusterID]
 				if !ok {
 					summary.SkippedCampaign++
 					continue
 				}
 				stat, mapErr := wb.MapSearchClusterStatDTO(statDTO, phraseID)
 				if mapErr != nil {
-					summary.addIssue("phrase_stats.map", fmt.Sprintf("%d", statDTO.ClusterID), "map phrase stat: %v", mapErr)
+					summary.addIssue("phrase_stats.map", fmt.Sprintf("%d", *statDTO.ClusterID), "map phrase stat: %v", mapErr)
 					continue
 				}
 				if _, upsertErr := s.queries.UpsertPhraseStat(ctx, sqlcgen.UpsertPhraseStatParams{
@@ -646,6 +654,13 @@ func int64PtrToPgInt8(value *int64) pgtype.Int8 {
 	return pgtype.Int8{Int64: *value, Valid: true}
 }
 
+func float64PtrToPgFloat8(value *float64) pgtype.Float8 {
+	if value == nil {
+		return pgtype.Float8{}
+	}
+	return pgtype.Float8{Float64: *value, Valid: true}
+}
+
 func intPtrToPgInt4(value *int) pgtype.Int4 {
 	if value == nil {
 		return pgtype.Int4{}
@@ -658,6 +673,61 @@ func int32PtrToPgInt4(value *int) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: int32(*value), Valid: true}
+}
+
+func phraseIdentityKey(nmID int64, normQuery string) string {
+	return fmt.Sprintf("%d:%s", nmID, strings.TrimSpace(normQuery))
+}
+
+func (s *SyncService) upsertPhraseFromNormQueryStat(ctx context.Context, workspaceID, cabinetID, campaignID uuid.UUID, wbCampaignID int, statDTO wb.WBSearchClusterStatDTO, summary *SyncSummary) (uuid.UUID, bool) {
+	normQuery := strings.TrimSpace(statDTO.NormQuery)
+	if statDTO.NmID <= 0 {
+		summary.addIssue("phrases.identity", fmt.Sprintf("%d", wbCampaignID), "missing nmId for norm query %q", normQuery)
+		return uuid.Nil, false
+	}
+	if normQuery == "" {
+		summary.addIssue("phrases.identity", fmt.Sprintf("%d", wbCampaignID), "missing norm query for nmId %d", statDTO.NmID)
+		return uuid.Nil, false
+	}
+
+	productRow, productErr := s.queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{
+		WorkspaceID:     uuidToPgtype(workspaceID),
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		WbProductID:     statDTO.NmID,
+		Title:           "",
+		Brand:           pgtype.Text{},
+		Category:        pgtype.Text{},
+		ImageUrl:        pgtype.Text{},
+		Price:           pgtype.Int8{},
+	})
+	if productErr != nil {
+		summary.addIssue("phrases.product", fmt.Sprintf("%d", statDTO.NmID), "upsert product: %v", productErr)
+		return uuid.Nil, false
+	}
+
+	count := int(statDTO.Views)
+	if count == 0 {
+		count = int(statDTO.Clicks)
+	}
+	productID := uuidFromPgtype(productRow.ID)
+	wbProductID := statDTO.NmID
+	row, upsertErr := s.queries.UpsertPhrase(ctx, sqlcgen.UpsertPhraseParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		CampaignID:  uuidToPgtype(campaignID),
+		ProductID:   uuidToPgtypePtr(&productID),
+		WbProductID: int64PtrToPgInt8(&wbProductID),
+		WbClusterID: pgtype.Int8{},
+		WbNormQuery: normQuery,
+		Keyword:     normQuery,
+		CurrentBid:  pgtype.Int8{},
+		Count:       intPtrToPgInt4(&count),
+	})
+	if upsertErr != nil {
+		summary.addIssue("phrases.upsert", normQuery, "failed to upsert phrase: %v", upsertErr)
+		return uuid.Nil, false
+	}
+	summary.Phrases++
+	return uuidFromPgtype(row.ID), true
 }
 
 func stringPtrToPgText(value *string) pgtype.Text {
@@ -770,8 +840,7 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 
 	summary := SyncSummary{Cabinets: 1}
 	for _, campaign := range campaigns {
-		// Skip non-active campaigns to avoid rate limits
-		if campaign.Status != "active" && campaign.Status != "paused" {
+		if campaign.Status != "active" && campaign.Status != "paused" && campaign.Status != "completed" {
 			continue
 		}
 		wbCampaignID := int(campaign.WbCampaignID)
@@ -781,49 +850,29 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 			continue // No products linked — skip
 		}
 
-		// Rate-limit delay between campaigns (normquery API shares fullstats limit)
-		if summary.Phrases > 0 {
-			if err := sleepWithContext(ctx, time.Second); err != nil {
+		if summary.PhraseStats > 0 {
+			if err := sleepWithContext(ctx, 7*time.Second); err != nil {
 				return summary, err
 			}
 		}
 
-		clusters, fetchErr := s.wbClient.ListSearchClustersWithNMIDs(ctx, token, wbCampaignID, nmIDs)
-		if fetchErr != nil {
-			summary.addIssue("phrases.fetch", fmt.Sprintf("%d", wbCampaignID), "fetch: %v", fetchErr)
-			continue
-		}
-
-		phraseIDsByCluster := make(map[int64]uuid.UUID, len(clusters))
-		for _, clusterDTO := range clusters {
-			// FIX: correct argument order — (dto, campaignID, workspaceID)
-			phrase := wb.MapSearchClusterDTO(clusterDTO, campaignID, workspaceID)
-			row, upsertErr := s.queries.UpsertPhrase(ctx, sqlcgen.UpsertPhraseParams{
-				WorkspaceID: uuidToPgtype(workspaceID),
-				CampaignID:  uuidToPgtype(campaignID),
-				WbClusterID: phrase.WBClusterID,
-				Keyword:     phrase.Keyword,
-				CurrentBid:  int64PtrToPgInt8(phrase.CurrentBid),
-				Count:       int32PtrToPgInt4(phrase.Count),
-			})
-			if upsertErr != nil {
-				s.logger.Warn().Err(upsertErr).Int64("cluster_id", clusterDTO.ClusterID).Msg("upsert phrase failed")
-				continue
-			}
-			phraseIDsByCluster[clusterDTO.ClusterID] = uuidFromPgtype(row.ID)
-			summary.Phrases++
-		}
-
-		// Sync phrase stats — uses WithNMIDs to avoid extra ListCampaigns call
 		clusterStats, statsErr := s.wbClient.GetSearchClusterStatsWithNMIDs(ctx, token, wbCampaignID, nmIDs)
 		if statsErr != nil {
 			summary.addIssue("phrase_stats.fetch", fmt.Sprintf("%d", wbCampaignID), "stats: %v", statsErr)
 			continue
 		}
+		phraseIDsByNormQuery := make(map[string]uuid.UUID, len(clusterStats))
+		savedRowsCount := 0
 		for _, statDTO := range clusterStats {
-			phraseID, ok := phraseIDsByCluster[statDTO.ClusterID]
+			key := phraseIdentityKey(statDTO.NmID, statDTO.NormQuery)
+			phraseID, ok := phraseIDsByNormQuery[key]
 			if !ok {
-				continue
+				var upserted bool
+				phraseID, upserted = s.upsertPhraseFromNormQueryStat(ctx, workspaceID, cabinetID, campaignID, wbCampaignID, statDTO, &summary)
+				if !upserted {
+					continue
+				}
+				phraseIDsByNormQuery[key] = phraseID
 			}
 			stat, mapErr := wb.MapSearchClusterStatDTO(statDTO, phraseID)
 			if mapErr != nil {
@@ -835,11 +884,21 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 				Impressions: stat.Impressions,
 				Clicks:      stat.Clicks,
 				Spend:       stat.Spend,
+				Atbs:        int64PtrToPgInt8(stat.Atbs),
+				Orders:      int64PtrToPgInt8(stat.Orders),
+				Cpc:         float64PtrToPgFloat8(stat.CPC),
+				Cpm:         float64PtrToPgFloat8(stat.CPM),
+				AvgPos:      float64PtrToPgFloat8(stat.AvgPos),
 			}); upsertErr != nil {
 				continue
 			}
 			summary.PhraseStats++
+			savedRowsCount++
 		}
+		s.logger.Info().
+			Int("advertId", wbCampaignID).
+			Int("savedRowsCount", savedRowsCount).
+			Msg("[NQ] saved rows")
 	}
 
 	s.logger.Info().Int("phrases", summary.Phrases).Int("phrase_stats", summary.PhraseStats).Msg("[sync] phrases+stats done for cabinet")

@@ -130,18 +130,20 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 
 	// Assemble data structure
 	data := &adsWorkspaceData{
-		cabinets:           make(map[uuid.UUID]domain.SellerCabinet, len(cabinetRows)),
-		campaigns:          make([]domain.Campaign, 0, len(campaignRows)),
-		products:           make([]domain.Product, 0, len(productRows)),
-		phrases:            make([]domain.Phrase, 0, len(phraseRows)),
-		campaignStatsByID:  make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
-		productStatsByID:   make(map[uuid.UUID][]domain.ProductStat, len(productRows)),
-		phraseStatsByID:    make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
-		campaignProductIDs: make(map[uuid.UUID][]uuid.UUID),
-		productCampaignIDs: make(map[uuid.UUID][]uuid.UUID),
-		campaignPhrases:    make(map[uuid.UUID][]domain.Phrase),
-		lastAutoSync:       lastAutoSync,
-		extensionEvidence:  &workspaceExtensionEvidence{},
+		cabinets:            make(map[uuid.UUID]domain.SellerCabinet, len(cabinetRows)),
+		campaigns:           make([]domain.Campaign, 0, len(campaignRows)),
+		products:            make([]domain.Product, 0, len(productRows)),
+		phrases:             make([]domain.Phrase, 0, len(phraseRows)),
+		campaignStatsByID:   make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
+		productStatsByID:    make(map[uuid.UUID][]domain.ProductStat, len(productRows)),
+		productStatsByLink:  make(map[productCampaignKey][]domain.ProductStat, len(productStatRows)),
+		productBusinessByID: make(map[uuid.UUID][]domain.ProductBusinessSummary),
+		phraseStatsByID:     make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
+		campaignProductIDs:  make(map[uuid.UUID][]uuid.UUID),
+		productCampaignIDs:  make(map[uuid.UUID][]uuid.UUID),
+		campaignPhrases:     make(map[uuid.UUID][]domain.Phrase),
+		lastAutoSync:        lastAutoSync,
+		extensionEvidence:   &workspaceExtensionEvidence{},
 	}
 	if extensionEvidence != nil {
 		data.extensionEvidence = extensionEvidence
@@ -170,6 +172,8 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	for _, row := range productStatRows {
 		stat := productStatFromSqlc(row)
 		data.productStatsByID[stat.ProductID] = append(data.productStatsByID[stat.ProductID], stat)
+		key := productCampaignKey{productID: stat.ProductID, campaignID: stat.CampaignID}
+		data.productStatsByLink[key] = append(data.productStatsByLink[key], stat)
 	}
 	for _, row := range phraseStatRows {
 		stat := phraseStatFromSqlc(row)

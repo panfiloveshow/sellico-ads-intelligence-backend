@@ -25,6 +25,7 @@ type adsReadServicer interface {
 	GetCampaignSummary(ctx context.Context, workspaceID, campaignID uuid.UUID, dateFrom, dateTo time.Time) (*domain.CampaignPerformanceSummary, error)
 	ListQuerySummaries(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter service.QuerySummaryFilter) ([]domain.QueryPerformanceSummary, error)
 	GetQuerySummary(ctx context.Context, workspaceID, phraseID uuid.UUID, dateFrom, dateTo time.Time) (*domain.QueryPerformanceSummary, error)
+	DebugNormQuery(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter service.QuerySummaryFilter) (*service.NormQueryDebugReport, error)
 }
 
 type AdsReadHandler struct {
@@ -256,6 +257,31 @@ func (h *AdsReadHandler) GetQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dto.WriteJSON(w, http.StatusOK, dto.QueryPerformanceSummaryFromDomain(*query))
+}
+
+func (h *AdsReadHandler) DebugNormQuery(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	sellerCabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid seller_cabinet_id")
+		return
+	}
+
+	dateFrom, dateTo := parseDateRange(r)
+	report, err := h.svc.DebugNormQuery(r.Context(), workspaceID, dateFrom, dateTo, service.QuerySummaryFilter{
+		SellerCabinetID: sellerCabinetID,
+	})
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	dto.WriteJSON(w, http.StatusOK, report)
 }
 
 func paginateSlice[T any](items []T, perPage, offset int) []T {
