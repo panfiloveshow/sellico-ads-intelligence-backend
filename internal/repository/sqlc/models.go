@@ -31,18 +31,24 @@ type BidSnapshot struct {
 }
 
 type Campaign struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
-	WbCampaignID    int64              `json:"wb_campaign_id"`
-	Name            string             `json:"name"`
-	Status          string             `json:"status"`
-	CampaignType    int32              `json:"campaign_type"`
-	BidType         string             `json:"bid_type"`
-	PaymentType     string             `json:"payment_type"`
-	DailyBudget     pgtype.Int8        `json:"daily_budget"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                       pgtype.UUID        `json:"id"`
+	WorkspaceID              pgtype.UUID        `json:"workspace_id"`
+	SellerCabinetID          pgtype.UUID        `json:"seller_cabinet_id"`
+	WbCampaignID             int64              `json:"wb_campaign_id"`
+	Name                     string             `json:"name"`
+	Status                   string             `json:"status"`
+	CampaignType             int32              `json:"campaign_type"`
+	BidType                  string             `json:"bid_type"`
+	PaymentType              string             `json:"payment_type"`
+	DailyBudget              pgtype.Int8        `json:"daily_budget"`
+	PlacementSearch          pgtype.Bool        `json:"placement_search"`
+	PlacementRecommendations pgtype.Bool        `json:"placement_recommendations"`
+	WbCreatedAt              pgtype.Timestamptz `json:"wb_created_at"`
+	WbStartedAt              pgtype.Timestamptz `json:"wb_started_at"`
+	WbUpdatedAt              pgtype.Timestamptz `json:"wb_updated_at"`
+	WbDeletedAt              pgtype.Timestamptz `json:"wb_deleted_at"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CampaignStat struct {
@@ -56,6 +62,54 @@ type CampaignStat struct {
 	Revenue     pgtype.Int8        `json:"revenue"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Atbs        pgtype.Int8        `json:"atbs"`
+	Canceled    pgtype.Int8        `json:"canceled"`
+	Shks        pgtype.Int8        `json:"shks"`
+}
+
+type Competitor struct {
+	ID                     pgtype.UUID        `json:"id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	ProductID              pgtype.UUID        `json:"product_id"`
+	CompetitorNmID         int64              `json:"competitor_nm_id"`
+	CompetitorTitle        string             `json:"competitor_title"`
+	CompetitorBrand        pgtype.Text        `json:"competitor_brand"`
+	CompetitorPrice        pgtype.Int8        `json:"competitor_price"`
+	CompetitorRating       pgtype.Float8      `json:"competitor_rating"`
+	CompetitorReviewsCount pgtype.Int4        `json:"competitor_reviews_count"`
+	CompetitorImageUrl     pgtype.Text        `json:"competitor_image_url"`
+	Query                  string             `json:"query"`
+	Region                 pgtype.Text        `json:"region"`
+	FirstSeenAt            pgtype.Timestamptz `json:"first_seen_at"`
+	LastSeenAt             pgtype.Timestamptz `json:"last_seen_at"`
+	LastPosition           pgtype.Int4        `json:"last_position"`
+	OurPosition            pgtype.Int4        `json:"our_position"`
+	Source                 string             `json:"source"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CompetitorSnapshot struct {
+	ID           pgtype.UUID        `json:"id"`
+	CompetitorID pgtype.UUID        `json:"competitor_id"`
+	Price        pgtype.Int8        `json:"price"`
+	Rating       pgtype.Float8      `json:"rating"`
+	ReviewsCount pgtype.Int4        `json:"reviews_count"`
+	Position     pgtype.Int4        `json:"position"`
+	OurPosition  pgtype.Int4        `json:"our_position"`
+	CapturedAt   pgtype.Timestamptz `json:"captured_at"`
+}
+
+type DeliveryDatum struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	ProductID    pgtype.UUID        `json:"product_id"`
+	Region       string             `json:"region"`
+	Warehouse    pgtype.Text        `json:"warehouse"`
+	DeliveryDays pgtype.Int4        `json:"delivery_days"`
+	DeliveryCost pgtype.Int8        `json:"delivery_cost"`
+	InStock      pgtype.Bool        `json:"in_stock"`
+	CapturedAt   pgtype.Timestamptz `json:"captured_at"`
 }
 
 type Export struct {
@@ -210,11 +264,54 @@ type JobRun struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type Keyword struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	Query          string             `json:"query"`
+	Normalized     string             `json:"normalized"`
+	Frequency      pgtype.Int4        `json:"frequency"`
+	FrequencyTrend pgtype.Text        `json:"frequency_trend"`
+	ClusterID      pgtype.UUID        `json:"cluster_id"`
+	Source         string             `json:"source"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type KeywordCluster struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	Name           string             `json:"name"`
+	MainKeyword    string             `json:"main_keyword"`
+	KeywordCount   pgtype.Int4        `json:"keyword_count"`
+	TotalFrequency pgtype.Int4        `json:"total_frequency"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type KeywordFrequencyHistory struct {
+	ID        pgtype.UUID        `json:"id"`
+	KeywordID pgtype.UUID        `json:"keyword_id"`
+	Frequency int32              `json:"frequency"`
+	CheckedAt pgtype.Timestamptz `json:"checked_at"`
+}
+
+type KeywordRelation struct {
+	ID           pgtype.UUID        `json:"id"`
+	KeywordID    pgtype.UUID        `json:"keyword_id"`
+	RelatedID    pgtype.UUID        `json:"related_id"`
+	RelationType string             `json:"relation_type"`
+	Strength     pgtype.Float8      `json:"strength"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Phrase struct {
 	ID          pgtype.UUID        `json:"id"`
 	CampaignID  pgtype.UUID        `json:"campaign_id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	WbClusterID int64              `json:"wb_cluster_id"`
+	ProductID   pgtype.UUID        `json:"product_id"`
+	WbProductID pgtype.Int8        `json:"wb_product_id"`
+	WbClusterID pgtype.Int8        `json:"wb_cluster_id"`
+	WbNormQuery string             `json:"wb_norm_query"`
 	Keyword     string             `json:"keyword"`
 	Count       pgtype.Int4        `json:"count"`
 	CurrentBid  pgtype.Int8        `json:"current_bid"`
@@ -229,6 +326,11 @@ type PhraseStat struct {
 	Impressions int64              `json:"impressions"`
 	Clicks      int64              `json:"clicks"`
 	Spend       int64              `json:"spend"`
+	Atbs        pgtype.Int8        `json:"atbs"`
+	Orders      pgtype.Int8        `json:"orders"`
+	Cpc         pgtype.Float8      `json:"cpc"`
+	Cpm         pgtype.Float8      `json:"cpm"`
+	AvgPos      pgtype.Float8      `json:"avg_pos"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
@@ -260,17 +362,42 @@ type PositionTrackingTarget struct {
 }
 
 type Product struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
-	WbProductID     int64              `json:"wb_product_id"`
-	Title           string             `json:"title"`
-	Brand           pgtype.Text        `json:"brand"`
-	Category        pgtype.Text        `json:"category"`
-	ImageUrl        pgtype.Text        `json:"image_url"`
-	Price           pgtype.Int8        `json:"price"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	SellerCabinetID     pgtype.UUID        `json:"seller_cabinet_id"`
+	WbProductID         int64              `json:"wb_product_id"`
+	Title               string             `json:"title"`
+	Brand               pgtype.Text        `json:"brand"`
+	Category            pgtype.Text        `json:"category"`
+	ImageUrl            pgtype.Text        `json:"image_url"`
+	Price               pgtype.Int8        `json:"price"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	CurrentBidSearch    pgtype.Int4        `json:"current_bid_search"`
+	CurrentBidRecommend pgtype.Int4        `json:"current_bid_recommend"`
+	MinBidSearch        pgtype.Int4        `json:"min_bid_search"`
+	MinBidRecommend     pgtype.Int4        `json:"min_bid_recommend"`
+	CompetitiveBid      pgtype.Int4        `json:"competitive_bid"`
+	Rating              pgtype.Float8      `json:"rating"`
+	ReviewsCount        pgtype.Int4        `json:"reviews_count"`
+	StockTotal          pgtype.Int4        `json:"stock_total"`
+	ContentHash         pgtype.Text        `json:"content_hash"`
+	LastEventAt         pgtype.Timestamptz `json:"last_event_at"`
+}
+
+type ProductSnapshot struct {
+	ID           pgtype.UUID        `json:"id"`
+	ProductID    pgtype.UUID        `json:"product_id"`
+	Title        pgtype.Text        `json:"title"`
+	Brand        pgtype.Text        `json:"brand"`
+	Category     pgtype.Text        `json:"category"`
+	Price        pgtype.Int8        `json:"price"`
+	Rating       pgtype.Float8      `json:"rating"`
+	ReviewsCount pgtype.Int4        `json:"reviews_count"`
+	StockTotal   pgtype.Int4        `json:"stock_total"`
+	ImageUrl     pgtype.Text        `json:"image_url"`
+	ContentHash  pgtype.Text        `json:"content_hash"`
+	CapturedAt   pgtype.Timestamptz `json:"captured_at"`
 }
 
 type Recommendation struct {
@@ -300,6 +427,21 @@ type RefreshToken struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type RegionalPositionAggregate struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	ProductID     pgtype.UUID        `json:"product_id"`
+	Query         string             `json:"query"`
+	Region        string             `json:"region"`
+	AvgPosition   float64            `json:"avg_position"`
+	BestPosition  pgtype.Int4        `json:"best_position"`
+	WorstPosition pgtype.Int4        `json:"worst_position"`
+	CheckCount    int32              `json:"check_count"`
+	PeriodStart   pgtype.Date        `json:"period_start"`
+	PeriodEnd     pgtype.Date        `json:"period_end"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type SellerCabinet struct {
 	ID                    pgtype.UUID        `json:"id"`
 	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
@@ -316,6 +458,21 @@ type SellerCabinet struct {
 	LastSellicoSyncAt     pgtype.Timestamptz `json:"last_sellico_sync_at"`
 }
 
+type SeoAnalysis struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	ProductID         pgtype.UUID        `json:"product_id"`
+	TitleScore        pgtype.Int4        `json:"title_score"`
+	DescriptionScore  pgtype.Int4        `json:"description_score"`
+	KeywordsScore     pgtype.Int4        `json:"keywords_score"`
+	OverallScore      pgtype.Int4        `json:"overall_score"`
+	TitleIssues       []byte             `json:"title_issues"`
+	DescriptionIssues []byte             `json:"description_issues"`
+	KeywordCoverage   []byte             `json:"keyword_coverage"`
+	Recommendations   []byte             `json:"recommendations"`
+	AnalyzedAt        pgtype.Timestamptz `json:"analyzed_at"`
+}
+
 type SerpResultItem struct {
 	ID           pgtype.UUID        `json:"id"`
 	SnapshotID   pgtype.UUID        `json:"snapshot_id"`
@@ -326,6 +483,8 @@ type SerpResultItem struct {
 	Rating       pgtype.Numeric     `json:"rating"`
 	ReviewsCount pgtype.Int4        `json:"reviews_count"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	IsPromoted   pgtype.Bool        `json:"is_promoted"`
+	PromoType    pgtype.Text        `json:"promo_type"`
 }
 
 type SerpSnapshot struct {
@@ -349,6 +508,17 @@ type User struct {
 	AuthSource     string             `json:"auth_source"`
 }
 
+type WarehouseAnalytic struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	WarehouseName    string             `json:"warehouse_name"`
+	Region           string             `json:"region"`
+	ProductsCount    pgtype.Int4        `json:"products_count"`
+	AvgDeliveryDays  pgtype.Float8      `json:"avg_delivery_days"`
+	StockCoveragePct pgtype.Float8      `json:"stock_coverage_pct"`
+	CapturedAt       pgtype.Timestamptz `json:"captured_at"`
+}
+
 type Workspace struct {
 	ID                  pgtype.UUID        `json:"id"`
 	Name                string             `json:"name"`
@@ -358,6 +528,12 @@ type Workspace struct {
 	DeletedAt           pgtype.Timestamptz `json:"deleted_at"`
 	ExternalWorkspaceID pgtype.Text        `json:"external_workspace_id"`
 	Source              string             `json:"source"`
+	// Per-workspace settings: recommendation_thresholds, notifications (telegram bot token / chat id), etc.
+	Settings []byte `json:"settings"`
+	// AES-256-GCM encrypted Sellico user token for background integration refresh
+	EncryptedSellicoToken pgtype.Text `json:"encrypted_sellico_token"`
+	// When the cached Sellico token was last updated
+	SellicoTokenUpdatedAt pgtype.Timestamptz `json:"sellico_token_updated_at"`
 }
 
 type WorkspaceMember struct {

@@ -340,7 +340,8 @@ func (g *ExportGenerator) buildRows(ctx context.Context, exportTask *domain.Expo
 				phrase.ID.String(),
 				phrase.CampaignID.String(),
 				phrase.WorkspaceID.String(),
-				fmt.Sprintf("%d", phrase.WBClusterID),
+				int64PtrToString(phrase.WBClusterID),
+				phrase.WBNormQuery,
 				phrase.Keyword,
 				intPtrToString(phrase.Count),
 				int64PtrToString(phrase.CurrentBid),
@@ -348,7 +349,7 @@ func (g *ExportGenerator) buildRows(ctx context.Context, exportTask *domain.Expo
 				phrase.UpdatedAt.UTC().Format(time.RFC3339),
 			}
 		}
-		return []string{"id", "campaign_id", "workspace_id", "wb_cluster_id", "keyword", "count", "current_bid", "created_at", "updated_at"}, result, nil
+		return []string{"id", "campaign_id", "workspace_id", "wb_cluster_id", "wb_norm_query", "keyword", "count", "current_bid", "created_at", "updated_at"}, result, nil
 	case "phrase_stats":
 		rows, err := g.queries.ListPhraseStatsByWorkspace(ctx, sqlcgen.ListPhraseStatsByWorkspaceParams{
 			WorkspaceID: uuidToPgtype(exportTask.WorkspaceID),

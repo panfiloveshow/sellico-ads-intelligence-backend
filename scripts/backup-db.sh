@@ -22,32 +22,86 @@
 # Retention:
 #   BACKUP_RETAIN_DAYS=7    Local cleanup window
 #   S3_RETAIN_DAYS=30       Set as bucket lifecycle rule (not enforced here)
+# Metrics:
+#   BACKUP_TEXTFILE_DIR=/var/lib/node_exporter/textfile
+#     Writes Prometheus textfile metrics for BackupAbsent alerting.
 
 set -euo pipefail
 
 BACKUP_DIR="${1:-/opt/sellico/backups}"
 RETAIN_DAYS="${BACKUP_RETAIN_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-DB_NAME="${PGDATABASE:-sellico}"
+DB_NAME="${POSTGRES_DB:-${PGDATABASE:-sellico}}"
+DB_USER="${POSTGRES_USER:-${PGUSER:-sellico}}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 
 mkdir -p "$BACKUP_DIR"
 
 BACKUP_FILE="${BACKUP_DIR}/${DB_NAME}_${TIMESTAMP}.dump"
+OFFSITE_CONFIGURED=0
+OFFSITE_SUCCESS=0
 
 log() { echo "[$(date -Iseconds)] $*"; }
 
+write_backup_metrics() {
+  local textfile_dir="${BACKUP_TEXTFILE_DIR:-/var/lib/node_exporter/textfile}"
+  if [[ -z "$textfile_dir" ]] || [[ "$textfile_dir" == "off" ]]; then
+    log "Backup metrics disabled (BACKUP_TEXTFILE_DIR=${textfile_dir:-<empty>})"
+    return 0
+  fi
+
+  mkdir -p "$textfile_dir"
+
+  local metric_file="${textfile_dir}/sellico_backup.prom"
+  local tmp_file="${metric_file}.$$"
+  local now size_bytes
+
+  now="$(date +%s)"
+  size_bytes="$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE")"
+
+  cat > "$tmp_file" <<EOF
+# HELP sellico_backup_last_success_timestamp_seconds Unix timestamp of the last successful PostgreSQL backup.
+# TYPE sellico_backup_last_success_timestamp_seconds gauge
+sellico_backup_last_success_timestamp_seconds ${now}
+# HELP sellico_backup_last_size_bytes Size of the last successful PostgreSQL backup dump.
+# TYPE sellico_backup_last_size_bytes gauge
+sellico_backup_last_size_bytes ${size_bytes}
+# HELP sellico_backup_offsite_success Whether the latest backup was uploaded offsite successfully.
+# TYPE sellico_backup_offsite_success gauge
+sellico_backup_offsite_success ${OFFSITE_SUCCESS}
+# HELP sellico_backup_offsite_configured Whether offsite backup upload was configured for the latest run.
+# TYPE sellico_backup_offsite_configured gauge
+sellico_backup_offsite_configured ${OFFSITE_CONFIGURED}
+EOF
+  mv "$tmp_file" "$metric_file"
+  log "Backup metrics written: ${metric_file}"
+}
+
 log "Starting backup of ${DB_NAME} -> ${BACKUP_FILE}"
 
-pg_dump \
-  --host="${PGHOST:-localhost}" \
-  --port="${PGPORT:-5432}" \
-  --username="${PGUSER:-sellico}" \
-  --dbname="$DB_NAME" \
-  --format=custom \
-  --compress=6 \
-  --no-owner \
-  --no-privileges \
-  --file="$BACKUP_FILE"
+if [[ "${BACKUP_USE_DOCKER:-0}" == "1" ]]; then
+  log "Using docker compose postgres service for pg_dump"
+  docker compose -f "$COMPOSE_FILE" exec -T postgres \
+    pg_dump \
+      --username="$DB_USER" \
+      --dbname="$DB_NAME" \
+      --format=custom \
+      --compress=6 \
+      --no-owner \
+      --no-privileges \
+    > "$BACKUP_FILE"
+else
+  pg_dump \
+    --host="${PGHOST:-localhost}" \
+    --port="${PGPORT:-5432}" \
+    --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    --format=custom \
+    --compress=6 \
+    --no-owner \
+    --no-privileges \
+    --file="$BACKUP_FILE"
+fi
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 log "Backup complete: ${BACKUP_FILE} (${SIZE})"
@@ -58,6 +112,7 @@ upload_offsite() {
     log "S3_BUCKET not set — skipping offsite upload (local backup only)"
     return 0
   fi
+  OFFSITE_CONFIGURED=1
 
   if [[ -z "${BACKUP_GPG_PASSPHRASE_FILE:-}" ]] || [[ ! -r "$BACKUP_GPG_PASSPHRASE_FILE" ]]; then
     log "ERROR: BACKUP_GPG_PASSPHRASE_FILE missing or unreadable — refusing to upload unencrypted backup"
@@ -96,6 +151,7 @@ upload_offsite() {
       "$enc_file" "$s3_uri"
 
   rm -f "$enc_file"
+  OFFSITE_SUCCESS=1
   log "Offsite upload complete."
   log "NOTE: configure bucket lifecycle to delete objects older than ${S3_RETAIN_DAYS:-30} days."
 }
@@ -114,3 +170,4 @@ while IFS= read -r -d '' old; do
 done < <(find "$BACKUP_DIR" -name "${DB_NAME}_*.dump" -mtime +"$RETAIN_DAYS" -type f -print0)
 
 log "Backup retention: keeping last ${RETAIN_DAYS} days locally (deleted ${DELETED})"
+write_backup_metrics

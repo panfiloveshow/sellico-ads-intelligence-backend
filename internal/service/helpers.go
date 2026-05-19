@@ -126,6 +126,37 @@ func numericFromFloat64(v float64) (pgtype.Numeric, error) {
 	return n, nil
 }
 
+func currentBidFromCampaignPhrases(ctx context.Context, queries *sqlcgen.Queries, campaignID uuid.UUID) (int, bool, error) {
+	phrases, err := queries.ListPhrasesByCampaign(ctx, sqlcgen.ListPhrasesByCampaignParams{
+		CampaignID: uuidToPgtype(campaignID),
+		Limit:      1000,
+		Offset:     0,
+	})
+	if err != nil {
+		return 0, false, err
+	}
+
+	var currentBid int
+	for _, phrase := range phrases {
+		if !phrase.CurrentBid.Valid || phrase.CurrentBid.Int64 <= 0 {
+			continue
+		}
+		bid := int(phrase.CurrentBid.Int64)
+		if currentBid == 0 {
+			currentBid = bid
+			continue
+		}
+		if currentBid != bid {
+			// Campaign-wide bid updates are unsafe when real phrase bids disagree.
+			return 0, false, nil
+		}
+	}
+	if currentBid == 0 {
+		return 0, false, nil
+	}
+	return currentBid, true, nil
+}
+
 func productFromSqlc(p sqlcgen.Product) domain.Product {
 	return domain.Product{
 		ID:              uuidFromPgtype(p.ID),
@@ -139,6 +170,55 @@ func productFromSqlc(p sqlcgen.Product) domain.Product {
 		Price:           int8ToPtr(p.Price),
 		CreatedAt:       p.CreatedAt.Time,
 		UpdatedAt:       p.UpdatedAt.Time,
+	}
+}
+
+func productStatFromSqlc(s sqlcgen.ProductStat) domain.ProductStat {
+	result := domain.ProductStat{
+		ID:          uuidFromPgtype(s.ID),
+		ProductID:   uuidFromPgtype(s.ProductID),
+		CampaignID:  uuidFromPgtype(s.CampaignID),
+		Date:        s.Date.Time,
+		Impressions: s.Impressions,
+		Clicks:      s.Clicks,
+		Spend:       s.Spend,
+		CreatedAt:   s.CreatedAt.Time,
+		UpdatedAt:   s.UpdatedAt.Time,
+	}
+	if s.Orders.Valid {
+		v := s.Orders.Int64
+		result.Orders = &v
+	}
+	if s.Revenue.Valid {
+		v := s.Revenue.Int64
+		result.Revenue = &v
+	}
+	if s.Atbs.Valid {
+		v := s.Atbs.Int64
+		result.Atbs = &v
+	}
+	if s.Canceled.Valid {
+		v := s.Canceled.Int64
+		result.Canceled = &v
+	}
+	if s.Shks.Valid {
+		v := s.Shks.Int64
+		result.Shks = &v
+	}
+	return result
+}
+
+func productBusinessFromSqlc(s sqlcgen.ProductSalesDaily) domain.ProductBusinessSummary {
+	return domain.ProductBusinessSummary{
+		Date:            s.Date.Time,
+		Orders:          s.Orders,
+		CanceledOrders:  s.CanceledOrders,
+		Sales:           s.Sales,
+		Returns:         s.Returns,
+		OrderedRevenue:  s.OrderedRevenue,
+		SoldRevenue:     s.SoldRevenue,
+		ReturnedRevenue: s.ReturnedRevenue,
+		DataMode:        "reports",
 	}
 }
 
@@ -401,7 +481,7 @@ func campaignStatFromLatestSqlc(s sqlcgen.CampaignStat) domain.CampaignStat {
 }
 
 func phraseStatFromSqlc(s sqlcgen.PhraseStat) domain.PhraseStat {
-	return domain.PhraseStat{
+	result := domain.PhraseStat{
 		ID:          uuidFromPgtype(s.ID),
 		PhraseID:    uuidFromPgtype(s.PhraseID),
 		Date:        s.Date.Time,
@@ -411,6 +491,27 @@ func phraseStatFromSqlc(s sqlcgen.PhraseStat) domain.PhraseStat {
 		CreatedAt:   s.CreatedAt.Time,
 		UpdatedAt:   s.UpdatedAt.Time,
 	}
+	if s.Atbs.Valid {
+		v := s.Atbs.Int64
+		result.Atbs = &v
+	}
+	if s.Orders.Valid {
+		v := s.Orders.Int64
+		result.Orders = &v
+	}
+	if s.Cpc.Valid {
+		v := s.Cpc.Float64
+		result.CPC = &v
+	}
+	if s.Cpm.Valid {
+		v := s.Cpm.Float64
+		result.CPM = &v
+	}
+	if s.AvgPos.Valid {
+		v := s.AvgPos.Float64
+		result.AvgPos = &v
+	}
+	return result
 }
 
 func bidSnapshotFromSqlc(b sqlcgen.BidSnapshot) domain.BidSnapshot {

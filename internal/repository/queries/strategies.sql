@@ -9,6 +9,7 @@ SELECT * FROM strategies WHERE id = $1;
 -- name: ListStrategiesByWorkspace :many
 SELECT * FROM strategies
 WHERE workspace_id = $1
+  AND (sqlc.narg('seller_cabinet_id_filter')::uuid IS NULL OR seller_cabinet_id = sqlc.narg('seller_cabinet_id_filter')::uuid)
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 

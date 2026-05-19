@@ -39,8 +39,8 @@ func TestMapWBStatus(t *testing.T) {
 func TestMapBidType(t *testing.T) {
 	assert.Equal(t, domain.BidTypeManual, mapBidType(0))
 	assert.Equal(t, domain.BidTypeUnified, mapBidType(1))
-	assert.Equal(t, domain.BidTypeManual, mapBidType(42), "unknown bid type defaults to manual")
-	assert.Equal(t, domain.BidTypeManual, mapBidType(-1))
+	assert.Equal(t, domain.BidTypeUnknown, mapBidType(42), "unknown bid type must stay explicit")
+	assert.Equal(t, domain.BidTypeUnknown, mapBidType(-1))
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +198,9 @@ func TestMapCampaignStatDTO_ZeroValues(t *testing.T) {
 func TestMapSearchClusterDTO_FullFields(t *testing.T) {
 	campID := uuid.New()
 	wsID := uuid.New()
+	clusterID := int64(777)
 	dto := WBSearchClusterDTO{
-		ClusterID: 777,
+		ClusterID: &clusterID,
 		Keywords:  []string{"кроссовки", "обувь спортивная"},
 		Count:     42,
 		Bid:       15000,
@@ -210,7 +211,9 @@ func TestMapSearchClusterDTO_FullFields(t *testing.T) {
 	assert.NotEqual(t, uuid.Nil, p.ID)
 	assert.Equal(t, campID, p.CampaignID)
 	assert.Equal(t, wsID, p.WorkspaceID)
-	assert.Equal(t, int64(777), p.WBClusterID)
+	require.NotNil(t, p.WBClusterID)
+	assert.Equal(t, int64(777), *p.WBClusterID)
+	assert.Equal(t, "кроссовки", p.WBNormQuery)
 	assert.Equal(t, "кроссовки", p.Keyword)
 	require.NotNil(t, p.Count)
 	assert.Equal(t, 42, *p.Count)
@@ -219,19 +222,22 @@ func TestMapSearchClusterDTO_FullFields(t *testing.T) {
 }
 
 func TestMapSearchClusterDTO_EmptyKeywords(t *testing.T) {
-	dto := WBSearchClusterDTO{ClusterID: 1, Keywords: []string{}}
+	clusterID := int64(1)
+	dto := WBSearchClusterDTO{ClusterID: &clusterID, Keywords: []string{}}
 	p := MapSearchClusterDTO(dto, uuid.New(), uuid.New())
 	assert.Equal(t, "", p.Keyword, "empty keywords slice should produce empty keyword")
 }
 
 func TestMapSearchClusterDTO_NilKeywords(t *testing.T) {
-	dto := WBSearchClusterDTO{ClusterID: 1, Keywords: nil}
+	clusterID := int64(1)
+	dto := WBSearchClusterDTO{ClusterID: &clusterID, Keywords: nil}
 	p := MapSearchClusterDTO(dto, uuid.New(), uuid.New())
 	assert.Equal(t, "", p.Keyword)
 }
 
 func TestMapSearchClusterDTO_ZeroBidAndCount(t *testing.T) {
-	dto := WBSearchClusterDTO{ClusterID: 1, Keywords: []string{"test"}, Count: 0, Bid: 0}
+	clusterID := int64(1)
+	dto := WBSearchClusterDTO{ClusterID: &clusterID, Keywords: []string{"test"}, Count: 0, Bid: 0}
 	p := MapSearchClusterDTO(dto, uuid.New(), uuid.New())
 	require.NotNil(t, p.Count)
 	assert.Equal(t, 0, *p.Count)
@@ -245,8 +251,9 @@ func TestMapSearchClusterDTO_ZeroBidAndCount(t *testing.T) {
 
 func TestMapSearchClusterStatDTO_Success(t *testing.T) {
 	phraseID := uuid.New()
+	clusterID := int64(10)
 	dto := WBSearchClusterStatDTO{
-		ClusterID: 10,
+		ClusterID: &clusterID,
 		Date:      "2026-03-15",
 		Views:     500,
 		Clicks:    30,

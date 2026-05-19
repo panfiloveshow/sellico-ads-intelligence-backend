@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-cover migrate-up migrate-down sqlc-generate lint docker-up docker-down docker-monitoring pack-extension backup-db
+.PHONY: build test test-integration test-cover migrate-up migrate-down sqlc-generate lint real-data-only docker-up docker-down docker-monitoring pack-extension backup-db
 
 # --- Build ---
 build:
@@ -34,6 +34,9 @@ sqlc-generate:
 # --- Linting & Security ---
 lint:
 	golangci-lint run ./...
+
+real-data-only:
+	bash scripts/check-real-data-only.sh
 
 gosec:
 	gosec -exclude-generated ./...

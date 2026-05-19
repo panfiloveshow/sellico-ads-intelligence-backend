@@ -34,6 +34,9 @@ jobs:
       - name: OpenAPI ↔ router drift check
         run: go run ./tools/check-openapi-drift
 
+      - name: Real data only guard
+        run: bash scripts/check-real-data-only.sh
+
       - name: Validate compose files
         run: |
           docker compose -f docker-compose.yml config --quiet

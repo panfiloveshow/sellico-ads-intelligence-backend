@@ -38,7 +38,7 @@ func mapBidType(bt int) string {
 	case 1:
 		return domain.BidTypeUnified
 	default:
-		return domain.BidTypeManual
+		return domain.BidTypeUnknown
 	}
 }
 
@@ -51,18 +51,24 @@ func roundRubles(rubles float64) int64 {
 func MapCampaignDTO(dto WBCampaignDTO, workspaceID, sellerCabinetID uuid.UUID) domain.Campaign {
 	now := time.Now()
 	return domain.Campaign{
-		ID:              uuid.New(),
-		WorkspaceID:     workspaceID,
-		SellerCabinetID: sellerCabinetID,
-		WBCampaignID:    int64(dto.AdvertID),
-		Name:            dto.Name,
-		Status:          mapWBStatus(dto.Status),
-		CampaignType:    dto.Type,
-		BidType:         mapBidType(dto.BidType),
-		PaymentType:     dto.PaymentType,
-		DailyBudget:     dto.DailyBudget,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                       uuid.New(),
+		WorkspaceID:              workspaceID,
+		SellerCabinetID:          sellerCabinetID,
+		WBCampaignID:             int64(dto.AdvertID),
+		Name:                     dto.Name,
+		Status:                   mapWBStatus(dto.Status),
+		CampaignType:             dto.Type,
+		BidType:                  mapBidType(dto.BidType),
+		PaymentType:              dto.PaymentType,
+		DailyBudget:              dto.DailyBudget,
+		PlacementSearch:          dto.PlacementSearch,
+		PlacementRecommendations: dto.PlacementRecommendations,
+		WBCreatedAt:              dto.WBCreatedAt,
+		WBStartedAt:              dto.WBStartedAt,
+		WBUpdatedAt:              dto.WBUpdatedAt,
+		WBDeletedAt:              dto.WBDeletedAt,
+		CreatedAt:                now,
+		UpdatedAt:                now,
 	}
 }
 
@@ -75,12 +81,13 @@ func MapCampaignStatDTO(dto WBCampaignStatDTO, campaignID uuid.UUID) (domain.Cam
 
 	now := time.Now()
 	var orders *int64
-	if dto.OrderedItems != nil {
-		value := *dto.OrderedItems
-		orders = &value
-	} else if dto.Orders != nil {
+	if dto.Orders != nil {
 		value := *dto.Orders
 		orders = &value
+	}
+	shks := dto.SHKs
+	if shks == nil {
+		shks = dto.OrderedItems
 	}
 	var revenue *int64
 	if dto.Revenue != nil {
@@ -98,6 +105,7 @@ func MapCampaignStatDTO(dto WBCampaignStatDTO, campaignID uuid.UUID) (domain.Cam
 		Revenue:     revenue,
 		Atbs:        dto.Atbs,
 		Canceled:    dto.Canceled,
+		Shks:        shks,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
@@ -111,6 +119,9 @@ func MapSearchClusterDTO(dto WBSearchClusterDTO, campaignID, workspaceID uuid.UU
 	if len(dto.Keywords) > 0 {
 		keyword = dto.Keywords[0]
 	}
+	if keyword == "" {
+		keyword = dto.NormQuery
+	}
 
 	count := dto.Count
 	bid := dto.Bid
@@ -119,7 +130,9 @@ func MapSearchClusterDTO(dto WBSearchClusterDTO, campaignID, workspaceID uuid.UU
 		ID:          uuid.New(),
 		CampaignID:  campaignID,
 		WorkspaceID: workspaceID,
+		WBProductID: nonZeroInt64Ptr(dto.NmID),
 		WBClusterID: dto.ClusterID,
+		WBNormQuery: keyword,
 		Keyword:     keyword,
 		Count:       &count,
 		CurrentBid:  &bid,
@@ -143,6 +156,50 @@ func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (do
 		Impressions: dto.Views,
 		Clicks:      dto.Clicks,
 		Spend:       roundRubles(dto.Sum),
+		Atbs:        nonZeroInt64Ptr(dto.Atbs),
+		Orders:      nonZeroInt64Ptr(dto.Orders),
+		CPC:         nonZeroFloat64Ptr(dto.CPC),
+		CPM:         nonZeroFloat64Ptr(dto.CPM),
+		AvgPos:      nonZeroFloat64Ptr(dto.AvgPos),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, nil
+}
+
+// MapProductStatDTO converts a nested WB fullstats nm row to a domain ProductStat.
+func MapProductStatDTO(dto WBProductStatDTO, productID, campaignID uuid.UUID) (domain.ProductStat, error) {
+	date, err := parseWBDate(dto.Date)
+	if err != nil {
+		return domain.ProductStat{}, fmt.Errorf("parse product stat date %q: %w", dto.Date, err)
+	}
+
+	now := time.Now()
+	var orders *int64
+	if dto.Orders != nil {
+		value := *dto.Orders
+		orders = &value
+	}
+	var revenue *int64
+	if dto.Revenue != nil {
+		value := roundRubles(*dto.Revenue)
+		revenue = &value
+	} else if dto.SumPrice != nil {
+		value := roundRubles(*dto.SumPrice)
+		revenue = &value
+	}
+	return domain.ProductStat{
+		ID:          uuid.New(),
+		ProductID:   productID,
+		CampaignID:  campaignID,
+		Date:        date,
+		Impressions: dto.Views,
+		Clicks:      dto.Clicks,
+		Spend:       roundRubles(dto.Sum),
+		Orders:      orders,
+		Revenue:     revenue,
+		Atbs:        dto.Atbs,
+		Canceled:    dto.Canceled,
+		Shks:        dto.SHKs,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
@@ -171,6 +228,20 @@ func MapProductDTO(dto WBProductDTO, workspaceID, sellerCabinetID uuid.UUID) dom
 
 func stringPtr(value string) *string {
 	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func nonZeroInt64Ptr(value int64) *int64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
+}
+
+func nonZeroFloat64Ptr(value float64) *float64 {
+	if value == 0 {
 		return nil
 	}
 	return &value

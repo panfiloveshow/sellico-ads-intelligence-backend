@@ -88,14 +88,27 @@ func (q *Queries) GetStrategyByID(ctx context.Context, id pgtype.UUID) (Strategy
 	return i, err
 }
 
-type ListStrategiesByWorkspaceParams struct {
+type GetStrategyByIDAndWorkspaceParams struct {
+	ID          pgtype.UUID
 	WorkspaceID pgtype.UUID
-	Limit       int32
-	Offset      int32
+}
+
+func (q *Queries) GetStrategyByIDAndWorkspace(ctx context.Context, arg GetStrategyByIDAndWorkspaceParams) (Strategy, error) {
+	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at FROM strategies WHERE id = $1 AND workspace_id = $2`, arg.ID, arg.WorkspaceID)
+	var i Strategy
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.Name, &i.Type, &i.Params, &i.IsActive, &i.CreatedAt, &i.UpdatedAt)
+	return i, err
+}
+
+type ListStrategiesByWorkspaceParams struct {
+	WorkspaceID           pgtype.UUID
+	SellerCabinetIDFilter pgtype.UUID
+	Limit                 int32
+	Offset                int32
 }
 
 func (q *Queries) ListStrategiesByWorkspace(ctx context.Context, arg ListStrategiesByWorkspaceParams) ([]Strategy, error) {
-	rows, err := q.db.Query(ctx, `SELECT id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at FROM strategies WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, arg.WorkspaceID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, `SELECT id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at FROM strategies WHERE workspace_id = $1 AND ($2::uuid IS NULL OR seller_cabinet_id = $2::uuid) ORDER BY created_at DESC LIMIT $3 OFFSET $4`, arg.WorkspaceID, arg.SellerCabinetIDFilter, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +149,15 @@ type UpdateStrategyParams struct {
 	IsActive bool
 }
 
+type UpdateStrategyInWorkspaceParams struct {
+	ID          pgtype.UUID
+	WorkspaceID pgtype.UUID
+	Name        string
+	Type        string
+	Params      []byte
+	IsActive    bool
+}
+
 func (q *Queries) UpdateStrategy(ctx context.Context, arg UpdateStrategyParams) (Strategy, error) {
 	row := q.db.QueryRow(ctx,
 		`UPDATE strategies SET name=$2, type=$3, params=$4, is_active=$5, updated_at=now() WHERE id=$1 RETURNING id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at`,
@@ -145,8 +167,27 @@ func (q *Queries) UpdateStrategy(ctx context.Context, arg UpdateStrategyParams) 
 	return i, err
 }
 
+func (q *Queries) UpdateStrategyInWorkspace(ctx context.Context, arg UpdateStrategyInWorkspaceParams) (Strategy, error) {
+	row := q.db.QueryRow(ctx,
+		`UPDATE strategies SET name=$3, type=$4, params=$5, is_active=$6, updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at`,
+		arg.ID, arg.WorkspaceID, arg.Name, arg.Type, arg.Params, arg.IsActive)
+	var i Strategy
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.Name, &i.Type, &i.Params, &i.IsActive, &i.CreatedAt, &i.UpdatedAt)
+	return i, err
+}
+
 func (q *Queries) DeleteStrategy(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, `DELETE FROM strategies WHERE id = $1`, id)
+	return err
+}
+
+type DeleteStrategyInWorkspaceParams struct {
+	ID          pgtype.UUID
+	WorkspaceID pgtype.UUID
+}
+
+func (q *Queries) DeleteStrategyInWorkspace(ctx context.Context, arg DeleteStrategyInWorkspaceParams) error {
+	_, err := q.db.Exec(ctx, `DELETE FROM strategies WHERE id = $1 AND workspace_id = $2`, arg.ID, arg.WorkspaceID)
 	return err
 }
 
@@ -158,10 +199,41 @@ type CreateStrategyBindingParams struct {
 	ProductID  pgtype.UUID
 }
 
+type CreateStrategyBindingInWorkspaceParams struct {
+	WorkspaceID pgtype.UUID
+	StrategyID  pgtype.UUID
+	CampaignID  pgtype.UUID
+	ProductID   pgtype.UUID
+}
+
 func (q *Queries) CreateStrategyBinding(ctx context.Context, arg CreateStrategyBindingParams) (StrategyBinding, error) {
 	row := q.db.QueryRow(ctx,
 		`INSERT INTO strategy_bindings (strategy_id, campaign_id, product_id) VALUES ($1,$2,$3) RETURNING id, strategy_id, campaign_id, product_id, created_at`,
 		arg.StrategyID, arg.CampaignID, arg.ProductID)
+	var i StrategyBinding
+	err := row.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.CreatedAt)
+	return i, err
+}
+
+func (q *Queries) CreateStrategyBindingInWorkspace(ctx context.Context, arg CreateStrategyBindingInWorkspaceParams) (StrategyBinding, error) {
+	row := q.db.QueryRow(ctx, `
+		INSERT INTO strategy_bindings (strategy_id, campaign_id, product_id)
+		SELECT $2, $3, $4
+		WHERE EXISTS (
+			SELECT 1 FROM strategies s WHERE s.id = $2 AND s.workspace_id = $1
+		)
+		AND (
+			$3::uuid IS NULL OR EXISTS (
+				SELECT 1 FROM campaigns c WHERE c.id = $3 AND c.workspace_id = $1
+			)
+		)
+		AND (
+			$4::uuid IS NULL OR EXISTS (
+				SELECT 1 FROM products p WHERE p.id = $4 AND p.workspace_id = $1
+			)
+		)
+		RETURNING id, strategy_id, campaign_id, product_id, created_at`,
+		arg.WorkspaceID, arg.StrategyID, arg.CampaignID, arg.ProductID)
 	var i StrategyBinding
 	err := row.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.CreatedAt)
 	return i, err
@@ -186,6 +258,16 @@ func (q *Queries) ListStrategyBindings(ctx context.Context, strategyID pgtype.UU
 
 func (q *Queries) DeleteStrategyBinding(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, `DELETE FROM strategy_bindings WHERE id = $1`, id)
+	return err
+}
+
+type DeleteStrategyBindingInWorkspaceParams struct {
+	ID          pgtype.UUID
+	WorkspaceID pgtype.UUID
+}
+
+func (q *Queries) DeleteStrategyBindingInWorkspace(ctx context.Context, arg DeleteStrategyBindingInWorkspaceParams) error {
+	_, err := q.db.Exec(ctx, `DELETE FROM strategy_bindings b USING strategies s WHERE b.id = $1 AND b.strategy_id = s.id AND s.workspace_id = $2`, arg.ID, arg.WorkspaceID)
 	return err
 }
 

@@ -124,11 +124,19 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			}
 		}
 
-		// Get current bid (use latest bid snapshot or phrase bid)
-		currentBid := 100 // default fallback
-		latestBid, bidErr := s.queries.GetLatestBidSnapshot(ctx, uuidToPgtype(*binding.CampaignID))
-		if bidErr == nil {
-			currentBid = int(latestBid.CompetitiveBid)
+		currentBid, ok, bidErr := currentBidFromCampaignPhrases(ctx, s.queries, *binding.CampaignID)
+		if bidErr != nil {
+			s.logger.Warn().
+				Err(bidErr).
+				Str("campaign_id", binding.CampaignID.String()).
+				Msg("skipping bid automation because current bid could not be loaded")
+			continue
+		}
+		if !ok {
+			s.logger.Warn().
+				Str("campaign_id", binding.CampaignID.String()).
+				Msg("skipping bid automation because real current bid is unavailable or ambiguous")
+			continue
 		}
 
 		decision := s.engine.CalculateBid(strategy, BidContext{

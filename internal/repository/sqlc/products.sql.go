@@ -14,7 +14,7 @@ import (
 const createProduct = `-- name: CreateProduct :one
 INSERT INTO products (workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at
+RETURNING id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at
 `
 
 type CreateProductParams struct {
@@ -52,12 +52,22 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Price,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CurrentBidSearch,
+		&i.CurrentBidRecommend,
+		&i.MinBidSearch,
+		&i.MinBidRecommend,
+		&i.CompetitiveBid,
+		&i.Rating,
+		&i.ReviewsCount,
+		&i.StockTotal,
+		&i.ContentHash,
+		&i.LastEventAt,
 	)
 	return i, err
 }
 
 const getProductByID = `-- name: GetProductByID :one
-SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at FROM products WHERE id = $1
+SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at FROM products WHERE id = $1
 `
 
 func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error) {
@@ -75,12 +85,22 @@ func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Product, 
 		&i.Price,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CurrentBidSearch,
+		&i.CurrentBidRecommend,
+		&i.MinBidSearch,
+		&i.MinBidRecommend,
+		&i.CompetitiveBid,
+		&i.Rating,
+		&i.ReviewsCount,
+		&i.StockTotal,
+		&i.ContentHash,
+		&i.LastEventAt,
 	)
 	return i, err
 }
 
 const getProductByWBProductID = `-- name: GetProductByWBProductID :one
-SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at FROM products
+SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at FROM products
 WHERE workspace_id = $1 AND wb_product_id = $2
 LIMIT 1
 `
@@ -105,12 +125,22 @@ func (q *Queries) GetProductByWBProductID(ctx context.Context, arg GetProductByW
 		&i.Price,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CurrentBidSearch,
+		&i.CurrentBidRecommend,
+		&i.MinBidSearch,
+		&i.MinBidRecommend,
+		&i.CompetitiveBid,
+		&i.Rating,
+		&i.ReviewsCount,
+		&i.StockTotal,
+		&i.ContentHash,
+		&i.LastEventAt,
 	)
 	return i, err
 }
 
 const listProductsBySellerCabinet = `-- name: ListProductsBySellerCabinet :many
-SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at FROM products
+SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at FROM products
 WHERE seller_cabinet_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -143,6 +173,16 @@ func (q *Queries) ListProductsBySellerCabinet(ctx context.Context, arg ListProdu
 			&i.Price,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CurrentBidSearch,
+			&i.CurrentBidRecommend,
+			&i.MinBidSearch,
+			&i.MinBidRecommend,
+			&i.CompetitiveBid,
+			&i.Rating,
+			&i.ReviewsCount,
+			&i.StockTotal,
+			&i.ContentHash,
+			&i.LastEventAt,
 		); err != nil {
 			return nil, err
 		}
@@ -155,7 +195,7 @@ func (q *Queries) ListProductsBySellerCabinet(ctx context.Context, arg ListProdu
 }
 
 const listProductsByWorkspace = `-- name: ListProductsByWorkspace :many
-SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at FROM products
+SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at FROM products
 WHERE workspace_id = $1
   AND ($4::uuid IS NULL OR seller_cabinet_id = $4::uuid)
   AND ($5::text IS NULL OR title ILIKE '%' || $5::text || '%')
@@ -198,6 +238,16 @@ func (q *Queries) ListProductsByWorkspace(ctx context.Context, arg ListProductsB
 			&i.Price,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CurrentBidSearch,
+			&i.CurrentBidRecommend,
+			&i.MinBidSearch,
+			&i.MinBidRecommend,
+			&i.CompetitiveBid,
+			&i.Rating,
+			&i.ReviewsCount,
+			&i.StockTotal,
+			&i.ContentHash,
+			&i.LastEventAt,
 		); err != nil {
 			return nil, err
 		}
@@ -213,13 +263,13 @@ const upsertProduct = `-- name: UpsertProduct :one
 INSERT INTO products (workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (wb_product_id, seller_cabinet_id) DO UPDATE SET
-    title = EXCLUDED.title,
+    title = COALESCE(NULLIF(EXCLUDED.title, ''), products.title),
     brand = EXCLUDED.brand,
     category = EXCLUDED.category,
     image_url = EXCLUDED.image_url,
     price = EXCLUDED.price,
     updated_at = now()
-RETURNING id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at
+RETURNING id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at
 `
 
 type UpsertProductParams struct {
@@ -257,6 +307,16 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		&i.Price,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CurrentBidSearch,
+		&i.CurrentBidRecommend,
+		&i.MinBidSearch,
+		&i.MinBidRecommend,
+		&i.CompetitiveBid,
+		&i.Rating,
+		&i.ReviewsCount,
+		&i.StockTotal,
+		&i.ContentHash,
+		&i.LastEventAt,
 	)
 	return i, err
 }

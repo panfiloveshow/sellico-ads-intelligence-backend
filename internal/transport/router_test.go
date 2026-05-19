@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/jwt"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,9 +31,19 @@ func (s *stubMembershipChecker) GetWorkspaceMember(_ context.Context, _, _ uuid.
 }
 
 func newTestRouter() chi.Router {
+	return newTestRouterWithRole(domain.RoleOwner)
+}
+
+func newTestRouterWithRole(role string) chi.Router {
 	return NewRouter(RouterDeps{
-		JWTSecret:         "test-secret-key-for-testing-only",
-		MembershipChecker: &stubMembershipChecker{role: domain.RoleOwner},
+		JWTSecret:             "test-secret-key-for-testing-only",
+		MembershipChecker:     &stubMembershipChecker{role: role},
+		CampaignActionHandler: handler.NewCampaignActionHandler(nil, nil),
+		StrategyHandler:       handler.NewStrategyHandler(nil),
+		SemanticsHandler:      handler.NewSemanticsHandler(nil),
+		SEOHandler:            handler.NewSEOHandler(nil),
+		DeliveryHandler:       handler.NewDeliveryHandler(nil),
+		CompetitorHandler:     handler.NewCompetitorHandler(nil),
 	})
 }
 
@@ -237,6 +251,61 @@ func TestProtectedRoutes_Return401WithoutAuth(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 				"protected route should return 401 without auth")
+		})
+	}
+}
+
+func TestViewerCannotAccessWorkspaceWriteRoutes(t *testing.T) {
+	r := newTestRouterWithRole(domain.RoleViewer)
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	entityID := uuid.New()
+	phraseID := uuid.New()
+	token, err := jwt.GenerateAccessToken(userID, "test-secret-key-for-testing-only", 15*time.Minute)
+	require.NoError(t, err)
+
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{"POST", "/api/v1/campaigns/" + entityID.String() + "/start", ""},
+		{"POST", "/api/v1/campaigns/" + entityID.String() + "/pause", ""},
+		{"POST", "/api/v1/campaigns/" + entityID.String() + "/stop", ""},
+		{"POST", "/api/v1/campaigns/" + entityID.String() + "/bids", `{"placement":"search","new_bid":100}`},
+		{"POST", "/api/v1/campaigns/" + entityID.String() + "/minus-phrases", `{"phrase":"test"}`},
+		{"DELETE", "/api/v1/campaigns/" + entityID.String() + "/minus-phrases/" + phraseID.String(), ""},
+		{"POST", "/api/v1/campaigns/" + entityID.String() + "/plus-phrases", `{"phrase":"test"}`},
+		{"DELETE", "/api/v1/campaigns/" + entityID.String() + "/plus-phrases/" + phraseID.String(), ""},
+		{"POST", "/api/v1/recommendations/" + entityID.String() + "/apply", ""},
+		{"POST", "/api/v1/keywords/collect", ""},
+		{"POST", "/api/v1/keywords/cluster", ""},
+		{"POST", "/api/v1/seo/analyze", ""},
+		{"POST", "/api/v1/delivery/collect", ""},
+		{"POST", "/api/v1/competitors/extract", ""},
+		{"POST", "/api/v1/strategies/", `{"name":"test","type":"acos","params":{},"is_active":true}`},
+		{"PUT", "/api/v1/strategies/" + entityID.String(), `{"name":"test","type":"acos","params":{},"is_active":true}`},
+		{"DELETE", "/api/v1/strategies/" + entityID.String(), ""},
+		{"POST", "/api/v1/strategies/" + entityID.String() + "/attach", `{}`},
+		{"DELETE", "/api/v1/strategies/" + entityID.String() + "/bindings/" + phraseID.String(), ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("%s %s", tc.method, tc.path), func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, ts.URL+tc.path, strings.NewReader(tc.body))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("X-Workspace-ID", workspaceID.String())
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusForbidden, resp.StatusCode, "viewer should not reach write handler")
 		})
 	}
 }

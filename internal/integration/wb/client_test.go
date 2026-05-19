@@ -38,6 +38,8 @@ func newTestClient(baseURL string) *Client {
 	logger := zerolog.Nop()
 	client := NewClient(cfg, logger)
 	client.contentURL = baseURL
+	client.fullStatsInterBatchDelay = 0
+	client.normQueryInterBatchDelay = 0
 	return client
 }
 

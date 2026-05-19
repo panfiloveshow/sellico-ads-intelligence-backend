@@ -57,6 +57,23 @@ var (
 		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
 	}, []string{"path"})
 
+	// WBBreakerState tracks WB API circuit breaker state per breaker name:
+	// 0=closed, 1=half-open, 2=open.
+	WBBreakerState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "sellico",
+		Subsystem: "wb",
+		Name:      "breaker_state",
+		Help:      "WB API circuit breaker state by breaker name: 0=closed, 1=half-open, 2=open.",
+	}, []string{"breaker"})
+
+	// WorkerQueueLength tracks Asynq queue sizes by queue and state.
+	WorkerQueueLength = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "sellico",
+		Subsystem: "worker",
+		Name:      "queue_length",
+		Help:      "Current Asynq task count by queue and state.",
+	}, []string{"queue", "state"})
+
 	// ActiveWorkspaces tracks the number of workspaces that performed a sync recently.
 	ActiveWorkspaces = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: "sellico",

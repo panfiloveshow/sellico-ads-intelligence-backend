@@ -12,9 +12,9 @@ import (
 )
 
 const createCampaignStat = `-- name: CreateCampaignStat :one
-INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at
+INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue, atbs, canceled)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled
 `
 
 type CreateCampaignStatParams struct {
@@ -25,6 +25,8 @@ type CreateCampaignStatParams struct {
 	Spend       int64       `json:"spend"`
 	Orders      pgtype.Int8 `json:"orders"`
 	Revenue     pgtype.Int8 `json:"revenue"`
+	Atbs        pgtype.Int8 `json:"atbs"`
+	Canceled    pgtype.Int8 `json:"canceled"`
 }
 
 func (q *Queries) CreateCampaignStat(ctx context.Context, arg CreateCampaignStatParams) (CampaignStat, error) {
@@ -36,6 +38,8 @@ func (q *Queries) CreateCampaignStat(ctx context.Context, arg CreateCampaignStat
 		arg.Spend,
 		arg.Orders,
 		arg.Revenue,
+		arg.Atbs,
+		arg.Canceled,
 	)
 	var i CampaignStat
 	err := row.Scan(
@@ -49,12 +53,14 @@ func (q *Queries) CreateCampaignStat(ctx context.Context, arg CreateCampaignStat
 		&i.Revenue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Atbs,
+		&i.Canceled,
 	)
 	return i, err
 }
 
 const getCampaignStatsByDateRange = `-- name: GetCampaignStatsByDateRange :many
-SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at FROM campaign_stats
+SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled FROM campaign_stats
 WHERE campaign_id = $1 AND date BETWEEN $2 AND $3
 ORDER BY date
 LIMIT $4 OFFSET $5
@@ -94,6 +100,8 @@ func (q *Queries) GetCampaignStatsByDateRange(ctx context.Context, arg GetCampai
 			&i.Revenue,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Atbs,
+			&i.Canceled,
 		); err != nil {
 			return nil, err
 		}
@@ -106,7 +114,7 @@ func (q *Queries) GetCampaignStatsByDateRange(ctx context.Context, arg GetCampai
 }
 
 const getLatestCampaignStat = `-- name: GetLatestCampaignStat :one
-SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at FROM campaign_stats
+SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled FROM campaign_stats
 WHERE campaign_id = $1
 ORDER BY date DESC
 LIMIT 1
@@ -126,12 +134,14 @@ func (q *Queries) GetLatestCampaignStat(ctx context.Context, campaignID pgtype.U
 		&i.Revenue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Atbs,
+		&i.Canceled,
 	)
 	return i, err
 }
 
 const listCampaignStatsByWorkspace = `-- name: ListCampaignStatsByWorkspace :many
-SELECT cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend, cs.orders, cs.revenue, cs.created_at, cs.updated_at FROM campaign_stats cs
+SELECT cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend, cs.orders, cs.revenue, cs.created_at, cs.updated_at, cs.atbs, cs.canceled FROM campaign_stats cs
 JOIN campaigns c ON c.id = cs.campaign_id
 WHERE c.workspace_id = $1
 ORDER BY cs.date DESC
@@ -164,6 +174,8 @@ func (q *Queries) ListCampaignStatsByWorkspace(ctx context.Context, arg ListCamp
 			&i.Revenue,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Atbs,
+			&i.Canceled,
 		); err != nil {
 			return nil, err
 		}
@@ -176,16 +188,19 @@ func (q *Queries) ListCampaignStatsByWorkspace(ctx context.Context, arg ListCamp
 }
 
 const upsertCampaignStat = `-- name: UpsertCampaignStat :one
-INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue, atbs, canceled, shks)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (campaign_id, date) DO UPDATE SET
     impressions = EXCLUDED.impressions,
     clicks = EXCLUDED.clicks,
     spend = EXCLUDED.spend,
     orders = EXCLUDED.orders,
     revenue = EXCLUDED.revenue,
+    atbs = EXCLUDED.atbs,
+    canceled = EXCLUDED.canceled,
+    shks = EXCLUDED.shks,
     updated_at = now()
-RETURNING id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at
+RETURNING id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled, shks
 `
 
 type UpsertCampaignStatParams struct {
@@ -196,6 +211,9 @@ type UpsertCampaignStatParams struct {
 	Spend       int64       `json:"spend"`
 	Orders      pgtype.Int8 `json:"orders"`
 	Revenue     pgtype.Int8 `json:"revenue"`
+	Atbs        pgtype.Int8 `json:"atbs"`
+	Canceled    pgtype.Int8 `json:"canceled"`
+	Shks        pgtype.Int8 `json:"shks"`
 }
 
 func (q *Queries) UpsertCampaignStat(ctx context.Context, arg UpsertCampaignStatParams) (CampaignStat, error) {
@@ -207,6 +225,9 @@ func (q *Queries) UpsertCampaignStat(ctx context.Context, arg UpsertCampaignStat
 		arg.Spend,
 		arg.Orders,
 		arg.Revenue,
+		arg.Atbs,
+		arg.Canceled,
+		arg.Shks,
 	)
 	var i CampaignStat
 	err := row.Scan(
@@ -220,6 +241,9 @@ func (q *Queries) UpsertCampaignStat(ctx context.Context, arg UpsertCampaignStat
 		&i.Revenue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Atbs,
+		&i.Canceled,
+		&i.Shks,
 	)
 	return i, err
 }

@@ -9,10 +9,12 @@ type CORSConfig struct {
 
 // CORS returns middleware that sets Cross-Origin Resource Sharing headers.
 func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
-	allowAll := len(cfg.AllowOrigins) == 0
-
 	originSet := make(map[string]struct{}, len(cfg.AllowOrigins))
+	allowAll := false
 	for _, o := range cfg.AllowOrigins {
+		if o == "*" {
+			allowAll = true
+		}
 		originSet[o] = struct{}{}
 	}
 
@@ -24,18 +26,11 @@ func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			allowed := allowAll
-			if !allowed {
+			allowed := false
+			if allowAll {
+				allowed = true
+			} else {
 				_, allowed = originSet[origin]
-			}
-			if !allowed {
-				// Check wildcard patterns
-				for _, o := range cfg.AllowOrigins {
-					if o == "*" {
-						allowed = true
-						break
-					}
-				}
 			}
 
 			if allowed {

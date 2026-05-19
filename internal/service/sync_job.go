@@ -55,6 +55,18 @@ func (s *SyncJobService) TriggerSellerCabinetSync(ctx context.Context, actorID, 
 		return nil, apperror.New(apperror.ErrNotFound, "seller cabinet not found")
 	}
 
+	if activeJob, activeErr := s.queries.FindActiveWBSyncJobRunByCabinet(ctx, uuidToPgtype(workspaceID), cabinetID.String()); activeErr == nil {
+		return &SyncTriggerResult{
+			TaskType:    "wb:sync_workspace",
+			Status:      activeJob.Status,
+			WorkspaceID: workspaceID,
+			CabinetID:   cabinetID,
+			JobRunID:    uuidFromPgtype(activeJob.ID),
+		}, nil
+	} else if !errors.Is(activeErr, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrInternal, "failed to check active sync job")
+	}
+
 	jobRunMetadata := map[string]any{
 		"seller_cabinet_id":   cabinetID.String(),
 		"seller_cabinet_name": cabinet.Name,

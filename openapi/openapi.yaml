@@ -2028,6 +2028,13 @@ paths:
         - $ref: "#/components/parameters/WorkspaceHeader"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
+        - name: seller_cabinet_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Optional seller cabinet UUID filter.
       responses:
         "200":
           description: Strategy page
@@ -2743,7 +2750,7 @@ components:
           format: date-time
     Phrase:
       type: object
-      required: [id, campaign_id, workspace_id, wb_cluster_id, keyword, created_at, updated_at]
+      required: [id, campaign_id, workspace_id, wb_norm_query, keyword, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2757,6 +2764,10 @@ components:
         wb_cluster_id:
           type: integer
           format: int64
+          nullable: true
+          deprecated: true
+        wb_norm_query:
+          type: string
         keyword:
           type: string
         count:

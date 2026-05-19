@@ -18,7 +18,7 @@ type ListCampaignStatsByWorkspaceDateRangeParams struct {
 func (q *Queries) ListCampaignStatsByWorkspaceDateRange(ctx context.Context, arg ListCampaignStatsByWorkspaceDateRangeParams) ([]CampaignStat, error) {
 	const query = `
 		SELECT cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend,
-		       cs.orders, cs.revenue, cs.created_at, cs.updated_at
+		       cs.orders, cs.revenue, cs.created_at, cs.updated_at, cs.atbs, cs.canceled, cs.shks
 		FROM campaign_stats cs
 		JOIN campaigns c ON c.id = cs.campaign_id
 		WHERE c.workspace_id = $1
@@ -37,7 +37,7 @@ func (q *Queries) ListCampaignStatsByWorkspaceDateRange(ctx context.Context, arg
 		var i CampaignStat
 		if err := rows.Scan(
 			&i.ID, &i.CampaignID, &i.Date, &i.Impressions, &i.Clicks, &i.Spend,
-			&i.Orders, &i.Revenue, &i.CreatedAt, &i.UpdatedAt,
+			&i.Orders, &i.Revenue, &i.CreatedAt, &i.UpdatedAt, &i.Atbs, &i.Canceled, &i.Shks,
 		); err != nil {
 			return nil, err
 		}
@@ -56,7 +56,7 @@ type ListPhraseStatsByWorkspaceDateRangeParams struct {
 func (q *Queries) ListPhraseStatsByWorkspaceDateRange(ctx context.Context, arg ListPhraseStatsByWorkspaceDateRangeParams) ([]PhraseStat, error) {
 	const query = `
 		SELECT ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend,
-		       ps.created_at, ps.updated_at
+		       ps.atbs, ps.orders, ps.cpc, ps.cpm, ps.avg_pos, ps.created_at, ps.updated_at
 		FROM phrase_stats ps
 		JOIN phrases p ON p.id = ps.phrase_id
 		WHERE p.workspace_id = $1
@@ -75,7 +75,7 @@ func (q *Queries) ListPhraseStatsByWorkspaceDateRange(ctx context.Context, arg L
 		var i PhraseStat
 		if err := rows.Scan(
 			&i.ID, &i.PhraseID, &i.Date, &i.Impressions, &i.Clicks, &i.Spend,
-			&i.CreatedAt, &i.UpdatedAt,
+			&i.Atbs, &i.Orders, &i.Cpc, &i.Cpm, &i.AvgPos, &i.CreatedAt, &i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

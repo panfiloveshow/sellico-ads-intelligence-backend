@@ -14,10 +14,10 @@ Go backend for Sellico Ads Intelligence. The service exposes a multi-tenant REST
 ## Production Deploy (Timeweb VPS)
 
 1. Copy `.env.prod.example` to `.env` on the server and fill in production secrets.
-2. Place SSL certificates in `nginx/ssl/` (`fullchain.pem` + `privkey.pem`), uncomment SSL block in `nginx/nginx.conf`.
-3. Login to GHCR: `echo $TOKEN | docker login ghcr.io -u <user> --password-stdin`
-4. Start: `docker compose -f docker-compose.prod.yml up -d`
-5. Set up crontab for backups: `0 3 * * * /opt/sellico/scripts/backup-db.sh`
+2. Place SSL certificates in `nginx/ssl/` (`fullchain.pem` + `privkey.pem`).
+3. Run first-time setup: `DEPLOY_DIR=/opt/sellico ./scripts/deploy.sh setup`.
+4. Updates are source-built on the host: `./scripts/deploy.sh update`.
+5. Backup and restore-check cron are installed by setup and use the Dockerized PostgreSQL service.
 
 GitHub Actions CD pipeline (`.github/workflows/cd.yml`) automatically builds, pushes images to GHCR, and deploys via SSH on push to `main`.
 
@@ -25,7 +25,7 @@ GitHub Actions CD pipeline (`.github/workflows/cd.yml`) automatically builds, pu
 
 - `cmd/api`: HTTP server bootstrap, router wiring, health checks.
 - `cmd/worker`: Asynq worker bootstrap, schedulers, job processors, export generation, Telegram notifications.
-- `internal/service`: application services for auth, workspaces, campaigns, products, positions, SERP, recommendations, notifications, extension, audit logs.
+- `internal/service`: application services for auth, workspaces, campaigns, products, positions, SERP, recommendations, notifications, extension, audit logs, strategies, semantics, competitors, delivery, SEO, and product events.
 - `internal/repository/sqlc`: generated typed PostgreSQL access layer.
 - `internal/integration/wb`: Wildberries API and parser integration (with circuit breaker).
 - `internal/integration/telegram`: Telegram Bot API client for notifications.
@@ -38,13 +38,16 @@ GitHub Actions CD pipeline (`.github/workflows/cd.yml`) automatically builds, pu
 - Seller cabinets with encrypted WB API tokens
 - Campaigns, products, phrases, bids, positions, SERP snapshots
 - Recommendation engine with configurable thresholds per workspace
+- Bid automation strategies with campaign/product bindings
+- Semantics, keyword clustering, competitors, delivery/promo collection, SEO analysis, and product event tracking
 - Export jobs (CSV/XLSX) via background workers
 - Audit logs, job run monitoring
 
 ### Infrastructure
 - Prometheus metrics (`/metrics`) + Grafana dashboards
-- Per-user API rate limiting (token bucket)
-- Circuit breaker for WB API (gobreaker)
+- Per-user API rate limiting (token bucket) and IP limits on public auth routes
+- Circuit breaker for WB API (gobreaker) with Prometheus breaker-state metrics
+- Asynq queue backlog metrics and backup textfile metrics for alerting
 - Nginx reverse proxy with SSL support and security headers
 - SSE endpoint (`/api/v1/events`) for real-time dashboard updates
 - Telegram notifications for new recommendations and sync alerts
@@ -96,7 +99,7 @@ GitHub Actions CD pipeline (`.github/workflows/cd.yml`) automatically builds, pu
 ## Monitoring
 
 - Prometheus scrapes API at `/metrics` every 10s
-- Metrics: `sellico_http_requests_total`, `sellico_http_request_duration_seconds`, `sellico_http_requests_in_flight`
+- Metrics: `sellico_http_requests_total`, `sellico_http_request_duration_seconds`, `sellico_http_requests_in_flight`, `sellico_wb_breaker_state`, `sellico_worker_queue_length`, `sellico_backup_last_success_timestamp_seconds`
 - Grafana auto-provisions Prometheus as default datasource
 - `/metrics` blocked from external access via nginx
 

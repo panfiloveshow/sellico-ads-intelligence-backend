@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/crypto"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
@@ -226,7 +227,9 @@ func (s *IntegrationRefreshService) RefreshViaServiceAccount(ctx context.Context
 			WorkspaceID:           uuidToPgtype(localWorkspaceID),
 			Name:                  full.Name,
 			EncryptedToken:        encrypted,
+			Status:                domain.StatusActive,
 			ExternalIntegrationID: textToPgtype(full.ID),
+			IntegrationType:       textToPgtype(full.Type),
 		}); err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("upsert seller_cabinet failed")
 			errors++
@@ -264,10 +267,12 @@ func (s *IntegrationRefreshService) refreshWorkspaceIntegrations(ctx context.Con
 		}
 
 		if _, err := s.queries.UpsertSellicoSellerCabinet(ctx, sqlcgen.UpsertSellicoSellerCabinetParams{
-			WorkspaceID:            uuidToPgtype(workspaceID),
-			Name:                   integration.Name,
-			EncryptedToken:         encrypted,
-			ExternalIntegrationID:  textToPgtype(integration.ID),
+			WorkspaceID:           uuidToPgtype(workspaceID),
+			Name:                  integration.Name,
+			EncryptedToken:        encrypted,
+			Status:                domain.StatusActive,
+			ExternalIntegrationID: textToPgtype(integration.ID),
+			IntegrationType:       textToPgtype(integration.Type),
 		}); err != nil {
 			s.logger.Warn().
 				Err(err).

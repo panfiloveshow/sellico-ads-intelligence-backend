@@ -108,7 +108,8 @@ CREATE TABLE phrases (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     campaign_id   UUID        NOT NULL REFERENCES campaigns(id),
     workspace_id  UUID        NOT NULL REFERENCES workspaces(id),
-    wb_cluster_id BIGINT      NOT NULL,
+    wb_cluster_id BIGINT      NULL,
+    wb_norm_query TEXT        NOT NULL,
     keyword       TEXT        NOT NULL,
     count         INT         NULL,
     current_bid   BIGINT      NULL,
@@ -118,7 +119,7 @@ CREATE TABLE phrases (
 
 CREATE INDEX idx_phrases_campaign_id ON phrases (campaign_id);
 CREATE INDEX idx_phrases_workspace_id ON phrases (workspace_id);
-CREATE UNIQUE INDEX idx_phrases_wb_cluster_campaign ON phrases (wb_cluster_id, campaign_id);
+CREATE UNIQUE INDEX idx_phrases_campaign_norm_query ON phrases (campaign_id, wb_norm_query);
 
 -- 9. phrase_stats
 CREATE TABLE phrase_stats (

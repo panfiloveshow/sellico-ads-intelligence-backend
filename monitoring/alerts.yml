@@ -13,7 +13,7 @@ groups:
       - alert: APIHighErrorRate
         expr: |
           (
-            sum(rate(sellico_http_requests_total{code=~"5.."}[5m]))
+            sum(rate(sellico_http_requests_total{status=~"5.."}[5m]))
             /
             sum(rate(sellico_http_requests_total[5m]))
           ) > 0.01
@@ -119,12 +119,22 @@ groups:
 
       - alert: BackupAbsent
         # A successful backup writes the timestamp metric via a textfile collector
-        # at /var/lib/node_exporter/textfile_collector/sellico_backup.prom.
+        # at /var/lib/node_exporter/textfile/sellico_backup.prom.
         # If no successful backup in 26h, alert (24h cron + 2h slack).
-        expr: time() - sellico_backup_last_success_timestamp_seconds > 93600
+        expr: absent(sellico_backup_last_success_timestamp_seconds) or (time() - sellico_backup_last_success_timestamp_seconds > 93600)
         for: 0s
         labels:
           severity: page
         annotations:
           summary: "No successful PostgreSQL backup in 26h"
           description: "Check /var/log/sellico-backup.log and S3 upload status."
+
+      - alert: BackupOffsiteFailed
+        # Only fires when offsite upload was configured for the latest backup run.
+        expr: sellico_backup_offsite_configured == 1 and sellico_backup_offsite_success == 0
+        for: 0s
+        labels:
+          severity: warn
+        annotations:
+          summary: "Latest PostgreSQL backup was not uploaded offsite"
+          description: "Local dump may exist, but disaster recovery is degraded. Check /var/log/sellico-backup.log and S3 credentials."

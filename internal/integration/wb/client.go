@@ -40,11 +40,15 @@ var (
 
 // Client is the concrete HTTP client for the WB Advertising API.
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	contentURL string
-	rateLimit  int
-	logger     zerolog.Logger
+	httpClient               *http.Client
+	baseURL                  string
+	contentURL               string
+	statisticsURL            string
+	analyticsURL             string
+	rateLimit                int
+	fullStatsInterBatchDelay time.Duration
+	normQueryInterBatchDelay time.Duration
+	logger                   zerolog.Logger
 
 	limiters *boundedLRU[*rate.Limiter]
 	breakers *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
@@ -53,18 +57,26 @@ type Client struct {
 // NewClient creates a new WB API client from the application config.
 func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 	contentURL := "https://content-api.wildberries.ru"
+	statisticsURL := "https://statistics-api.wildberries.ru"
+	analyticsURL := "https://seller-analytics-api.wildberries.ru"
 	if strings.Contains(cfg.WBAPIBaseURL, "localhost") || strings.Contains(cfg.WBAPIBaseURL, "127.0.0.1") {
 		contentURL = cfg.WBAPIBaseURL
+		statisticsURL = cfg.WBAPIBaseURL
+		analyticsURL = cfg.WBAPIBaseURL
 	}
 
 	return &Client{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		baseURL:    cfg.WBAPIBaseURL,
-		contentURL: contentURL,
-		rateLimit:  cfg.WBAPIRateLimit,
-		logger:     logger.With().Str("component", "wb_client").Logger(),
-		limiters:   newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
-		breakers:   newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
+		httpClient:               &http.Client{Timeout: 30 * time.Second},
+		baseURL:                  cfg.WBAPIBaseURL,
+		contentURL:               contentURL,
+		statisticsURL:            statisticsURL,
+		analyticsURL:             analyticsURL,
+		rateLimit:                cfg.WBAPIRateLimit,
+		fullStatsInterBatchDelay: 20 * time.Second,
+		normQueryInterBatchDelay: 7 * time.Second,
+		logger:                   logger.With().Str("component", "wb_client").Logger(),
+		limiters:                 newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
+		breakers:                 newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
 }
 
@@ -155,6 +167,70 @@ func (c *Client) doContentRequest(ctx context.Context, method, path, token strin
 	cb := c.breakerForToken(token)
 	result, err := cb.Execute(func() ([]byte, error) {
 		r, b, e := c.doRequestInnerURL(ctx, method, c.contentURL+path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
+}
+
+// doStatisticsRequest executes requests against the WB Statistics API.
+func (c *Client) doStatisticsRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInnerURL(ctx, method, c.statisticsURL+path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
+}
+
+// doAnalyticsRequest executes requests against the WB Seller Analytics API.
+func (c *Client) doAnalyticsRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInnerURL(ctx, method, c.analyticsURL+path, token, body)
 		resp = r
 		return b, e
 	})

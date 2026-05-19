@@ -21,11 +21,12 @@ import (
 )
 
 type fakeSyncRunner struct {
-	syncCampaignsFn      func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncCampaignStatsFn  func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncPhrasesFn        func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncProductsFn       func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncSingleCabinetFn  func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (service.SyncSummary, error)
+	syncCampaignsFn     func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncCampaignStatsFn func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncPhrasesFn       func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncProductsFn      func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncSingleCabinetFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (service.SyncSummary, error)
+	syncCabinetPhaseFn  func(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (service.SyncSummary, error)
 }
 
 func (f *fakeSyncRunner) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error) {
@@ -58,6 +59,32 @@ func (f *fakeSyncRunner) SyncSingleCabinet(ctx context.Context, workspaceID, cab
 		return service.SyncSummary{}, errors.New("unexpected SyncSingleCabinet call")
 	}
 	return f.syncSingleCabinetFn(ctx, workspaceID, cabinetID)
+}
+
+func (f *fakeSyncRunner) SyncSingleCabinetPhase(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (service.SyncSummary, error) {
+	if f.syncCabinetPhaseFn == nil {
+		return service.SyncSummary{}, errors.New("unexpected SyncSingleCabinetPhase call")
+	}
+	return f.syncCabinetPhaseFn(ctx, workspaceID, cabinetID, phase)
+}
+
+func TestRateLimitedPhasesMapsIssuesToRetryableSingleCabinetPhases(t *testing.T) {
+	summary := service.SyncSummary{
+		RateLimited:       3,
+		RateLimitEndpoint: "adv_normquery_stats",
+		Issues: []service.SyncIssue{
+			{Stage: "stats", Message: "sync stats: rate limited (429)"},
+			{Stage: "phrases", Message: "sync phrases: rate limited (429)"},
+			{Stage: "products", Message: "catalog timeout"},
+			{Stage: "sales_funnel_products", Message: "too many requests"},
+		},
+	}
+
+	assert.Equal(t, []string{
+		service.SyncPhaseStats,
+		service.SyncPhasePhrases,
+		service.SyncPhaseSalesFunnel,
+	}, rateLimitedPhases(summary))
 }
 
 type enqueuedTask struct {

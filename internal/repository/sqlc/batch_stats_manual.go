@@ -8,7 +8,7 @@ import (
 
 const getLatestCampaignStatsBatch = `
 SELECT DISTINCT ON (cs.campaign_id)
-  cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend, cs.orders, cs.revenue, cs.created_at
+  cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend, cs.orders, cs.revenue, cs.created_at, cs.atbs, cs.canceled, cs.shks
 FROM campaign_stats cs
 JOIN campaigns c ON c.id = cs.campaign_id
 WHERE c.workspace_id = $1
@@ -26,7 +26,7 @@ func (q *Queries) GetLatestCampaignStatsBatch(ctx context.Context, workspaceID p
 	for rows.Next() {
 		var i CampaignStat
 		if err := rows.Scan(
-			&i.ID, &i.CampaignID, &i.Date, &i.Impressions, &i.Clicks, &i.Spend, &i.Orders, &i.Revenue, &i.CreatedAt,
+			&i.ID, &i.CampaignID, &i.Date, &i.Impressions, &i.Clicks, &i.Spend, &i.Orders, &i.Revenue, &i.CreatedAt, &i.Atbs, &i.Canceled, &i.Shks,
 		); err != nil {
 			return nil, err
 		}
@@ -37,7 +37,7 @@ func (q *Queries) GetLatestCampaignStatsBatch(ctx context.Context, workspaceID p
 
 const getLatestPhraseStatsBatch = `
 SELECT DISTINCT ON (ps.phrase_id)
-  ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.created_at
+  ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.atbs, ps.orders, ps.cpc, ps.cpm, ps.avg_pos, ps.created_at, ps.updated_at
 FROM phrase_stats ps
 JOIN phrases p ON p.id = ps.phrase_id
 WHERE p.workspace_id = $1
@@ -55,7 +55,7 @@ func (q *Queries) GetLatestPhraseStatsBatch(ctx context.Context, workspaceID pgt
 	for rows.Next() {
 		var i PhraseStat
 		if err := rows.Scan(
-			&i.ID, &i.PhraseID, &i.Date, &i.Impressions, &i.Clicks, &i.Spend, &i.CreatedAt,
+			&i.ID, &i.PhraseID, &i.Date, &i.Impressions, &i.Clicks, &i.Spend, &i.Atbs, &i.Orders, &i.Cpc, &i.Cpm, &i.AvgPos, &i.CreatedAt, &i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -13,9 +13,6 @@
 + /docs
 + /openapi.yaml
 
-# ---- Documented but route TBD ----
-- /api/v1/audit-logs
-
 # ---- /api/v1/cabinets/* — legacy alias of /api/v1/seller-cabinets/*. Routes to the
 # same handlers; intentionally undocumented to discourage new clients from binding to
 # the alias. Remove from the router (and from this file) once no caller uses it. ----

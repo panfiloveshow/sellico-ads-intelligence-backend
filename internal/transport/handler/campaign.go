@@ -250,10 +250,14 @@ const dateLayout = "2006-01-02"
 // parseDateRange extracts date_from and date_to query params.
 // Defaults to last 30 days if not provided.
 func parseDateRange(r *http.Request) (time.Time, time.Time) {
-	now := time.Now().UTC()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	dateTo := today
-	dateFrom := today.AddDate(0, 0, -30)
+	location, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		location = time.FixedZone("MSK", 3*60*60)
+	}
+	now := time.Now().In(location)
+	yesterday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location).AddDate(0, 0, -1)
+	dateTo := yesterday
+	dateFrom := yesterday.AddDate(0, 0, -30)
 
 	if v := r.URL.Query().Get("date_from"); v != "" {
 		if t, err := time.Parse(dateLayout, v); err == nil {

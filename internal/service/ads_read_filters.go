@@ -11,11 +11,15 @@ import (
 func buildQuerySummaryRefs(items []domain.QueryPerformanceSummary) []domain.AdsEntityRef {
 	result := make([]domain.AdsEntityRef, 0, len(items))
 	for _, item := range items {
-		wbID := item.WBClusterID
+		var wbID *int64
+		if item.WBClusterID != nil {
+			v := *item.WBClusterID
+			wbID = &v
+		}
 		result = append(result, domain.AdsEntityRef{
 			ID:     item.ID,
 			Label:  item.Keyword,
-			WBID:   &wbID,
+			WBID:   wbID,
 			Count:  item.ClusterSize,
 			Source: item.SignalCategory,
 		})

@@ -1,0 +1,5 @@
+ALTER TABLE campaign_stats
+    ADD COLUMN IF NOT EXISTS shks BIGINT NULL;
+
+ALTER TABLE product_stats
+    ADD COLUMN IF NOT EXISTS shks BIGINT NULL;

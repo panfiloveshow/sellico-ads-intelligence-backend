@@ -102,6 +102,38 @@ func TestLoad_ProxiesEmptyString(t *testing.T) {
 	assert.Nil(t, cfg.WBParserProxies)
 }
 
+func TestValidateConfig_RejectsWeakSecrets(t *testing.T) {
+	err := validateConfig(&Config{
+		JWTSecret:     "short",
+		EncryptionKey: "0123456789abcdef0123456789abcdef",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JWT_SECRET")
+}
+
+func TestValidateConfig_RejectsInvalidEncryptionKeyLength(t *testing.T) {
+	err := validateConfig(&Config{
+		JWTSecret:     "test-jwt-secret-min-32-chars-long!!",
+		EncryptionKey: "too-short",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ENCRYPTION_KEY")
+}
+
+func TestValidateConfig_RejectsNegativeRateLimit(t *testing.T) {
+	err := validateConfig(&Config{
+		JWTSecret:      "test-jwt-secret-min-32-chars-long!!",
+		EncryptionKey:  "0123456789abcdef0123456789abcdef",
+		RateLimitRPS:   -1,
+		RateLimitBurst: 40,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RATE_LIMIT_RPS")
+}
+
 func TestGetEnvOrDefault_Set(t *testing.T) {
 	t.Setenv("TEST_VAR", "custom")
 	assert.Equal(t, "custom", getEnvOrDefault("TEST_VAR", "default"))

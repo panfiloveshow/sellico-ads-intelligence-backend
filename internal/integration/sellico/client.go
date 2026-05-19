@@ -95,10 +95,10 @@ func (c *Client) ListWorkspaces(ctx context.Context, token string) ([]Workspace,
 			Name:       firstNonEmpty(stringify(raw["name"]), stringify(raw["title"]), "Sellico Workspace"),
 			UserID:     stringifyID(raw["user_id"]),
 			OwnerID:    stringifyID(owner["id"]),
-			ExternalID: stringifyID(raw["id"]),
+			ExternalID: stringifyID(raw["work_space_id"]),
 		}
 		if workspace.ExternalID == "" {
-			workspace.ExternalID = workspace.AccountID
+			workspace.ExternalID = workspace.ID
 		}
 		workspaces = append(workspaces, workspace)
 	}
@@ -256,7 +256,7 @@ func parseIntegration(value any) Integration {
 
 	return Integration{
 		ID:       stringifyID(raw["id"]),
-		Name:     firstNonEmpty(stringify(raw["name"]), stringify(raw["title"]), "Sellico Integration"),
+		Name:     firstNonEmpty(stringify(raw["name"]), stringify(raw["title"])),
 		Type:     integrationType,
 		APIKey:   apiKey,
 		ClientID: clientID,

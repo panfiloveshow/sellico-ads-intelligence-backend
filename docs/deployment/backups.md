@@ -11,8 +11,8 @@
 ## Расписание (cron на VPS)
 
 ```cron
-0  3 * * * /opt/sellico/scripts/backup-db.sh    >> /var/log/sellico-backup.log 2>&1
-30 4 * * * /opt/sellico/scripts/restore-check.sh >> /var/log/sellico-restore-check.log 2>&1
+0  3 * * * cd /opt/sellico && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 BACKUP_TEXTFILE_DIR=/var/lib/node_exporter/textfile ./scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1
+30 4 * * * cd /opt/sellico && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 ./scripts/restore-check.sh >> /var/log/sellico-restore-check.log 2>&1
 ```
 
 Обе строки устанавливаются `scripts/deploy.sh setup`.
@@ -46,14 +46,14 @@
    AWS_ACCESS_KEY_ID=YOUR_KEY_ID
    AWS_SECRET_ACCESS_KEY=YOUR_SECRET
    BACKUP_GPG_PASSPHRASE_FILE=/etc/sellico/backup-gpg.pass
-   PGPASSWORD=...
-   0 3 * * * root /opt/sellico/scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1
+   0 3 * * * root cd /opt/sellico && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 BACKUP_TEXTFILE_DIR=/var/lib/node_exporter/textfile ./scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1
    ```
 
 5. **Проверить вручную**:
    ```bash
    sudo -E /opt/sellico/scripts/backup-db.sh
    aws --endpoint-url=https://storage.yandexcloud.net s3 ls s3://sellico-backups/postgres/
+   cat /var/lib/node_exporter/textfile/sellico_backup.prom
    ```
 
 ## Восстановление в случае инцидента
@@ -84,9 +84,11 @@
 
 - **`absent(probe_success{job="backup"})`** — backup-cron не отрабатывал >25ч
 - **`probe_success{job="restore-check"} == 0`** — restore-check провалился
-- **`(time() - sellico_backup_last_success_timestamp) > 86400`** — последний успешный бэкап старше суток
+- **`time() - sellico_backup_last_success_timestamp_seconds > 93600`** — последний успешный бэкап старше 26 часов
+- **`sellico_backup_offsite_configured == 1 and sellico_backup_offsite_success == 0`** — offsite был настроен, но последний бэкап не был выгружен
 
-Эти метрики экспортирует отдельный sidecar (Sprint 4 plan), либо парсится `/var/log/sellico-*.log`.
+Backup-метрики пишет `scripts/backup-db.sh` в Prometheus textfile collector:
+`/var/lib/node_exporter/textfile/sellico_backup.prom`.
 
 ## Тренировки восстановления (DR-drill)
 

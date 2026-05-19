@@ -50,7 +50,11 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	var productRows []sqlcgen.Product
 	var phraseRows []sqlcgen.Phrase
 	var campaignStatRows []sqlcgen.CampaignStat
+	var productStatRows []sqlcgen.ProductStat
+	var productBusinessRows []sqlcgen.ProductSalesDaily
 	var phraseStatRows []sqlcgen.PhraseStat
+	var campaignProductRows []sqlcgen.CampaignProduct
+	var campaignBudgetRows []sqlcgen.CampaignBudget
 	var extensionEvidence *workspaceExtensionEvidence
 	var lastAutoSync *domain.SellerCabinetAutoSyncSummary
 
@@ -91,9 +95,33 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	})
 	g.Go(func() error {
 		var err error
+		productStatRows, err = s.queries.ListProductStatsByWorkspaceDateRange(gctx, sqlcgen.ListProductStatsByWorkspaceDateRangeParams{
+			WorkspaceID: workspaceUUID(workspaceID), DateFrom: pgDate(dateFrom), DateTo: pgDate(dateTo),
+		})
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		productBusinessRows, err = s.queries.ListProductSalesDailyByWorkspaceDateRange(gctx, sqlcgen.ListProductSalesDailyByWorkspaceDateRangeParams{
+			WorkspaceID: workspaceUUID(workspaceID), DateFrom: pgDate(dateFrom), DateTo: pgDate(dateTo),
+		})
+		return err
+	})
+	g.Go(func() error {
+		var err error
 		phraseStatRows, err = s.queries.ListPhraseStatsByWorkspaceDateRange(gctx, sqlcgen.ListPhraseStatsByWorkspaceDateRangeParams{
 			WorkspaceID: workspaceUUID(workspaceID), DateFrom: dateFrom, DateTo: dateTo,
 		})
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		campaignProductRows, err = s.queries.ListCampaignProductsByWorkspace(gctx, uuidToPgtype(workspaceID))
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		campaignBudgetRows, err = s.queries.ListLatestCampaignBudgetsByWorkspace(gctx, uuidToPgtype(workspaceID))
 		return err
 	})
 	g.Go(func() error {
@@ -116,17 +144,22 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 
 	// Assemble data structure
 	data := &adsWorkspaceData{
-		cabinets:           make(map[uuid.UUID]domain.SellerCabinet, len(cabinetRows)),
-		campaigns:          make([]domain.Campaign, 0, len(campaignRows)),
-		products:           make([]domain.Product, 0, len(productRows)),
-		phrases:            make([]domain.Phrase, 0, len(phraseRows)),
-		campaignStatsByID:  make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
-		phraseStatsByID:    make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
-		campaignProductIDs: make(map[uuid.UUID][]uuid.UUID),
-		productCampaignIDs: make(map[uuid.UUID][]uuid.UUID),
-		campaignPhrases:    make(map[uuid.UUID][]domain.Phrase),
-		lastAutoSync:       lastAutoSync,
-		extensionEvidence:  &workspaceExtensionEvidence{},
+		cabinets:            make(map[uuid.UUID]domain.SellerCabinet, len(cabinetRows)),
+		campaigns:           make([]domain.Campaign, 0, len(campaignRows)),
+		products:            make([]domain.Product, 0, len(productRows)),
+		phrases:             make([]domain.Phrase, 0, len(phraseRows)),
+		campaignStatsByID:   make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
+		productStatsByID:    make(map[uuid.UUID][]domain.ProductStat, len(productRows)),
+		productStatsByLink:  make(map[productCampaignKey][]domain.ProductStat, len(productStatRows)),
+		productBusinessByID: make(map[uuid.UUID][]domain.ProductBusinessSummary, len(productRows)),
+		phraseStatsByID:     make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
+		campaignProductIDs:  make(map[uuid.UUID][]uuid.UUID),
+		productCampaignIDs:  make(map[uuid.UUID][]uuid.UUID),
+		campaignProductMeta: make(map[productCampaignKey]domain.CampaignProductLinkMeta, len(campaignProductRows)),
+		campaignPhrases:     make(map[uuid.UUID][]domain.Phrase),
+		campaignBudgets:     make(map[uuid.UUID]domain.CampaignBudgetSummary),
+		lastAutoSync:        lastAutoSync,
+		extensionEvidence:   &workspaceExtensionEvidence{},
 	}
 	if extensionEvidence != nil {
 		data.extensionEvidence = extensionEvidence
@@ -152,12 +185,40 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 		stat := campaignStatFromSqlc(row)
 		data.campaignStatsByID[stat.CampaignID] = append(data.campaignStatsByID[stat.CampaignID], stat)
 	}
+	for _, row := range productStatRows {
+		stat := productStatFromSqlc(row)
+		data.productStatsByID[stat.ProductID] = append(data.productStatsByID[stat.ProductID], stat)
+		key := productCampaignKey{productID: stat.ProductID, campaignID: stat.CampaignID}
+		data.productStatsByLink[key] = append(data.productStatsByLink[key], stat)
+	}
+	for _, row := range productBusinessRows {
+		if !row.ProductID.Valid {
+			continue
+		}
+		productID := uuidFromPgtype(row.ProductID)
+		if productID == uuid.Nil {
+			continue
+		}
+		data.productBusinessByID[productID] = append(data.productBusinessByID[productID], productBusinessFromSqlc(row))
+	}
 	for _, row := range phraseStatRows {
 		stat := phraseStatFromSqlc(row)
 		data.phraseStatsByID[stat.PhraseID] = append(data.phraseStatsByID[stat.PhraseID], stat)
 	}
+	for _, row := range campaignBudgetRows {
+		campaignID := uuidFromPgtype(row.CampaignID)
+		if campaignID == uuid.Nil {
+			continue
+		}
+		data.campaignBudgets[campaignID] = domain.CampaignBudgetSummary{
+			Cash:       row.Cash,
+			Netting:    row.Netting,
+			Total:      row.Total,
+			CapturedAt: row.CapturedAt.Time,
+		}
+	}
 
-	s.attachCampaignProducts(ctx, data, workspaceID)
+	s.attachCampaignProducts(ctx, data, campaignProductRows)
 
 	// Store in cache
 	s.cacheMu.Lock()
@@ -178,19 +239,16 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 // attachCampaignProducts links products to campaigns using local DB data only.
 // Uses seller_cabinet_id as the join key (products and campaigns from the same cabinet are related).
 // This avoids live WB API calls on every read request (audit fix: CRITICAL — was O(cabinets) HTTP calls per read).
-func (s *AdsReadService) attachCampaignProducts(_ context.Context, data *adsWorkspaceData, _ uuid.UUID) {
-	// Group product IDs by cabinet for fast lookup
-	productIDsByCabinet := make(map[uuid.UUID][]uuid.UUID)
-	for _, product := range data.products {
-		productIDsByCabinet[product.SellerCabinetID] = append(productIDsByCabinet[product.SellerCabinetID], product.ID)
-	}
-
-	// Link campaigns to products in the same cabinet (store IDs only to save memory)
-	for _, campaign := range data.campaigns {
-		cabinetProductIDs := productIDsByCabinet[campaign.SellerCabinetID]
-		data.campaignProductIDs[campaign.ID] = cabinetProductIDs
-		for _, productID := range cabinetProductIDs {
-			data.productCampaignIDs[productID] = append(data.productCampaignIDs[productID], campaign.ID)
+func (s *AdsReadService) attachCampaignProducts(_ context.Context, data *adsWorkspaceData, links []sqlcgen.CampaignProduct) {
+	for _, link := range links {
+		campaignID := uuidFromPgtype(link.CampaignID)
+		productID := uuidFromPgtype(link.ProductID)
+		data.campaignProductIDs[campaignID] = append(data.campaignProductIDs[campaignID], productID)
+		data.productCampaignIDs[productID] = append(data.productCampaignIDs[productID], campaignID)
+		data.campaignProductMeta[productCampaignKey{productID: productID, campaignID: campaignID}] = domain.CampaignProductLinkMeta{
+			SubjectName:        textToPtr(link.SubjectName),
+			BidSearch:          int8ToPtr(link.BidSearch),
+			BidRecommendations: int8ToPtr(link.BidRecommendations),
 		}
 	}
 }
@@ -241,6 +299,21 @@ func (data *adsWorkspaceData) productByIDMap() map[uuid.UUID]domain.Product {
 		m[p.ID] = p
 	}
 	return m
+}
+
+func (data *adsWorkspaceData) productByCabinetAndWBIDMap() map[string]domain.Product {
+	m := make(map[string]domain.Product, len(data.products))
+	for _, p := range data.products {
+		if p.WBProductID <= 0 {
+			continue
+		}
+		m[productCabinetWBKey(p.SellerCabinetID, p.WBProductID)] = p
+	}
+	return m
+}
+
+func productCabinetWBKey(cabinetID uuid.UUID, wbProductID int64) string {
+	return fmt.Sprintf("%s:%d", cabinetID.String(), wbProductID)
 }
 
 func (data *adsWorkspaceData) campaignByIDMap() map[uuid.UUID]domain.Campaign {

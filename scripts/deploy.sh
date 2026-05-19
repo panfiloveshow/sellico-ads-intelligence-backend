@@ -52,8 +52,8 @@ case "${1:-update}" in
     fi
 
     # Install backup + restore-check crons
-    BACKUP_LINE="0 3 * * * $DEPLOY_DIR/scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1"
-    RESTORE_LINE="30 4 * * * $DEPLOY_DIR/scripts/restore-check.sh >> /var/log/sellico-restore-check.log 2>&1"
+    BACKUP_LINE="0 3 * * * cd $DEPLOY_DIR && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 BACKUP_TEXTFILE_DIR=/var/lib/node_exporter/textfile ./scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1"
+    RESTORE_LINE="30 4 * * * cd $DEPLOY_DIR && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 ./scripts/restore-check.sh >> /var/log/sellico-restore-check.log 2>&1"
     ( crontab -l 2>/dev/null | grep -v "backup-db.sh\|restore-check.sh"
       echo "$BACKUP_LINE"
       echo "$RESTORE_LINE"
@@ -77,6 +77,9 @@ case "${1:-update}" in
     # Build api+worker from current source (needed when running `git pull` first).
     docker compose -f "$COMPOSE_FILE" build api worker
     log "Images built"
+
+    docker compose -f "$COMPOSE_FILE" run --rm migrate
+    log "Migrations applied"
 
     # Bring up everything in the default profile (api, worker, postgres, redis,
     # nginx, prometheus, grafana, cadvisor, node-exporter). Alertmanager stays

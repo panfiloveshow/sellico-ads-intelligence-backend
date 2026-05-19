@@ -12,17 +12,22 @@ import (
 )
 
 const createPhraseStat = `-- name: CreatePhraseStat :one
-INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, phrase_id, date, impressions, clicks, spend, created_at, updated_at
+INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at
 `
 
 type CreatePhraseStatParams struct {
-	PhraseID    pgtype.UUID `json:"phrase_id"`
-	Date        pgtype.Date `json:"date"`
-	Impressions int64       `json:"impressions"`
-	Clicks      int64       `json:"clicks"`
-	Spend       int64       `json:"spend"`
+	PhraseID    pgtype.UUID   `json:"phrase_id"`
+	Date        pgtype.Date   `json:"date"`
+	Impressions int64         `json:"impressions"`
+	Clicks      int64         `json:"clicks"`
+	Spend       int64         `json:"spend"`
+	Atbs        pgtype.Int8   `json:"atbs"`
+	Orders      pgtype.Int8   `json:"orders"`
+	Cpc         pgtype.Float8 `json:"cpc"`
+	Cpm         pgtype.Float8 `json:"cpm"`
+	AvgPos      pgtype.Float8 `json:"avg_pos"`
 }
 
 func (q *Queries) CreatePhraseStat(ctx context.Context, arg CreatePhraseStatParams) (PhraseStat, error) {
@@ -32,6 +37,11 @@ func (q *Queries) CreatePhraseStat(ctx context.Context, arg CreatePhraseStatPara
 		arg.Impressions,
 		arg.Clicks,
 		arg.Spend,
+		arg.Atbs,
+		arg.Orders,
+		arg.Cpc,
+		arg.Cpm,
+		arg.AvgPos,
 	)
 	var i PhraseStat
 	err := row.Scan(
@@ -41,6 +51,11 @@ func (q *Queries) CreatePhraseStat(ctx context.Context, arg CreatePhraseStatPara
 		&i.Impressions,
 		&i.Clicks,
 		&i.Spend,
+		&i.Atbs,
+		&i.Orders,
+		&i.Cpc,
+		&i.Cpm,
+		&i.AvgPos,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -48,7 +63,7 @@ func (q *Queries) CreatePhraseStat(ctx context.Context, arg CreatePhraseStatPara
 }
 
 const getLatestPhraseStat = `-- name: GetLatestPhraseStat :one
-SELECT id, phrase_id, date, impressions, clicks, spend, created_at, updated_at FROM phrase_stats
+SELECT id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at FROM phrase_stats
 WHERE phrase_id = $1
 ORDER BY date DESC
 LIMIT 1
@@ -64,6 +79,11 @@ func (q *Queries) GetLatestPhraseStat(ctx context.Context, phraseID pgtype.UUID)
 		&i.Impressions,
 		&i.Clicks,
 		&i.Spend,
+		&i.Atbs,
+		&i.Orders,
+		&i.Cpc,
+		&i.Cpm,
+		&i.AvgPos,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -71,7 +91,7 @@ func (q *Queries) GetLatestPhraseStat(ctx context.Context, phraseID pgtype.UUID)
 }
 
 const getPhraseStatsByDateRange = `-- name: GetPhraseStatsByDateRange :many
-SELECT id, phrase_id, date, impressions, clicks, spend, created_at, updated_at FROM phrase_stats
+SELECT id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at FROM phrase_stats
 WHERE phrase_id = $1 AND date BETWEEN $2 AND $3
 ORDER BY date
 LIMIT $4 OFFSET $5
@@ -107,6 +127,11 @@ func (q *Queries) GetPhraseStatsByDateRange(ctx context.Context, arg GetPhraseSt
 			&i.Impressions,
 			&i.Clicks,
 			&i.Spend,
+			&i.Atbs,
+			&i.Orders,
+			&i.Cpc,
+			&i.Cpm,
+			&i.AvgPos,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -121,7 +146,7 @@ func (q *Queries) GetPhraseStatsByDateRange(ctx context.Context, arg GetPhraseSt
 }
 
 const listPhraseStatsByWorkspace = `-- name: ListPhraseStatsByWorkspace :many
-SELECT ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.created_at, ps.updated_at FROM phrase_stats ps
+SELECT ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.atbs, ps.orders, ps.cpc, ps.cpm, ps.avg_pos, ps.created_at, ps.updated_at FROM phrase_stats ps
 JOIN phrases p ON p.id = ps.phrase_id
 WHERE p.workspace_id = $1
 ORDER BY ps.date DESC
@@ -150,6 +175,11 @@ func (q *Queries) ListPhraseStatsByWorkspace(ctx context.Context, arg ListPhrase
 			&i.Impressions,
 			&i.Clicks,
 			&i.Spend,
+			&i.Atbs,
+			&i.Orders,
+			&i.Cpc,
+			&i.Cpm,
+			&i.AvgPos,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -164,22 +194,32 @@ func (q *Queries) ListPhraseStatsByWorkspace(ctx context.Context, arg ListPhrase
 }
 
 const upsertPhraseStat = `-- name: UpsertPhraseStat :one
-INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (phrase_id, date) DO UPDATE SET
     impressions = EXCLUDED.impressions,
     clicks = EXCLUDED.clicks,
     spend = EXCLUDED.spend,
+    atbs = EXCLUDED.atbs,
+    orders = EXCLUDED.orders,
+    cpc = EXCLUDED.cpc,
+    cpm = EXCLUDED.cpm,
+    avg_pos = EXCLUDED.avg_pos,
     updated_at = now()
-RETURNING id, phrase_id, date, impressions, clicks, spend, created_at, updated_at
+RETURNING id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at
 `
 
 type UpsertPhraseStatParams struct {
-	PhraseID    pgtype.UUID `json:"phrase_id"`
-	Date        pgtype.Date `json:"date"`
-	Impressions int64       `json:"impressions"`
-	Clicks      int64       `json:"clicks"`
-	Spend       int64       `json:"spend"`
+	PhraseID    pgtype.UUID   `json:"phrase_id"`
+	Date        pgtype.Date   `json:"date"`
+	Impressions int64         `json:"impressions"`
+	Clicks      int64         `json:"clicks"`
+	Spend       int64         `json:"spend"`
+	Atbs        pgtype.Int8   `json:"atbs"`
+	Orders      pgtype.Int8   `json:"orders"`
+	Cpc         pgtype.Float8 `json:"cpc"`
+	Cpm         pgtype.Float8 `json:"cpm"`
+	AvgPos      pgtype.Float8 `json:"avg_pos"`
 }
 
 func (q *Queries) UpsertPhraseStat(ctx context.Context, arg UpsertPhraseStatParams) (PhraseStat, error) {
@@ -189,6 +229,11 @@ func (q *Queries) UpsertPhraseStat(ctx context.Context, arg UpsertPhraseStatPara
 		arg.Impressions,
 		arg.Clicks,
 		arg.Spend,
+		arg.Atbs,
+		arg.Orders,
+		arg.Cpc,
+		arg.Cpm,
+		arg.AvgPos,
 	)
 	var i PhraseStat
 	err := row.Scan(
@@ -198,6 +243,11 @@ func (q *Queries) UpsertPhraseStat(ctx context.Context, arg UpsertPhraseStatPara
 		&i.Impressions,
 		&i.Clicks,
 		&i.Spend,
+		&i.Atbs,
+		&i.Orders,
+		&i.Cpc,
+		&i.Cpm,
+		&i.AvgPos,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

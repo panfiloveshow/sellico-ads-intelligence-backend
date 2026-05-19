@@ -69,6 +69,8 @@ func main() {
 			Spend:       stat.Spend,
 			Orders:      int64PtrToPgInt8(stat.Orders),
 			Revenue:     int64PtrToPgInt8(stat.Revenue),
+			Atbs:        int64PtrToPgInt8(stat.Atbs),
+			Canceled:    int64PtrToPgInt8(stat.Canceled),
 		}); upsertErr != nil {
 			panic(upsertErr)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,12 +19,12 @@ import (
 
 type strategyServicer interface {
 	Create(ctx context.Context, workspaceID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
-	Get(ctx context.Context, strategyID uuid.UUID) (*domain.Strategy, error)
-	List(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.Strategy, error)
-	Update(ctx context.Context, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
-	Delete(ctx context.Context, strategyID uuid.UUID) error
-	AttachBinding(ctx context.Context, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error)
-	DetachBinding(ctx context.Context, bindingID uuid.UUID) error
+	Get(ctx context.Context, workspaceID, strategyID uuid.UUID) (*domain.Strategy, error)
+	List(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID, limit, offset int32) ([]domain.Strategy, error)
+	Update(ctx context.Context, workspaceID, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
+	Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error
+	AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error)
+	DetachBinding(ctx context.Context, workspaceID, bindingID uuid.UUID) error
 }
 
 type StrategyHandler struct {
@@ -32,6 +33,45 @@ type StrategyHandler struct {
 
 func NewStrategyHandler(svc strategyServicer) *StrategyHandler {
 	return &StrategyHandler{svc: svc}
+}
+
+func validateStrategyInput(input domain.Strategy) map[string]string {
+	errors := map[string]string{}
+	if strings.TrimSpace(input.Name) == "" {
+		errors["name"] = "is required"
+	}
+	if input.SellerCabinetID == uuid.Nil {
+		errors["seller_cabinet_id"] = "is required"
+	}
+	switch input.Type {
+	case domain.StrategyTypeACoS,
+		domain.StrategyTypeROAS,
+		domain.StrategyTypeAntiSliv,
+		domain.StrategyTypeDayparting,
+		domain.StrategyTypeRecommendation:
+	default:
+		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, recommendation"
+	}
+	params := input.Params
+	if params.MinBid < 0 {
+		errors["params.min_bid"] = "must be non-negative"
+	}
+	if params.MaxBid < 0 {
+		errors["params.max_bid"] = "must be non-negative"
+	}
+	if params.MinBid > 0 && params.MaxBid > 0 && params.MinBid > params.MaxBid {
+		errors["params.min_bid"] = "must be less than or equal to max_bid"
+	}
+	if params.MaxChangePercent < 0 || params.MaxChangePercent > 100 {
+		errors["params.max_change_percent"] = "must be between 0 and 100"
+	}
+	if params.LookbackDays < 0 {
+		errors["params.lookback_days"] = "must be non-negative"
+	}
+	if params.MinClicks < 0 {
+		errors["params.min_clicks"] = "must be non-negative"
+	}
+	return errors
 }
 
 func (h *StrategyHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +86,10 @@ func (h *StrategyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
 		return
 	}
+	if validationErrors := validateStrategyInput(input); len(validationErrors) > 0 {
+		dto.WriteValidationError(w, validationErrors)
+		return
+	}
 
 	strategy, err := h.svc.Create(r.Context(), workspaceID, input)
 	if err != nil {
@@ -56,13 +100,18 @@ func (h *StrategyHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StrategyHandler) Get(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
 		return
 	}
 
-	strategy, err := h.svc.Get(r.Context(), id)
+	strategy, err := h.svc.Get(r.Context(), workspaceID, id)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -78,7 +127,12 @@ func (h *StrategyHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
-	strategies, err := h.svc.List(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	sellerCabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid seller_cabinet_id")
+		return
+	}
+	strategies, err := h.svc.List(r.Context(), workspaceID, sellerCabinetID, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -92,6 +146,11 @@ func (h *StrategyHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StrategyHandler) Update(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
@@ -103,8 +162,12 @@ func (h *StrategyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
 		return
 	}
+	if validationErrors := validateStrategyInput(input); len(validationErrors) > 0 {
+		dto.WriteValidationError(w, validationErrors)
+		return
+	}
 
-	strategy, err := h.svc.Update(r.Context(), id, input)
+	strategy, err := h.svc.Update(r.Context(), workspaceID, id, input)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -113,13 +176,18 @@ func (h *StrategyHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StrategyHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), id); err != nil {
+	if err := h.svc.Delete(r.Context(), workspaceID, id); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -132,6 +200,11 @@ type attachRequest struct {
 }
 
 func (h *StrategyHandler) Attach(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
@@ -144,7 +217,7 @@ func (h *StrategyHandler) Attach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	binding, err := h.svc.AttachBinding(r.Context(), id, req.CampaignID, req.ProductID)
+	binding, err := h.svc.AttachBinding(r.Context(), workspaceID, id, req.CampaignID, req.ProductID)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -153,13 +226,18 @@ func (h *StrategyHandler) Attach(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StrategyHandler) Detach(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
 	bindingID, err := uuid.Parse(chi.URLParam(r, "bindingId"))
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid binding id")
 		return
 	}
 
-	if err := h.svc.DetachBinding(r.Context(), bindingID); err != nil {
+	if err := h.svc.DetachBinding(r.Context(), workspaceID, bindingID); err != nil {
 		writeAppError(w, err)
 		return
 	}

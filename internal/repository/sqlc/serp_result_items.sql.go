@@ -24,7 +24,7 @@ type BatchCreateSERPResultItemsParams struct {
 const createSERPResultItem = `-- name: CreateSERPResultItem :one
 INSERT INTO serp_result_items (snapshot_id, position, wb_product_id, title, price, rating, reviews_count)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, snapshot_id, position, wb_product_id, title, price, rating, reviews_count, created_at
+RETURNING id, snapshot_id, position, wb_product_id, title, price, rating, reviews_count, created_at, is_promoted, promo_type
 `
 
 type CreateSERPResultItemParams struct {
@@ -58,12 +58,14 @@ func (q *Queries) CreateSERPResultItem(ctx context.Context, arg CreateSERPResult
 		&i.Rating,
 		&i.ReviewsCount,
 		&i.CreatedAt,
+		&i.IsPromoted,
+		&i.PromoType,
 	)
 	return i, err
 }
 
 const listSERPResultItemsBySnapshot = `-- name: ListSERPResultItemsBySnapshot :many
-SELECT id, snapshot_id, position, wb_product_id, title, price, rating, reviews_count, created_at FROM serp_result_items
+SELECT id, snapshot_id, position, wb_product_id, title, price, rating, reviews_count, created_at, is_promoted, promo_type FROM serp_result_items
 WHERE snapshot_id = $1
 ORDER BY position
 `
@@ -87,6 +89,8 @@ func (q *Queries) ListSERPResultItemsBySnapshot(ctx context.Context, snapshotID 
 			&i.Rating,
 			&i.ReviewsCount,
 			&i.CreatedAt,
+			&i.IsPromoted,
+			&i.PromoType,
 		); err != nil {
 			return nil, err
 		}

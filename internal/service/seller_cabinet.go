@@ -274,18 +274,83 @@ func sellerCabinetAutoSyncSummaryFromJobRun(jobRun sqlcgen.JobRun) *domain.Selle
 	}
 
 	return &domain.SellerCabinetAutoSyncSummary{
-		JobRunID:      uuidFromPgtype(jobRun.ID),
-		Status:        jobRun.Status,
-		ResultState:   resultState,
-		FinishedAt:    finishedAt,
-		Cabinets:      metadataInt(metadata, "cabinets"),
-		Campaigns:     metadataInt(metadata, "campaigns"),
-		CampaignStats: metadataInt(metadata, "campaign_stats"),
-		Phrases:       metadataInt(metadata, "phrases"),
-		PhraseStats:   metadataInt(metadata, "phrase_stats"),
-		Products:      metadataInt(metadata, "products"),
-		SyncIssues:    metadataArrayLen(metadata, "sync_issues"),
+		JobRunID:          uuidFromPgtype(jobRun.ID),
+		Status:            jobRun.Status,
+		ResultState:       resultState,
+		FinishedAt:        finishedAt,
+		SyncPhase:         metadataString(metadata, "sync_phase"),
+		RateLimited:       metadataBool(metadata, "rate_limited"),
+		RateLimitEndpoint: metadataString(metadata, "rate_limit_endpoint"),
+		RetryAfterSeconds: metadataInt(metadata, "retry_after_seconds"),
+		NextAllowedAt:     metadataTimePtr(metadata, "next_allowed_at"),
+		PhaseRetries:      metadataPhaseRetries(metadata, "phase_retries_queued"),
+		DateFrom:          metadataString(metadata, "date_from"),
+		DateTo:            metadataString(metadata, "date_to"),
+		Cabinets:          metadataInt(metadata, "cabinets"),
+		Campaigns:         metadataInt(metadata, "campaigns"),
+		CampaignStats:     metadataInt(metadata, "campaign_stats"),
+		ProductStats:      metadataInt(metadata, "product_stats"),
+		CampaignBudgets:   metadataInt(metadata, "campaign_budgets"),
+		BusinessOrders:    metadataInt(metadata, "business_orders"),
+		BusinessSales:     metadataInt(metadata, "business_sales"),
+		Phrases:           metadataInt(metadata, "phrases"),
+		PhraseStats:       metadataInt(metadata, "phrase_stats"),
+		Products:          metadataInt(metadata, "products"),
+		SyncIssues:        metadataArrayLen(metadata, "sync_issues"),
 	}
+}
+
+func metadataPhaseRetries(metadata map[string]any, key string) []domain.AdsSyncPhaseRetry {
+	value, ok := metadata[key]
+	if !ok {
+		return nil
+	}
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+
+	result := make([]domain.AdsSyncPhaseRetry, 0, len(items))
+	for _, item := range items {
+		typed, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		retry := domain.AdsSyncPhaseRetry{
+			Phase:  metadataString(typed, "phase"),
+			Status: metadataString(typed, "status"),
+			RunAt:  metadataTimePtr(typed, "run_at"),
+		}
+		if retry.Phase == "" {
+			continue
+		}
+		result = append(result, retry)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	value, ok := metadata[key]
+	if !ok {
+		return false
+	}
+	typed, ok := value.(bool)
+	return ok && typed
+}
+
+func metadataTimePtr(metadata map[string]any, key string) *time.Time {
+	value := metadataString(metadata, key)
+	if value == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 func decodeJobRunMetadata(raw []byte) map[string]any {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,15 @@ const (
 	jobResultStateEmpty   = "empty"
 	jobResultStatePartial = "partial"
 	jobResultStateFailed  = "failed"
+
+	defaultTaskTimeout       = 15 * time.Minute
+	workspaceSyncTaskTimeout = 60 * time.Minute
+	jobRunFinalUpdateTimeout = 10 * time.Second
+	phaseRetryDelayFloor     = 30 * time.Minute
+	maxPhaseRetryCount       = 3
 )
+
+var workspaceSyncLocks sync.Map
 
 type syncRunner interface {
 	SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
@@ -31,6 +40,7 @@ type syncRunner interface {
 	SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncProducts(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncSingleCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (service.SyncSummary, error)
+	SyncSingleCabinetPhase(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (service.SyncSummary, error)
 }
 
 type recommendationGenerator interface {
@@ -62,22 +72,43 @@ type bidAutomationRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
+type semanticsCollector interface {
+	CollectFromPhrases(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
+type competitorExtractor interface {
+	ExtractFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
+type deliveryCollector interface {
+	CollectForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
+type seoAnalyzer interface {
+	AnalyzeWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
 // extendedRecommendationGenerator generates extended recs (SEO, price, content).
 type extendedRecommendationGenerator interface {
 	GenerateForWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.Recommendation, error)
 }
 
 type Processor struct {
-	syncService            syncRunner
-	queries                *sqlcgen.Queries
-	engine                 recommendationGenerator
-	extendedEngine         extendedRecommendationGenerator
-	exportGenerator        exportGenerator
-	client                 taskEnqueuer
-	notifier               syncNotifier
-	integrationRefresher   integrationRefresher
-	bidRunner              bidAutomationRunner
-	logger                 zerolog.Logger
+	syncService          syncRunner
+	queries              *sqlcgen.Queries
+	engine               recommendationGenerator
+	extendedEngine       extendedRecommendationGenerator
+	exportGenerator      exportGenerator
+	client               taskEnqueuer
+	notifier             syncNotifier
+	integrationRefresher integrationRefresher
+	bidRunner            bidAutomationRunner
+	semantics            semanticsCollector
+	competitors          competitorExtractor
+	delivery             deliveryCollector
+	seo                  seoAnalyzer
+	logger               zerolog.Logger
 }
 
 func NewProcessor(syncService syncRunner, queries *sqlcgen.Queries, engine recommendationGenerator, exportGenerator exportGenerator, client taskEnqueuer, logger zerolog.Logger) *Processor {
@@ -106,6 +137,26 @@ func (p *Processor) WithIntegrationRefresher(r integrationRefresher) *Processor 
 // WithBidRunner sets the bid automation runner.
 func (p *Processor) WithBidRunner(r bidAutomationRunner) *Processor {
 	p.bidRunner = r
+	return p
+}
+
+func (p *Processor) WithSemanticsCollector(s semanticsCollector) *Processor {
+	p.semantics = s
+	return p
+}
+
+func (p *Processor) WithCompetitorExtractor(c competitorExtractor) *Processor {
+	p.competitors = c
+	return p
+}
+
+func (p *Processor) WithDeliveryCollector(d deliveryCollector) *Processor {
+	p.delivery = d
+	return p
+}
+
+func (p *Processor) WithSEOAnalyzer(s seoAnalyzer) *Processor {
+	p.seo = s
 	return p
 }
 
@@ -143,12 +194,20 @@ func (p *Processor) HandleBidAutomation(ctx context.Context, task *asynq.Task) e
 
 // HandleCollectDelivery collects delivery data for a workspace.
 func (p *Processor) HandleCollectDelivery(ctx context.Context, task *asynq.Task) error {
-	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
 	if err != nil {
 		return err
 	}
-	p.logger.Info().Str("workspace_id", workspaceID.String()).Msg("delivery collection completed")
-	return nil
+	if p.delivery == nil {
+		return fmt.Errorf("delivery collector not configured")
+	}
+	return p.runWithJobRun(ctx, TaskCollectDelivery, &workspaceID, payload, func() (map[string]any, error) {
+		collected, runErr := p.delivery.CollectForWorkspace(ctx, workspaceID)
+		if runErr != nil {
+			return nil, runErr
+		}
+		return map[string]any{"products_collected": collected}, nil
+	})
 }
 
 func (p *Processor) HandleSweepCollectDelivery(ctx context.Context, _ *asynq.Task) error {
@@ -156,12 +215,20 @@ func (p *Processor) HandleSweepCollectDelivery(ctx context.Context, _ *asynq.Tas
 }
 
 func (p *Processor) HandleSEOAnalysis(ctx context.Context, task *asynq.Task) error {
-	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
 	if err != nil {
 		return err
 	}
-	p.logger.Info().Str("workspace_id", workspaceID.String()).Msg("SEO analysis completed")
-	return nil
+	if p.seo == nil {
+		return fmt.Errorf("seo analyzer not configured")
+	}
+	return p.runWithJobRun(ctx, TaskSEOAnalysis, &workspaceID, payload, func() (map[string]any, error) {
+		analyzed, runErr := p.seo.AnalyzeWorkspace(ctx, workspaceID)
+		if runErr != nil {
+			return nil, runErr
+		}
+		return map[string]any{"products_analyzed": analyzed}, nil
+	})
 }
 
 func (p *Processor) HandleSweepSEOAnalysis(ctx context.Context, _ *asynq.Task) error {
@@ -194,12 +261,28 @@ func (p *Processor) HandleSweepExtendedRecommendations(ctx context.Context, _ *a
 
 // HandleCollectKeywords collects keywords from phrases/SERP for a workspace.
 func (p *Processor) HandleCollectKeywords(ctx context.Context, task *asynq.Task) error {
-	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
 	if err != nil {
 		return err
 	}
-	p.logger.Info().Str("workspace_id", workspaceID.String()).Msg("keyword collection started")
-	return nil // Full implementation requires SemanticsService wiring
+	if p.semantics == nil {
+		return fmt.Errorf("semantics collector not configured")
+	}
+	return p.runWithJobRun(ctx, TaskCollectKeywords, &workspaceID, payload, func() (map[string]any, error) {
+		fromPhrases, runErr := p.semantics.CollectFromPhrases(ctx, workspaceID)
+		if runErr != nil {
+			return nil, runErr
+		}
+		fromSERP, runErr := p.semantics.CollectFromSERP(ctx, workspaceID)
+		if runErr != nil {
+			return nil, runErr
+		}
+		return map[string]any{
+			"from_phrases": fromPhrases,
+			"from_serp":    fromSERP,
+			"imported":     fromPhrases + fromSERP,
+		}, nil
+	})
 }
 
 // HandleSweepCollectKeywords distributes keyword collection across workspaces.
@@ -209,12 +292,20 @@ func (p *Processor) HandleSweepCollectKeywords(ctx context.Context, _ *asynq.Tas
 
 // HandleExtractCompetitors extracts competitors from SERP for a workspace.
 func (p *Processor) HandleExtractCompetitors(ctx context.Context, task *asynq.Task) error {
-	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
 	if err != nil {
 		return err
 	}
-	p.logger.Info().Str("workspace_id", workspaceID.String()).Msg("competitor extraction started")
-	return nil // Full implementation requires CompetitorService wiring
+	if p.competitors == nil {
+		return fmt.Errorf("competitor extractor not configured")
+	}
+	return p.runWithJobRun(ctx, TaskExtractCompetitors, &workspaceID, payload, func() (map[string]any, error) {
+		extracted, runErr := p.competitors.ExtractFromSERP(ctx, workspaceID)
+		if runErr != nil {
+			return nil, runErr
+		}
+		return map[string]any{"competitors_found": extracted}, nil
+	})
 }
 
 // HandleSweepExtractCompetitors distributes competitor extraction across workspaces.
@@ -241,6 +332,13 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 	if err != nil {
 		return err
 	}
+	unlock, locked := tryWorkspaceSyncLock(workspaceID)
+	if !locked {
+		p.logger.Warn().Str("workspace_id", workspaceID.String()).Msg("workspace sync already running, skipping duplicate task")
+		p.markDuplicateWorkspaceSyncSkipped(ctx, payload, workspaceID)
+		return nil
+	}
+	defer unlock()
 	return p.runWithJobRun(ctx, TaskSyncWorkspace, &workspaceID, payload, func() (map[string]any, error) {
 		if p.syncService == nil {
 			return nil, fmt.Errorf("sync service is not configured")
@@ -254,17 +352,21 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 				if cabIDStr, ok := meta["seller_cabinet_id"].(string); ok && cabIDStr != "" {
 					cabinetID, parseErr := uuid.Parse(cabIDStr)
 					if parseErr == nil {
-						p.logger.Info().Str("cabinet_id", cabIDStr).Msg("starting single cabinet sync")
-						summary, syncErr := p.syncService.SyncSingleCabinet(ctx, workspaceID, cabinetID)
-						result := map[string]any{
-							"cabinets":       1,
-							"campaigns":      summary.Campaigns,
-							"campaign_stats": summary.CampaignStats,
-							"phrases":        summary.Phrases,
-							"products":       summary.Products,
-							"mode":           "single_cabinet",
-							"cabinet_id":     cabIDStr,
+						phase := stringFromMetadata(meta, "sync_phase")
+						var summary service.SyncSummary
+						var syncErr error
+						if phase != "" {
+							p.logger.Info().Str("cabinet_id", cabIDStr).Str("sync_phase", phase).Msg("starting single cabinet sync phase")
+							summary, syncErr = p.syncService.SyncSingleCabinetPhase(ctx, workspaceID, cabinetID, phase)
+						} else {
+							p.logger.Info().Str("cabinet_id", cabIDStr).Msg("starting single cabinet sync")
+							summary, syncErr = p.syncService.SyncSingleCabinet(ctx, workspaceID, cabinetID)
 						}
+						result := singleCabinetSyncResult(summary, cabIDStr, phase)
+						if retryResult := p.enqueueRateLimitedSingleCabinetRetries(workspaceID, cabinetID, meta, summary); len(retryResult) > 0 {
+							result["phase_retries_queued"] = retryResult
+						}
+						mergeIntoMetadata(result, syncSummaryMetadata(summary))
 						if syncErr != nil {
 							p.notifySyncResult(ctx, workspaceID, "partial", nil)
 							return result, syncErr
@@ -287,23 +389,44 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 		phraseSummary, phraseErr := p.syncService.SyncPhrases(ctx, workspaceID)
 		productSummary, productErr := p.syncService.SyncProducts(ctx, workspaceID)
 		syncIssueStrings := collectSyncIssues(campaignSummary, campaignStatsSummary, phraseSummary, productSummary)
+		wbErrors, rateLimited, partialReasons := collectSyncMetadata(campaignSummary, campaignStatsSummary, phraseSummary, productSummary)
 		result := map[string]any{
-			"cabinets":       maxInt(campaignSummary.Cabinets, campaignStatsSummary.Cabinets, phraseSummary.Cabinets, productSummary.Cabinets),
-			"campaigns":      campaignSummary.Campaigns,
-			"campaign_stats": campaignStatsSummary.CampaignStats,
-			"phrases":        phraseSummary.Phrases,
-			"phrase_stats":   phraseSummary.PhraseStats,
-			"products":       productSummary.Products,
-			"skipped":        campaignStatsSummary.SkippedCampaign + phraseSummary.SkippedCampaign,
-			"sync_issues":    syncIssueStrings,
+			"cabinets":             maxInt(campaignSummary.Cabinets, campaignStatsSummary.Cabinets, phraseSummary.Cabinets, productSummary.Cabinets),
+			"campaigns":            campaignSummary.Campaigns,
+			"campaign_stats":       campaignStatsSummary.CampaignStats,
+			"campaigns_total":      campaignSummary.Campaigns,
+			"campaigns_with_stats": campaignStatsSummary.CampaignStats,
+			"campaign_budgets":     campaignSummary.CampaignBudgets,
+			"phrases":              phraseSummary.Phrases,
+			"phrase_stats":         phraseSummary.PhraseStats,
+			"phrases_with_stats":   phraseSummary.PhraseStats,
+			"products":             productSummary.Products,
+			"product_stats":        campaignStatsSummary.ProductStats,
+			"products_with_stats":  campaignStatsSummary.ProductStats,
+			"business_orders":      campaignSummary.BusinessOrders + campaignStatsSummary.BusinessOrders + phraseSummary.BusinessOrders + productSummary.BusinessOrders,
+			"business_sales":       campaignSummary.BusinessSales + campaignStatsSummary.BusinessSales + phraseSummary.BusinessSales + productSummary.BusinessSales,
+			"skipped":              campaignStatsSummary.SkippedCampaign + phraseSummary.SkippedCampaign,
+			"sync_issues":          syncIssueStrings,
+			"wb_errors":            wbErrors,
+			"rate_limited":         rateLimited > 0,
+			"rate_limit_count":     rateLimited,
+			"partial_reasons":      partialReasons,
+			"rate_limit_endpoint":  firstNonEmptyString(campaignSummary.RateLimitEndpoint, campaignStatsSummary.RateLimitEndpoint, phraseSummary.RateLimitEndpoint, productSummary.RateLimitEndpoint),
+			"retry_after_seconds":  maxInt(campaignSummary.RetryAfterSeconds, campaignStatsSummary.RetryAfterSeconds, phraseSummary.RetryAfterSeconds, productSummary.RetryAfterSeconds),
+			"date_from":            firstNonEmptyString(campaignStatsSummary.DateFrom, phraseSummary.DateFrom),
+			"date_to":              firstNonEmptyString(campaignStatsSummary.DateTo, phraseSummary.DateTo),
 			"campaign_requests": map[string]any{
 				"campaigns":        campaignSummary.Campaigns,
 				"campaign_stats":   campaignStatsSummary.CampaignStats,
+				"campaign_budgets": campaignSummary.CampaignBudgets,
 				"phrases":          phraseSummary.Phrases,
 				"phrase_stats":     phraseSummary.PhraseStats,
 				"products":         productSummary.Products,
 				"skipped_campaign": campaignStatsSummary.SkippedCampaign + phraseSummary.SkippedCampaign,
 			},
+		}
+		if nextAllowedAt := firstNonNilTime(campaignSummary.NextAllowedAt, campaignStatsSummary.NextAllowedAt, phraseSummary.NextAllowedAt, productSummary.NextAllowedAt); nextAllowedAt != nil {
+			result["next_allowed_at"] = nextAllowedAt.Format(time.RFC3339)
 		}
 
 		if err := firstNonNilError(campaignErr, campaignStatsErr, phraseErr, productErr); err != nil {
@@ -321,6 +444,254 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 
 		return result, nil
 	})
+}
+
+func tryWorkspaceSyncLock(workspaceID uuid.UUID) (func(), bool) {
+	key := workspaceID.String()
+	value, _ := workspaceSyncLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	if !lock.TryLock() {
+		return nil, false
+	}
+	return func() {
+		lock.Unlock()
+		workspaceSyncLocks.Delete(key)
+	}, true
+}
+
+func (p *Processor) markDuplicateWorkspaceSyncSkipped(ctx context.Context, payload WorkspaceTaskPayload, workspaceID uuid.UUID) {
+	if p.queries == nil || payload.JobRunID == "" {
+		return
+	}
+	jobRunID, err := parseOptionalUUID(payload.JobRunID)
+	if err != nil || jobRunID == nil {
+		return
+	}
+	metadata := workspaceTaskMetadata(payload)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["result_state"] = jobResultStatePartial
+	metadata["duplicate_skipped"] = true
+	metadata["workspace_id"] = workspaceID.String()
+	_, err = p.queries.UpdateJobRunStatus(ctx, sqlcgen.UpdateJobRunStatusParams{
+		ID:           optionalUUIDToPgtype(jobRunID),
+		Status:       "partial",
+		FinishedAt:   pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		ErrorMessage: pgtype.Text{String: "workspace sync already running", Valid: true},
+		Metadata:     mustJSON(metadata),
+	})
+	if err != nil {
+		p.logger.Warn().Err(err).Str("job_run_id", payload.JobRunID).Msg("failed to mark duplicate workspace sync skipped")
+	}
+}
+
+func singleCabinetSyncResult(summary service.SyncSummary, cabinetID, phase string) map[string]any {
+	mode := "single_cabinet"
+	if phase != "" {
+		mode = "single_cabinet_phase"
+	}
+	result := map[string]any{
+		"cabinets":             1,
+		"campaigns":            summary.Campaigns,
+		"campaign_stats":       summary.CampaignStats,
+		"product_stats":        summary.ProductStats,
+		"campaign_budgets":     summary.CampaignBudgets,
+		"ad_balances":          summary.AdBalances,
+		"finance_docs":         summary.FinanceDocs,
+		"sales_funnel":         summary.SalesFunnel,
+		"business_orders":      summary.BusinessOrders,
+		"business_sales":       summary.BusinessSales,
+		"phrases":              summary.Phrases,
+		"phrase_stats":         summary.PhraseStats,
+		"products":             summary.Products,
+		"products_with_stats":  summary.ProductStats,
+		"campaigns_with_stats": summary.CampaignStats,
+		"phrases_with_stats":   summary.PhraseStats,
+		"skipped":              summary.SkippedCampaign,
+		"sync_issues":          summary.Issues,
+		"mode":                 mode,
+		"cabinet_id":           cabinetID,
+	}
+	if phase != "" {
+		result["sync_phase"] = phase
+	}
+	return result
+}
+
+func (p *Processor) enqueueRateLimitedSingleCabinetRetries(workspaceID, cabinetID uuid.UUID, metadata map[string]any, summary service.SyncSummary) []map[string]any {
+	if p.client == nil || summary.RateLimited == 0 {
+		return nil
+	}
+	currentRetry := intFromMetadata(metadata, "phase_retry_count")
+	if currentRetry >= maxPhaseRetryCount {
+		p.logger.Warn().
+			Str("cabinet_id", cabinetID.String()).
+			Int("phase_retry_count", currentRetry).
+			Msg("single cabinet phase retry limit reached")
+		return nil
+	}
+
+	phases := rateLimitedPhases(summary)
+	if len(phases) == 0 {
+		return nil
+	}
+	runAt := phaseRetryAt(summary)
+	queued := make([]map[string]any, 0, len(phases))
+	for _, phase := range phases {
+		nextMetadata := copyMetadata(metadata)
+		nextMetadata["seller_cabinet_id"] = cabinetID.String()
+		nextMetadata["task_type"] = TaskSyncWorkspace
+		nextMetadata["trigger"] = "rate_limit_phase_retry"
+		nextMetadata["sync_phase"] = phase
+		nextMetadata["phase_retry_count"] = currentRetry + 1
+		nextMetadata["scheduled_after_rate_limit"] = true
+		nextMetadata["scheduled_for"] = runAt.Format(time.RFC3339)
+		if summary.RateLimitEndpoint != "" {
+			nextMetadata["rate_limit_endpoint"] = summary.RateLimitEndpoint
+		}
+
+		task, err := NewWorkspaceTaskWithMetadata(TaskSyncWorkspace, workspaceID, nil, nextMetadata)
+		if err != nil {
+			p.logger.Warn().Err(err).Str("phase", phase).Msg("failed to create phase retry task")
+			continue
+		}
+		taskID := fmt.Sprintf("wb-sync-phase:%s:%s:%d", cabinetID.String(), phase, runAt.Unix()/300)
+		_, err = p.client.Enqueue(task,
+			asynq.Queue(QueueWBSync),
+			asynq.MaxRetry(0),
+			asynq.Timeout(workspaceSyncTaskTimeout),
+			asynq.ProcessAt(runAt),
+			asynq.TaskID(taskID),
+		)
+		if err != nil {
+			if errors.Is(err, asynq.ErrDuplicateTask) {
+				queued = append(queued, map[string]any{
+					"phase":  phase,
+					"status": "already_queued",
+					"run_at": runAt.Format(time.RFC3339),
+				})
+				continue
+			}
+			p.logger.Warn().Err(err).Str("phase", phase).Msg("failed to enqueue phase retry")
+			continue
+		}
+		queued = append(queued, map[string]any{
+			"phase":  phase,
+			"status": "queued",
+			"run_at": runAt.Format(time.RFC3339),
+		})
+	}
+	return queued
+}
+
+func copyMetadata(metadata map[string]any) map[string]any {
+	result := make(map[string]any, len(metadata)+4)
+	for key, value := range metadata {
+		if key == "payload" {
+			continue
+		}
+		result[key] = value
+	}
+	return result
+}
+
+func phaseRetryAt(summary service.SyncSummary) time.Time {
+	now := time.Now().UTC()
+	runAt := now.Add(phaseRetryDelayFloor)
+	if summary.NextAllowedAt != nil {
+		candidate := summary.NextAllowedAt.UTC()
+		if candidate.Before(now) {
+			candidate = now
+		}
+		candidate = candidate.Add(phaseRetryDelayFloor)
+		if candidate.After(runAt) {
+			runAt = candidate
+		}
+	}
+	return runAt
+}
+
+func rateLimitedPhases(summary service.SyncSummary) []string {
+	seen := map[string]struct{}{}
+	add := func(phase string) {
+		if phase == "" {
+			return
+		}
+		seen[phase] = struct{}{}
+	}
+
+	for _, issue := range summary.Issues {
+		if !messageLooksRateLimited(issue.Message) {
+			continue
+		}
+		add(syncPhaseForIssueStage(issue.Stage))
+	}
+	add(syncPhaseForEndpoint(summary.RateLimitEndpoint))
+
+	result := make([]string, 0, len(seen))
+	order := []string{
+		service.SyncPhaseCampaigns,
+		service.SyncPhaseStats,
+		service.SyncPhasePhrases,
+		service.SyncPhaseBudgets,
+		service.SyncPhaseFinance,
+		service.SyncPhaseSalesFunnel,
+		service.SyncPhaseBusinessReports,
+	}
+	for _, phase := range order {
+		if _, ok := seen[phase]; ok {
+			result = append(result, phase)
+		}
+	}
+	return result
+}
+
+func messageLooksRateLimited(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "429") ||
+		strings.Contains(lower, "rate limited") ||
+		strings.Contains(lower, "too many requests")
+}
+
+func syncPhaseForIssueStage(stage string) string {
+	switch {
+	case strings.HasPrefix(stage, "campaigns"):
+		return service.SyncPhaseCampaigns
+	case strings.HasPrefix(stage, "stats"), strings.HasPrefix(stage, "campaign_stats"), strings.HasPrefix(stage, "product_stats"):
+		return service.SyncPhaseStats
+	case strings.HasPrefix(stage, "phrases"), strings.HasPrefix(stage, "phrase_stats"):
+		return service.SyncPhasePhrases
+	case strings.HasPrefix(stage, "campaign_budgets"):
+		return service.SyncPhaseBudgets
+	case strings.HasPrefix(stage, "ad_finance"), strings.HasPrefix(stage, "ad_balance"):
+		return service.SyncPhaseFinance
+	case strings.HasPrefix(stage, "sales_funnel_products"):
+		return service.SyncPhaseSalesFunnel
+	case strings.HasPrefix(stage, "business_reports"), strings.HasPrefix(stage, "business_orders"), strings.HasPrefix(stage, "business_sales"):
+		return service.SyncPhaseBusinessReports
+	default:
+		return ""
+	}
+}
+
+func syncPhaseForEndpoint(endpoint string) string {
+	switch endpoint {
+	case "adv_adverts":
+		return service.SyncPhaseCampaigns
+	case "adv_fullstats":
+		return service.SyncPhaseStats
+	case "adv_normquery_stats":
+		return service.SyncPhasePhrases
+	case "adv_budget":
+		return service.SyncPhaseBudgets
+	case "adv_finance":
+		return service.SyncPhaseFinance
+	case "analytics_sales_funnel":
+		return service.SyncPhaseSalesFunnel
+	default:
+		return ""
+	}
 }
 
 func (p *Processor) HandleSweepSyncWorkspace(ctx context.Context, _ *asynq.Task) error {
@@ -562,7 +933,14 @@ func (p *Processor) runWithJobRun(ctx context.Context, taskType string, workspac
 		metadata = map[string]any{}
 	}
 	metadata["result_state"] = deriveResultState(taskType, metadata, runErr)
-	if _, err := p.queries.UpdateJobRunStatus(ctx, sqlcgen.UpdateJobRunStatusParams{
+	shouldRetry := runErr != nil
+	finalUpdateCtx, cancel := context.WithTimeout(context.Background(), jobRunFinalUpdateTimeout)
+	defer cancel()
+	if runErr != nil && metadata["result_state"] == jobResultStatePartial {
+		status = "partial"
+		shouldRetry = false
+	}
+	if _, err := p.queries.UpdateJobRunStatus(finalUpdateCtx, sqlcgen.UpdateJobRunStatusParams{
 		ID:           jobRun.ID,
 		Status:       status,
 		FinishedAt:   pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
@@ -572,7 +950,10 @@ func (p *Processor) runWithJobRun(ctx context.Context, taskType string, workspac
 		p.logger.Error().Err(err).Str("task_type", taskType).Msg("failed to update job run status")
 	}
 
-	return runErr
+	if shouldRetry {
+		return runErr
+	}
+	return nil
 }
 
 func deriveResultState(taskType string, metadata map[string]any, runErr error) string {
@@ -612,6 +993,10 @@ func hasMeaningfulProgress(metadata map[string]any) bool {
 		"phrases",
 		"phrase_stats",
 		"products",
+		"product_stats",
+		"campaign_budgets",
+		"business_orders",
+		"business_sales",
 		"generated",
 		"enqueued",
 	}
@@ -660,6 +1045,17 @@ func intFromMetadata(metadata map[string]any, key string) int {
 	}
 }
 
+func stringFromMetadata(metadata map[string]any, key string) string {
+	value, ok := metadata[key]
+	if !ok {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
 func (p *Processor) enqueueRecommendationGeneration(workspaceID uuid.UUID) (string, error) {
 	if err := p.enqueueWorkspaceTask(TaskGenerateRecommendations, workspaceID, QueueRecommendations, asynq.Unique(5*time.Minute)); err != nil {
 		if errors.Is(err, asynq.ErrDuplicateTask) {
@@ -680,10 +1076,14 @@ func (p *Processor) enqueueWorkspaceTask(taskType string, workspaceID uuid.UUID,
 		return err
 	}
 
+	timeout := defaultTaskTimeout
+	if taskType == TaskSyncWorkspace {
+		timeout = workspaceSyncTaskTimeout
+	}
 	opts := []asynq.Option{
 		asynq.Queue(queue),
 		asynq.MaxRetry(10),
-		asynq.Timeout(15 * time.Minute),
+		asynq.Timeout(timeout),
 	}
 	if taskType == TaskSyncWorkspace {
 		opts = append(opts, asynq.Unique(55*time.Minute))
@@ -775,6 +1175,12 @@ func mergeMetadata(base, extra map[string]any) map[string]any {
 	return result
 }
 
+func mergeIntoMetadata(base map[string]any, extra map[string]any) {
+	for key, value := range extra {
+		base[key] = value
+	}
+}
+
 func optionalUUIDToPgtype(id *uuid.UUID) pgtype.UUID {
 	if id == nil {
 		return pgtype.UUID{}
@@ -792,6 +1198,24 @@ func maxInt(values ...int) int {
 	return max
 }
 
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonNilTime(values ...*time.Time) *time.Time {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
 func collectSyncIssues(summaries ...service.SyncSummary) []service.SyncIssue {
 	total := 0
 	for _, summary := range summaries {
@@ -804,6 +1228,66 @@ func collectSyncIssues(summaries ...service.SyncSummary) []service.SyncIssue {
 	result := make([]service.SyncIssue, 0, total)
 	for _, summary := range summaries {
 		result = append(result, summary.Issues...)
+	}
+	return result
+}
+
+func syncSummaryMetadata(summary service.SyncSummary) map[string]any {
+	reasons := partialReasons(summary.Issues)
+	result := map[string]any{
+		"wb_errors":        summary.WBErrors,
+		"rate_limited":     summary.RateLimited > 0,
+		"rate_limit_count": summary.RateLimited,
+	}
+	if summary.RateLimitEndpoint != "" {
+		result["rate_limit_endpoint"] = summary.RateLimitEndpoint
+	}
+	if summary.RetryAfterSeconds > 0 {
+		result["retry_after_seconds"] = summary.RetryAfterSeconds
+	}
+	if summary.NextAllowedAt != nil {
+		result["next_allowed_at"] = summary.NextAllowedAt.Format(time.RFC3339)
+	}
+	if summary.DateFrom != "" {
+		result["date_from"] = summary.DateFrom
+	}
+	if summary.DateTo != "" {
+		result["date_to"] = summary.DateTo
+	}
+	if len(reasons) > 0 {
+		result["partial_reasons"] = reasons
+	}
+	return result
+}
+
+func collectSyncMetadata(summaries ...service.SyncSummary) (int, int, []string) {
+	wbErrors := 0
+	rateLimited := 0
+	issues := make([]service.SyncIssue, 0)
+	for _, summary := range summaries {
+		wbErrors += summary.WBErrors
+		rateLimited += summary.RateLimited
+		issues = append(issues, summary.Issues...)
+	}
+	return wbErrors, rateLimited, partialReasons(issues)
+}
+
+func partialReasons(issues []service.SyncIssue) []string {
+	if len(issues) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(issues))
+	result := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		reason := issue.Stage
+		if reason == "" {
+			reason = "sync"
+		}
+		if _, ok := seen[reason]; ok {
+			continue
+		}
+		seen[reason] = struct{}{}
+		result = append(result, reason)
 	}
 	return result
 }

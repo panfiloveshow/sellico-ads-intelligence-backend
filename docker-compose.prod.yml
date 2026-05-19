@@ -216,6 +216,7 @@ services:
       - alertmanager_data:/alertmanager
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
+      - --config.expand-env
       - --storage.path=/alertmanager
     environment:
       ALERT_CHAT_ID: ${ALERT_CHAT_ID}
@@ -260,6 +261,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
+      - /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile:ro
     command:
       - --path.procfs=/host/proc
       - --path.sysfs=/host/sys

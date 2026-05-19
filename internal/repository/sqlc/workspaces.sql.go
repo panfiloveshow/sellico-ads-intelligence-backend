@@ -14,7 +14,7 @@ import (
 const createExternalWorkspace = `-- name: CreateExternalWorkspace :one
 INSERT INTO workspaces (name, slug, external_workspace_id, source)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source
+RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at
 `
 
 type CreateExternalWorkspaceParams struct {
@@ -41,6 +41,9 @@ func (q *Queries) CreateExternalWorkspace(ctx context.Context, arg CreateExterna
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }
@@ -48,7 +51,7 @@ func (q *Queries) CreateExternalWorkspace(ctx context.Context, arg CreateExterna
 const createWorkspace = `-- name: CreateWorkspace :one
 INSERT INTO workspaces (name, slug)
 VALUES ($1, $2)
-RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source
+RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at
 `
 
 type CreateWorkspaceParams struct {
@@ -68,12 +71,15 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }
 
 const getWorkspaceByExternalWorkspaceID = `-- name: GetWorkspaceByExternalWorkspaceID :one
-SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source FROM workspaces
+SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at FROM workspaces
 WHERE external_workspace_id = $1 AND deleted_at IS NULL
 `
 
@@ -89,12 +95,15 @@ func (q *Queries) GetWorkspaceByExternalWorkspaceID(ctx context.Context, externa
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }
 
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
-SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source FROM workspaces
+SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at FROM workspaces
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -110,12 +119,15 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id pgtype.UUID) (Workspa
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }
 
 const getWorkspaceBySlug = `-- name: GetWorkspaceBySlug :one
-SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source FROM workspaces
+SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at FROM workspaces
 WHERE slug = $1 AND deleted_at IS NULL
 `
 
@@ -131,12 +143,15 @@ func (q *Queries) GetWorkspaceBySlug(ctx context.Context, slug string) (Workspac
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }
 
 const listWorkspaces = `-- name: ListWorkspaces :many
-SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source FROM workspaces
+SELECT id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at FROM workspaces
 WHERE deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -165,6 +180,9 @@ func (q *Queries) ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) 
 			&i.DeletedAt,
 			&i.ExternalWorkspaceID,
 			&i.Source,
+			&i.Settings,
+			&i.EncryptedSellicoToken,
+			&i.SellicoTokenUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -177,7 +195,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) 
 }
 
 const listWorkspacesByUserID = `-- name: ListWorkspacesByUserID :many
-SELECT w.id, w.name, w.slug, w.created_at, w.updated_at, w.deleted_at, w.external_workspace_id, w.source FROM workspaces w
+SELECT w.id, w.name, w.slug, w.created_at, w.updated_at, w.deleted_at, w.external_workspace_id, w.source, w.settings, w.encrypted_sellico_token, w.sellico_token_updated_at FROM workspaces w
 JOIN workspace_members wm ON w.id = wm.workspace_id
 WHERE wm.user_id = $1 AND w.deleted_at IS NULL
 ORDER BY w.created_at DESC
@@ -208,6 +226,9 @@ func (q *Queries) ListWorkspacesByUserID(ctx context.Context, arg ListWorkspaces
 			&i.DeletedAt,
 			&i.ExternalWorkspaceID,
 			&i.Source,
+			&i.Settings,
+			&i.EncryptedSellicoToken,
+			&i.SellicoTokenUpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -236,7 +257,7 @@ SET name = $2,
     source = $5,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source
+RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at
 `
 
 type UpdateExternalWorkspaceParams struct {
@@ -265,6 +286,9 @@ func (q *Queries) UpdateExternalWorkspace(ctx context.Context, arg UpdateExterna
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }
@@ -273,7 +297,7 @@ const updateWorkspace = `-- name: UpdateWorkspace :one
 UPDATE workspaces
 SET name = $2, slug = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source
+RETURNING id, name, slug, created_at, updated_at, deleted_at, external_workspace_id, source, settings, encrypted_sellico_token, sellico_token_updated_at
 `
 
 type UpdateWorkspaceParams struct {
@@ -294,6 +318,9 @@ func (q *Queries) UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams
 		&i.DeletedAt,
 		&i.ExternalWorkspaceID,
 		&i.Source,
+		&i.Settings,
+		&i.EncryptedSellicoToken,
+		&i.SellicoTokenUpdatedAt,
 	)
 	return i, err
 }

@@ -5,33 +5,67 @@
 // Versioned separately from domain models to adapt to WB API changes.
 package wb
 
+import "time"
+
 // WBCampaignDTO represents a campaign from the WB Advertising API.
 type WBCampaignDTO struct {
-	AdvertID    int     `json:"advertId"`
-	Name        string  `json:"name"`
-	Status      int     `json:"status"`
-	Type        int     `json:"type"`
-	DailyBudget *int64  `json:"dailyBudget"`
-	BidType     int     `json:"bidType"`
-	PaymentType string  `json:"paymentType"`
-	NMIDs       []int64 `json:"-"`
+	AdvertID                 int                    `json:"advertId"`
+	Name                     string                 `json:"name"`
+	Status                   int                    `json:"status"`
+	Type                     int                    `json:"type"`
+	DailyBudget              *int64                 `json:"dailyBudget"`
+	BidType                  int                    `json:"bidType"`
+	PaymentType              string                 `json:"paymentType"`
+	NMIDs                    []int64                `json:"-"`
+	Products                 []WBCampaignProductDTO `json:"-"`
+	PlacementSearch          *bool                  `json:"placementSearch,omitempty"`
+	PlacementRecommendations *bool                  `json:"placementRecommendations,omitempty"`
+	WBCreatedAt              *time.Time             `json:"wbCreatedAt,omitempty"`
+	WBStartedAt              *time.Time             `json:"wbStartedAt,omitempty"`
+	WBUpdatedAt              *time.Time             `json:"wbUpdatedAt,omitempty"`
+	WBDeletedAt              *time.Time             `json:"wbDeletedAt,omitempty"`
+}
+
+type WBCampaignProductDTO struct {
+	NmID               int64   `json:"nmId"`
+	SubjectName        *string `json:"subjectName,omitempty"`
+	BidSearch          *int64  `json:"bidSearch,omitempty"`
+	BidRecommendations *int64  `json:"bidRecommendations,omitempty"`
 }
 
 // WBCampaignStatDTO represents campaign statistics from the WB Advertising API.
 type WBCampaignStatDTO struct {
-	AdvertID     int      `json:"advertId"`
-	Date         string   `json:"date"`
-	Views        int64    `json:"views"`
-	Clicks       int64    `json:"clicks"`
-	Sum          float64  `json:"sum"`
-	Orders       *int64   `json:"orders,omitempty"`
-	OrderedItems *int64   `json:"ordered_items,omitempty"`
-	Revenue      *float64 `json:"revenue,omitempty"`
-	Atbs         *int64   `json:"atbs,omitempty"`     // Добавления в корзину
-	Canceled     *int64   `json:"canceled,omitempty"`  // Технические отмены
-	CR           *float64 `json:"cr,omitempty"`        // Конверсия
-	CPC          *float64 `json:"cpc,omitempty"`       // Стоимость клика (коп)
-	CTR          *float64 `json:"ctr,omitempty"`       // Кликабельность
+	AdvertID     int                `json:"advertId"`
+	Date         string             `json:"date"`
+	Views        int64              `json:"views"`
+	Clicks       int64              `json:"clicks"`
+	Sum          float64            `json:"sum"`
+	Orders       *int64             `json:"orders,omitempty"`
+	OrderedItems *int64             `json:"ordered_items,omitempty"`
+	SHKs         *int64             `json:"shks,omitempty"`
+	Revenue      *float64           `json:"revenue,omitempty"`
+	Atbs         *int64             `json:"atbs,omitempty"`     // Добавления в корзину
+	Canceled     *int64             `json:"canceled,omitempty"` // Технические отмены
+	CR           *float64           `json:"cr,omitempty"`       // Конверсия
+	CPC          *float64           `json:"cpc,omitempty"`      // Стоимость клика (коп)
+	CTR          *float64           `json:"ctr,omitempty"`      // Кликабельность
+	Products     []WBProductStatDTO `json:"products,omitempty"`
+}
+
+// WBProductStatDTO represents product-level statistics nested inside fullstats days/apps.
+type WBProductStatDTO struct {
+	NmID     int64    `json:"nmId"`
+	Name     string   `json:"name"`
+	Date     string   `json:"date"`
+	Views    int64    `json:"views"`
+	Clicks   int64    `json:"clicks"`
+	Sum      float64  `json:"sum"`
+	Orders   *int64   `json:"orders,omitempty"`
+	SHKs     *int64   `json:"shks,omitempty"`
+	Revenue  *float64 `json:"revenue,omitempty"`
+	SumPrice *float64 `json:"sum_price,omitempty"`
+	Atbs     *int64   `json:"atbs,omitempty"`
+	Canceled *int64   `json:"canceled,omitempty"`
 }
 
 // WBSearchClusterStatDTOExtended has additional fields from normquery v1.
@@ -40,11 +74,15 @@ type WBSearchClusterStatDTOExtended struct {
 	AvgPos *float64 `json:"avg_pos,omitempty"` // Средняя позиция
 	Atbs   *int64   `json:"atbs,omitempty"`    // Добавления в корзину
 	Orders *int64   `json:"orders,omitempty"`  // Заказы
+	CPC    *float64 `json:"cpc,omitempty"`     // CPC from WB
+	CPM    *float64 `json:"cpm,omitempty"`     // CPM from WB
 }
 
 // WBSearchClusterDTO represents a Search Cluster from the WB Advertising API.
 type WBSearchClusterDTO struct {
-	ClusterID int64    `json:"id"`
+	ClusterID *int64   `json:"id,omitempty"`
+	NmID      int64    `json:"nmId"`
+	NormQuery string   `json:"norm_query"`
 	Keywords  []string `json:"keywords"`
 	Count     int      `json:"count"`
 	Bid       int64    `json:"bid"`
@@ -52,11 +90,19 @@ type WBSearchClusterDTO struct {
 
 // WBSearchClusterStatDTO represents Search Cluster statistics from the WB API.
 type WBSearchClusterStatDTO struct {
-	ClusterID int64   `json:"id"`
+	ClusterID *int64  `json:"id,omitempty"`
+	AdvertID  int64   `json:"advertId"`
+	NmID      int64   `json:"nmId"`
+	NormQuery string  `json:"norm_query"`
 	Date      string  `json:"date"`
 	Views     int64   `json:"views"`
 	Clicks    int64   `json:"clicks"`
 	Sum       float64 `json:"sum"`
+	Atbs      int64   `json:"atbs"`
+	Orders    int64   `json:"orders"`
+	CPC       float64 `json:"cpc"`
+	CPM       float64 `json:"cpm"`
+	AvgPos    float64 `json:"avg_pos"`
 }
 
 // WBBidDTO represents recommended bids from the WB Advertising API.

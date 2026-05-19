@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -8,26 +9,39 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/metrics"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 )
 
 type Runtime struct {
-	server    *asynq.Server
-	scheduler *asynq.Scheduler
-	client    *asynq.Client
-	logger    zerolog.Logger
-	mux       *asynq.ServeMux
+	server        *asynq.Server
+	scheduler     *asynq.Scheduler
+	client        *asynq.Client
+	inspector     *asynq.Inspector
+	queries       *sqlcgen.Queries
+	queues        []string
+	metricsCancel context.CancelFunc
+	logger        zerolog.Logger
+	mux           *asynq.ServeMux
 }
 
-func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, logger zerolog.Logger) (*Runtime, error) {
+func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, logger zerolog.Logger) (*Runtime, error) {
 	redisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis uri for worker: %w", err)
 	}
 
 	client := asynq.NewClient(redisOpt)
-	processor := NewProcessor(syncService, queries, engine, exportGenerator, client, logger).WithNotifier(notifier).WithIntegrationRefresher(integrationRefresher).WithBidRunner(bidRunner).WithExtendedEngine(extendedEngine)
+	processor := NewProcessor(syncService, queries, engine, exportGenerator, client, logger).
+		WithNotifier(notifier).
+		WithIntegrationRefresher(integrationRefresher).
+		WithBidRunner(bidRunner).
+		WithSemanticsCollector(semantics).
+		WithCompetitorExtractor(competitors).
+		WithDeliveryCollector(delivery).
+		WithSEOAnalyzer(seo).
+		WithExtendedEngine(extendedEngine)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TaskSyncWorkspace, processor.HandleSyncWorkspace)
 	mux.HandleFunc(TaskSyncCampaigns, processor.HandleSyncCampaigns)
@@ -56,26 +70,29 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskExtendedRecommendations, processor.HandleExtendedRecommendations)
 	mux.HandleFunc(TaskSweepExtendedRecommendations, processor.HandleSweepExtendedRecommendations)
 
+	queueWeights := map[string]int{
+		QueueWBSync:          1,
+		QueueWBCampaigns:     3,
+		QueueWBCampaignStats: 3,
+		QueueWBPhrases:       3,
+		QueueWBProducts:      2,
+		QueueRecommendations: 4,
+		QueueExports:         2,
+		QueueBidAutomation:   3,
+		QueueSemantics:       2,
+		QueueCompetitors:     2,
+		QueueDelivery:        2,
+		QueueSEO:             2,
+	}
+
 	server := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency:     12,
 		ShutdownTimeout: 30 * time.Second,
-		Queues: map[string]int{
-			QueueWBSync:          2,
-			QueueWBCampaigns:     3,
-			QueueWBCampaignStats: 3,
-			QueueWBPhrases:       3,
-			QueueWBProducts:      2,
-			QueueRecommendations: 4,
-			QueueExports:         2,
-			QueueBidAutomation:   3,
-			QueueSemantics:       2,
-			QueueCompetitors:     2,
-			QueueDelivery:        2,
-			QueueSEO:             2,
-		},
+		Queues:          queueWeights,
 	})
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
+	inspector := asynq.NewInspector(redisOpt)
 
 	// Full autopilot: register all sweep schedulers.
 	// Workspace sync triggers the full pipeline: sync → recommendations → notifications.
@@ -117,16 +134,34 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		server:    server,
 		scheduler: scheduler,
 		client:    client,
+		inspector: inspector,
+		queries:   queries,
+		queues:    queueNames(queueWeights),
 		logger:    logger,
 		mux:       mux,
 	}, nil
 }
 
 func (r *Runtime) Start() error {
+	metricsCtx, cancel := context.WithCancel(context.Background())
+	r.metricsCancel = cancel
+	go r.recordQueueMetrics(metricsCtx, 30*time.Second)
+
+	if r.queries != nil {
+		expired, err := r.queries.ExpireStaleJobRuns(metricsCtx, time.Now().UTC().Add(-workspaceSyncTaskTimeout))
+		if err != nil {
+			r.logger.Warn().Err(err).Msg("failed to expire stale job runs")
+		} else if expired > 0 {
+			r.logger.Warn().Int64("expired", expired).Msg("expired stale job runs on worker startup")
+		}
+	}
+
 	if err := r.scheduler.Start(); err != nil {
+		cancel()
 		return err
 	}
 	if err := r.server.Start(r.mux); err != nil {
+		cancel()
 		r.scheduler.Shutdown()
 		return err
 	}
@@ -135,8 +170,57 @@ func (r *Runtime) Start() error {
 }
 
 func (r *Runtime) Shutdown() {
+	if r.metricsCancel != nil {
+		r.metricsCancel()
+	}
 	r.scheduler.Shutdown()
 	r.server.Shutdown()
+	if r.inspector != nil {
+		_ = r.inspector.Close()
+	}
 	_ = r.client.Close()
 	r.logger.Info().Msg("worker runtime stopped")
+}
+
+func (r *Runtime) recordQueueMetrics(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	r.collectQueueMetrics()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.collectQueueMetrics()
+		}
+	}
+}
+
+func (r *Runtime) collectQueueMetrics() {
+	if r.inspector == nil {
+		return
+	}
+	for _, queue := range r.queues {
+		info, err := r.inspector.GetQueueInfo(queue)
+		if err != nil {
+			r.logger.Warn().Err(err).Str("queue", queue).Msg("failed to collect asynq queue metrics")
+			continue
+		}
+		metrics.WorkerQueueLength.WithLabelValues(queue, "pending").Set(float64(info.Pending))
+		metrics.WorkerQueueLength.WithLabelValues(queue, "active").Set(float64(info.Active))
+		metrics.WorkerQueueLength.WithLabelValues(queue, "scheduled").Set(float64(info.Scheduled))
+		metrics.WorkerQueueLength.WithLabelValues(queue, "retry").Set(float64(info.Retry))
+		metrics.WorkerQueueLength.WithLabelValues(queue, "archived").Set(float64(info.Archived))
+		metrics.WorkerQueueLength.WithLabelValues(queue, "completed").Set(float64(info.Completed))
+		metrics.WorkerQueueLength.WithLabelValues(queue, "aggregating").Set(float64(info.Aggregating))
+	}
+}
+
+func queueNames(weights map[string]int) []string {
+	queues := make([]string, 0, len(weights))
+	for queue := range weights {
+		queues = append(queues, queue)
+	}
+	return queues
 }

@@ -24,6 +24,8 @@ import (
 	embeddedopenapi "github.com/panfiloveshow/sellico-ads-intelligence-backend/openapi"
 )
 
+const workspaceSyncTimeout = 60 * time.Minute
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -61,13 +63,14 @@ func main() {
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
 	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
 		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
+		service.WithAdsReadBackendVersion(cfg.AppVersion),
 	)
 	syncJobService := service.NewSyncJobService(deps.Queries, workspaceSyncEnqueuerFunc(func(workspaceID uuid.UUID, jobRunID *uuid.UUID, metadata map[string]any) (string, error) {
 		task, taskErr := worker.NewWorkspaceTaskWithMetadata(worker.TaskSyncWorkspace, workspaceID, jobRunID, metadata)
 		if taskErr != nil {
 			return "", taskErr
 		}
-		_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueWBSync), asynq.MaxRetry(10), asynq.Timeout(30*time.Minute), asynq.Unique(55*time.Minute))
+		_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueWBSync), asynq.MaxRetry(10), asynq.Timeout(workspaceSyncTimeout), asynq.Unique(55*time.Minute))
 		if errors.Is(taskErr, asynq.ErrDuplicateTask) {
 			return "already_queued", nil
 		}
@@ -127,7 +130,11 @@ func main() {
 			}
 
 			queue := worker.QueueWBSync
-			opts := []asynq.Option{asynq.MaxRetry(10), asynq.Timeout(30 * time.Minute)}
+			timeout := 30 * time.Minute
+			if taskType == worker.TaskSyncWorkspace {
+				timeout = workspaceSyncTimeout
+			}
+			opts := []asynq.Option{asynq.MaxRetry(10), asynq.Timeout(timeout)}
 			switch taskType {
 			case worker.TaskSyncWorkspace:
 				queue = worker.QueueWBSync
@@ -184,23 +191,23 @@ func main() {
 		// X-Workspace-ID against the user's available workspaces, syncing the
 		// matched workspace into our local DB on first hit (so seller_cabinets
 		// and friends can foreign-key against a real local UUID).
-		Authenticator:     sellicoBridgeService,
-		WorkspaceResolver: sellicoBridgeService,
-		DocsHandler:           handler.NewDocsHandler(embeddedopenapi.Spec),
-		HealthHandler:         handler.NewHealthHandler(deps.Ready),
-		AuthHandler:           handler.NewAuthHandler(authService),
-		WorkspaceHandler:      handler.NewWorkspaceHandler(workspaceService),
-		SellerCabinetHandler:  handler.NewSellerCabinetHandler(sellerCabinetSyncFacade{sellerCabinetService, syncJobService}),
-		AdsReadHandler:        handler.NewAdsReadHandler(adsReadService),
-		CampaignHandler:       handler.NewCampaignHandler(campaignService).WithCounter(countService),
-		PhraseHandler:         handler.NewPhraseHandler(phraseService),
-		BidHandler:            handler.NewBidHandler(bidService),
-		ProductHandler:        handler.NewProductHandler(productService).WithCounter(countService),
-		PositionHandler:       handler.NewPositionHandler(positionService),
-		SERPHandler:           handler.NewSERPHandler(serpService),
-		RecommendationHandler: handler.NewRecommendationHandler(recommendationTriggerFacade{recommendationService, recommendationJobService}).WithCounter(countService),
-		ExportHandler:         handler.NewExportHandler(exportService).WithCounter(countService),
-		ExtensionHandler:      handler.NewExtensionHandler(extensionService),
+		Authenticator:            sellicoBridgeService,
+		WorkspaceResolver:        sellicoBridgeService,
+		DocsHandler:              handler.NewDocsHandler(embeddedopenapi.Spec),
+		HealthHandler:            handler.NewHealthHandler(deps.Ready),
+		AuthHandler:              handler.NewAuthHandler(authService),
+		WorkspaceHandler:         handler.NewWorkspaceHandler(workspaceService),
+		SellerCabinetHandler:     handler.NewSellerCabinetHandler(sellerCabinetSyncFacade{sellerCabinetService, syncJobService}),
+		AdsReadHandler:           handler.NewAdsReadHandler(adsReadService),
+		CampaignHandler:          handler.NewCampaignHandler(campaignService).WithCounter(countService),
+		PhraseHandler:            handler.NewPhraseHandler(phraseService),
+		BidHandler:               handler.NewBidHandler(bidService),
+		ProductHandler:           handler.NewProductHandler(productService).WithCounter(countService),
+		PositionHandler:          handler.NewPositionHandler(positionService),
+		SERPHandler:              handler.NewSERPHandler(serpService),
+		RecommendationHandler:    handler.NewRecommendationHandler(recommendationTriggerFacade{recommendationService, recommendationJobService}).WithCounter(countService),
+		ExportHandler:            handler.NewExportHandler(exportService).WithCounter(countService),
+		ExtensionHandler:         handler.NewExtensionHandler(extensionService),
 		AuditLogHandler:          handler.NewAuditLogHandler(auditLogService),
 		JobRunHandler:            handler.NewJobRunHandler(jobRunService),
 		EventsHandler:            handler.NewEventsHandler(eventBroker),
@@ -213,7 +220,6 @@ func main() {
 		SEOHandler:               handler.NewSEOHandler(seoAnalyzerService),
 		ProductEventHandler:      handler.NewProductEventHandler(productEventService),
 	})
-
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
 	server := &http.Server{

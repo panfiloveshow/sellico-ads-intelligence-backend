@@ -50,6 +50,8 @@ func classifyCampaignHealth(metrics domain.AdsMetricsSummary, productsCount, que
 
 func classifyQuerySignal(phrase domain.Phrase, metrics domain.AdsMetricsSummary) (string, string, *string, *string) {
 	switch {
+	case metrics.DataMode == "unavailable":
+		return "insufficient_data", "insufficient_data", stringPtr("По запросу пока нет строк статистики за выбранный период."), stringPtr("Проверьте последний sync normquery stats и не принимайте авто-решения по этой фразе.")
 	case metrics.Spend >= 500 && metrics.Clicks >= 5 && metrics.CTR < 0.01:
 		return "waste", "waste", stringPtr("Запрос уже тратит бюджет, но даёт слабое вовлечение."), stringPtr("Снизьте ставку или уберите запрос из активного приоритета.")
 	case metrics.Impressions >= 200 && metrics.Clicks == 0:
@@ -135,21 +137,8 @@ func (s *AdsReadService) latestWorkspaceAutoSync(ctx context.Context, workspaceI
 	}
 
 	row := rows[0]
-	metadata := decodeJobRunMetadata(row.Metadata)
-	resultState := metadataString(metadata, "result_state")
-	summary := &domain.SellerCabinetAutoSyncSummary{
-		JobRunID:       uuidFromPgtype(row.ID),
-		Status:         row.Status,
-		ResultState:    resultState,
-		FreshnessState: "unknown",
-		Cabinets:       metadataInt(metadata, "cabinets"),
-		Campaigns:      metadataInt(metadata, "campaigns"),
-		CampaignStats:  metadataInt(metadata, "campaign_stats"),
-		Phrases:        metadataInt(metadata, "phrases"),
-		PhraseStats:    metadataInt(metadata, "phrase_stats"),
-		Products:       metadataInt(metadata, "products"),
-		SyncIssues:     metadataInt(metadata, "sync_issues"),
-	}
+	summary := sellerCabinetAutoSyncSummaryFromJobRun(row)
+	summary.FreshnessState = "unknown"
 	if row.FinishedAt.Valid {
 		finishedAt := row.FinishedAt.Time
 		summary.FinishedAt = &finishedAt

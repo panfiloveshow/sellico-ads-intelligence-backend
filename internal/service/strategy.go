@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
@@ -22,6 +24,17 @@ func NewStrategyService(queries *sqlcgen.Queries) *StrategyService {
 }
 
 func (s *StrategyService) Create(ctx context.Context, workspaceID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+	if input.SellerCabinetID == uuid.Nil {
+		return nil, apperror.New(apperror.ErrValidation, "seller_cabinet_id is required")
+	}
+	cabinet, err := s.queries.GetSellerCabinetByID(ctx, uuidToPgtype(input.SellerCabinetID))
+	if err != nil {
+		return nil, apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+	}
+	if uuidFromPgtype(cabinet.WorkspaceID) != workspaceID {
+		return nil, apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+	}
+
 	paramsJSON, err := json.Marshal(input.Params)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrValidation, "invalid strategy params")
@@ -43,8 +56,11 @@ func (s *StrategyService) Create(ctx context.Context, workspaceID uuid.UUID, inp
 	return &result, nil
 }
 
-func (s *StrategyService) Get(ctx context.Context, strategyID uuid.UUID) (*domain.Strategy, error) {
-	row, err := s.queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
+func (s *StrategyService) Get(ctx context.Context, workspaceID, strategyID uuid.UUID) (*domain.Strategy, error) {
+	row, err := s.queries.GetStrategyByIDAndWorkspace(ctx, sqlcgen.GetStrategyByIDAndWorkspaceParams{
+		ID:          uuidToPgtype(strategyID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrNotFound, "strategy not found")
 	}
@@ -59,11 +75,12 @@ func (s *StrategyService) Get(ctx context.Context, strategyID uuid.UUID) (*domai
 	return &result, nil
 }
 
-func (s *StrategyService) List(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.Strategy, error) {
+func (s *StrategyService) List(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID, limit, offset int32) ([]domain.Strategy, error) {
 	rows, err := s.queries.ListStrategiesByWorkspace(ctx, sqlcgen.ListStrategiesByWorkspaceParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       limit,
-		Offset:      offset,
+		WorkspaceID:           uuidToPgtype(workspaceID),
+		SellerCabinetIDFilter: nullableUUIDToPgtype(sellerCabinetID),
+		Limit:                 limit,
+		Offset:                offset,
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to list strategies")
@@ -76,20 +93,24 @@ func (s *StrategyService) List(ctx context.Context, workspaceID uuid.UUID, limit
 	return result, nil
 }
 
-func (s *StrategyService) Update(ctx context.Context, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
 	paramsJSON, err := json.Marshal(input.Params)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrValidation, "invalid strategy params")
 	}
 
-	row, err := s.queries.UpdateStrategy(ctx, sqlcgen.UpdateStrategyParams{
-		ID:       uuidToPgtype(strategyID),
-		Name:     input.Name,
-		Type:     input.Type,
-		Params:   paramsJSON,
-		IsActive: input.IsActive,
+	row, err := s.queries.UpdateStrategyInWorkspace(ctx, sqlcgen.UpdateStrategyInWorkspaceParams{
+		ID:          uuidToPgtype(strategyID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Name:        input.Name,
+		Type:        input.Type,
+		Params:      paramsJSON,
+		IsActive:    input.IsActive,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.ErrNotFound, "strategy not found")
+		}
 		return nil, apperror.New(apperror.ErrInternal, "failed to update strategy")
 	}
 
@@ -97,17 +118,24 @@ func (s *StrategyService) Update(ctx context.Context, strategyID uuid.UUID, inpu
 	return &result, nil
 }
 
-func (s *StrategyService) Delete(ctx context.Context, strategyID uuid.UUID) error {
-	return s.queries.DeleteStrategy(ctx, uuidToPgtype(strategyID))
+func (s *StrategyService) Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error {
+	return s.queries.DeleteStrategyInWorkspace(ctx, sqlcgen.DeleteStrategyInWorkspaceParams{
+		ID:          uuidToPgtype(strategyID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+	})
 }
 
-func (s *StrategyService) AttachBinding(ctx context.Context, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error) {
-	row, err := s.queries.CreateStrategyBinding(ctx, sqlcgen.CreateStrategyBindingParams{
-		StrategyID: uuidToPgtype(strategyID),
-		CampaignID: nullableUUIDToPgtype(campaignID),
-		ProductID:  nullableUUIDToPgtype(productID),
+func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error) {
+	row, err := s.queries.CreateStrategyBindingInWorkspace(ctx, sqlcgen.CreateStrategyBindingInWorkspaceParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		StrategyID:  uuidToPgtype(strategyID),
+		CampaignID:  nullableUUIDToPgtype(campaignID),
+		ProductID:   nullableUUIDToPgtype(productID),
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.ErrNotFound, "strategy or binding target not found")
+		}
 		return nil, apperror.New(apperror.ErrInternal, "failed to attach strategy")
 	}
 
@@ -115,8 +143,11 @@ func (s *StrategyService) AttachBinding(ctx context.Context, strategyID uuid.UUI
 	return &result, nil
 }
 
-func (s *StrategyService) DetachBinding(ctx context.Context, bindingID uuid.UUID) error {
-	return s.queries.DeleteStrategyBinding(ctx, uuidToPgtype(bindingID))
+func (s *StrategyService) DetachBinding(ctx context.Context, workspaceID, bindingID uuid.UUID) error {
+	return s.queries.DeleteStrategyBindingInWorkspace(ctx, sqlcgen.DeleteStrategyBindingInWorkspaceParams{
+		ID:          uuidToPgtype(bindingID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+	})
 }
 
 // ListActive returns all active strategies for a workspace (used by bid automation worker).

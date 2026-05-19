@@ -18,29 +18,29 @@ type RateLimitOpts struct {
 
 // RouterDeps holds all dependencies needed to construct the router.
 type RouterDeps struct {
-	CORSAllowOrigins []string
-	RateLimit        RateLimitOpts
-	JWTSecret             string
-	MembershipChecker     middleware.MembershipChecker
-	WorkspaceResolver     middleware.WorkspaceResolver
-	Authenticator         middleware.Authenticator
-	DocsHandler           *handler.DocsHandler
-	HealthHandler         *handler.HealthHandler
-	AuthHandler           *handler.AuthHandler
-	WorkspaceHandler      *handler.WorkspaceHandler
-	SellerCabinetHandler  *handler.SellerCabinetHandler
-	AdsReadHandler        *handler.AdsReadHandler
-	CampaignHandler       *handler.CampaignHandler
-	PhraseHandler         *handler.PhraseHandler
-	BidHandler            *handler.BidHandler
-	ProductHandler        *handler.ProductHandler
-	PositionHandler       *handler.PositionHandler
-	SERPHandler           *handler.SERPHandler
-	RecommendationHandler *handler.RecommendationHandler
-	ExportHandler         *handler.ExportHandler
-	ExtensionHandler      *handler.ExtensionHandler
-	AuditLogHandler       *handler.AuditLogHandler
-	JobRunHandler         *handler.JobRunHandler
+	CORSAllowOrigins         []string
+	RateLimit                RateLimitOpts
+	JWTSecret                string
+	MembershipChecker        middleware.MembershipChecker
+	WorkspaceResolver        middleware.WorkspaceResolver
+	Authenticator            middleware.Authenticator
+	DocsHandler              *handler.DocsHandler
+	HealthHandler            *handler.HealthHandler
+	AuthHandler              *handler.AuthHandler
+	WorkspaceHandler         *handler.WorkspaceHandler
+	SellerCabinetHandler     *handler.SellerCabinetHandler
+	AdsReadHandler           *handler.AdsReadHandler
+	CampaignHandler          *handler.CampaignHandler
+	PhraseHandler            *handler.PhraseHandler
+	BidHandler               *handler.BidHandler
+	ProductHandler           *handler.ProductHandler
+	PositionHandler          *handler.PositionHandler
+	SERPHandler              *handler.SERPHandler
+	RecommendationHandler    *handler.RecommendationHandler
+	ExportHandler            *handler.ExportHandler
+	ExtensionHandler         *handler.ExtensionHandler
+	AuditLogHandler          *handler.AuditLogHandler
+	JobRunHandler            *handler.JobRunHandler
 	EventsHandler            *handler.EventsHandler
 	WorkspaceSettingsHandler *handler.WorkspaceSettingsHandler
 	StrategyHandler          *handler.StrategyHandler
@@ -100,14 +100,18 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 	// --- /api/v1 group ---
 	r.Route("/api/v1", func(v1 chi.Router) {
+		var rateLimitMiddleware func(http.Handler) http.Handler
 		if deps.RateLimit.RequestsPerSecond > 0 {
-			v1.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			rateLimitMiddleware = middleware.RateLimit(middleware.RateLimitConfig{
 				RequestsPerSecond: deps.RateLimit.RequestsPerSecond,
 				Burst:             deps.RateLimit.Burst,
-			}))
+			})
 		}
 		// --- Public auth routes ---
 		v1.Route("/auth", func(auth chi.Router) {
+			if rateLimitMiddleware != nil {
+				auth.Use(rateLimitMiddleware)
+			}
 			if deps.AuthHandler != nil {
 				auth.Post("/register", deps.AuthHandler.Register)
 				auth.Post("/login", deps.AuthHandler.Login)
@@ -126,6 +130,9 @@ func NewRouter(deps RouterDeps) chi.Router {
 		// --- Protected routes (require auth) ---
 		v1.Group(func(protected chi.Router) {
 			protected.Use(authMiddleware)
+			if rateLimitMiddleware != nil {
+				protected.Use(rateLimitMiddleware)
+			}
 
 			// Workspaces — create/list (no tenant scope needed)
 			if deps.WorkspaceHandler != nil {
@@ -144,6 +151,13 @@ func NewRouter(deps RouterDeps) chi.Router {
 					ws.Get("/", deps.WorkspaceHandler.Get)
 				} else {
 					ws.Get("/", notImplemented)
+				}
+				if deps.AdsReadHandler != nil {
+					ws.Get("/ads-intelligence/wb/data-health", deps.AdsReadHandler.DataHealth)
+					ws.Get("/ads-intelligence/wb/debug/normquery", deps.AdsReadHandler.DebugNormQuery)
+				} else {
+					ws.Get("/ads-intelligence/wb/data-health", notImplemented)
+					ws.Get("/ads-intelligence/wb/debug/normquery", notImplemented)
 				}
 
 				// Members management — owner/manager only
@@ -219,20 +233,24 @@ func NewRouter(deps RouterDeps) chi.Router {
 				scoped.Route("/ads", func(a chi.Router) {
 					if deps.AdsReadHandler != nil {
 						a.Get("/overview", deps.AdsReadHandler.Overview)
+						a.Get("/data-health", deps.AdsReadHandler.DataHealth)
 						a.Get("/products", deps.AdsReadHandler.ListProducts)
 						a.Get("/products/{id}", deps.AdsReadHandler.GetProduct)
 						a.Get("/campaigns", deps.AdsReadHandler.ListCampaigns)
 						a.Get("/campaigns/{id}", deps.AdsReadHandler.GetCampaign)
 						a.Get("/queries", deps.AdsReadHandler.ListQueries)
 						a.Get("/queries/{id}", deps.AdsReadHandler.GetQuery)
+						a.Get("/debug/normquery", deps.AdsReadHandler.DebugNormQuery)
 					} else {
 						a.Get("/overview", notImplemented)
+						a.Get("/data-health", notImplemented)
 						a.Get("/products", notImplemented)
 						a.Get("/products/{id}", notImplemented)
 						a.Get("/campaigns", notImplemented)
 						a.Get("/campaigns/{id}", notImplemented)
 						a.Get("/queries", notImplemented)
 						a.Get("/queries/{id}", notImplemented)
+						a.Get("/debug/normquery", notImplemented)
 					}
 				})
 
@@ -381,25 +399,29 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 				// Campaign actions (start/pause/stop/bids)
 				if deps.CampaignActionHandler != nil {
-					scoped.Post("/campaigns/{id}/start", deps.CampaignActionHandler.Start)
-					scoped.Post("/campaigns/{id}/pause", deps.CampaignActionHandler.Pause)
-					scoped.Post("/campaigns/{id}/stop", deps.CampaignActionHandler.Stop)
-					scoped.Post("/campaigns/{id}/bids", deps.CampaignActionHandler.SetBid)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/start", deps.CampaignActionHandler.Start)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/pause", deps.CampaignActionHandler.Pause)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/stop", deps.CampaignActionHandler.Stop)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/bids", deps.CampaignActionHandler.SetBid)
+					scoped.Get("/campaigns/{id}/bids/min", deps.CampaignActionHandler.MinimumBids)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.SetClusterBid)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/cluster-minus", deps.CampaignActionHandler.SetClusterMinus)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/budget/deposit", deps.CampaignActionHandler.DepositBudget)
 					scoped.Get("/campaigns/{id}/bid-history", deps.CampaignActionHandler.BidHistory)
 					scoped.Get("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.ListMinusPhrases)
-					scoped.Post("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.AddMinusPhrase)
-					scoped.Delete("/campaigns/{id}/minus-phrases/{phraseId}", deps.CampaignActionHandler.DeleteMinusPhrase)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.AddMinusPhrase)
+					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/minus-phrases/{phraseId}", deps.CampaignActionHandler.DeleteMinusPhrase)
 					scoped.Get("/campaigns/{id}/plus-phrases", deps.CampaignActionHandler.ListPlusPhrases)
-					scoped.Post("/campaigns/{id}/plus-phrases", deps.CampaignActionHandler.AddPlusPhrase)
-					scoped.Delete("/campaigns/{id}/plus-phrases/{phraseId}", deps.CampaignActionHandler.DeletePlusPhrase)
-					scoped.Post("/recommendations/{id}/apply", deps.CampaignActionHandler.ApplyRecommendation)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/plus-phrases", deps.CampaignActionHandler.AddPlusPhrase)
+					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/plus-phrases/{phraseId}", deps.CampaignActionHandler.DeletePlusPhrase)
+					scoped.With(middleware.RequireWriteAccess()).Post("/recommendations/{id}/apply", deps.CampaignActionHandler.ApplyRecommendation)
 				}
 
 				// Semantics & Keywords
 				if deps.SemanticsHandler != nil {
 					scoped.Get("/keywords", deps.SemanticsHandler.ListKeywords)
-					scoped.Post("/keywords/collect", deps.SemanticsHandler.CollectKeywords)
-					scoped.Post("/keywords/cluster", deps.SemanticsHandler.AutoCluster)
+					scoped.With(middleware.RequireWriteAccess()).Post("/keywords/collect", deps.SemanticsHandler.CollectKeywords)
+					scoped.With(middleware.RequireWriteAccess()).Post("/keywords/cluster", deps.SemanticsHandler.AutoCluster)
 					scoped.Get("/keyword-clusters", deps.SemanticsHandler.ListClusters)
 				}
 
@@ -411,20 +433,20 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 				// SEO Analysis
 				if deps.SEOHandler != nil {
-					scoped.Post("/seo/analyze", deps.SEOHandler.AnalyzeAll)
+					scoped.With(middleware.RequireWriteAccess()).Post("/seo/analyze", deps.SEOHandler.AnalyzeAll)
 					scoped.Get("/products/{id}/seo", deps.SEOHandler.GetProductAnalysis)
 				}
 
 				// Delivery Data
 				if deps.DeliveryHandler != nil {
-					scoped.Post("/delivery/collect", deps.DeliveryHandler.Collect)
+					scoped.With(middleware.RequireWriteAccess()).Post("/delivery/collect", deps.DeliveryHandler.Collect)
 				}
 
 				// Competitors
 				if deps.CompetitorHandler != nil {
 					scoped.Get("/competitors", deps.CompetitorHandler.List)
 					scoped.Get("/products/{id}/competitors", deps.CompetitorHandler.ListByProduct)
-					scoped.Post("/competitors/extract", deps.CompetitorHandler.Extract)
+					scoped.With(middleware.RequireWriteAccess()).Post("/competitors/extract", deps.CompetitorHandler.Extract)
 				}
 
 				// Exports — POST requires write access
@@ -444,11 +466,9 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 				// Audit Logs — owner/manager only
 				if deps.AuditLogHandler != nil {
-					scoped.With(middleware.RequireRole(domain.RoleOwner, domain.RoleManager)).
-						Get("/audit-logs", deps.AuditLogHandler.List)
+					scoped.With(middleware.RequireRole(domain.RoleOwner, domain.RoleManager)).Get("/audit-logs", deps.AuditLogHandler.List)
 				} else {
-					scoped.With(middleware.RequireRole(domain.RoleOwner, domain.RoleManager)).
-						Get("/audit-logs", notImplemented)
+					scoped.With(middleware.RequireRole(domain.RoleOwner, domain.RoleManager)).Get("/audit-logs", notImplemented)
 				}
 
 				// Job Runs
