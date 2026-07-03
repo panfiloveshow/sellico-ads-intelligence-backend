@@ -39,6 +39,9 @@ func aggregateCampaignStats(stats []domain.CampaignStat, dateFrom, dateTo time.T
 	if !matched {
 		return domain.AdsMetricsSummary{DataMode: "unavailable"}
 	}
+	if !matched {
+		return domain.AdsMetricsSummary{DataMode: "unavailable"}
+	}
 	return finalizeMetrics(result, "exact")
 }
 

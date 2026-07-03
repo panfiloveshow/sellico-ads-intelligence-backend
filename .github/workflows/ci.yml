@@ -37,6 +37,9 @@ jobs:
       - name: Real data only guard
         run: bash scripts/check-real-data-only.sh
 
+      - name: Prepare compose env
+        run: cp .env.prod.example .env
+
       - name: Validate compose files
         run: |
           docker compose -f docker-compose.yml config --quiet
@@ -80,7 +83,7 @@ jobs:
           args: -exclude-generated ./...
 
       - name: Run Trivy (filesystem)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           scan-type: fs
           scan-ref: .

@@ -73,12 +73,14 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSendClientAuditReport, processor.HandleSendClientAuditReport)
 	mux.HandleFunc(TaskSweepClientAuditReports, processor.HandleSweepClientAuditReports)
 
+	// WB queues are all weight 1 and the server runs with Concurrency 1 so WB
+	// jobs execute sequentially — WB API rate limits reject parallel calls.
 	queueWeights := map[string]int{
 		QueueWBSync:          1,
-		QueueWBCampaigns:     3,
-		QueueWBCampaignStats: 3,
-		QueueWBPhrases:       3,
-		QueueWBProducts:      2,
+		QueueWBCampaigns:     1,
+		QueueWBCampaignStats: 1,
+		QueueWBPhrases:       1,
+		QueueWBProducts:      1,
 		QueueRecommendations: 4,
 		QueueExports:         2,
 		QueueBidAutomation:   3,
@@ -89,7 +91,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	}
 
 	server := asynq.NewServer(redisOpt, asynq.Config{
-		Concurrency:     12,
+		Concurrency:     1,
 		ShutdownTimeout: 30 * time.Second,
 		Queues:          queueWeights,
 	})

@@ -12,6 +12,8 @@ import (
 )
 
 const advertsV2StatusesQuery = "/api/advert/v2/adverts?statuses=-1,4,7,8,9,11"
+const advertsV2DetailStatuses = "-1,4,7,8,9,11"
+const advertsV2DetailBatchSize = 50
 
 type WBPromotionCountDTO struct {
 	AdvertID int64  `json:"advertId"`
@@ -53,6 +55,7 @@ type wbAdvertV2 struct {
 	} `json:"autoParams"`
 	NMSettings []struct {
 		NMID        int64           `json:"nm_id"`
+		NMIDCamel   int64           `json:"nmId"`
 		Subject     wbAdvertSubject `json:"subject"`
 		SubjectID   int64           `json:"subject_id"`
 		SubjectName string          `json:"subject_name"`
@@ -87,18 +90,16 @@ func (c *Client) ListPromotionCounts(ctx context.Context, token string) ([]WBPro
 // Official contract as of 2026-03-28:
 // - GET /api/advert/v2/adverts?statuses=-1,4,7,8,9,11
 func (c *Client) ListCampaigns(ctx context.Context, token string) ([]WBCampaignDTO, error) {
-	_, body, err := c.doRequest(ctx, "GET", advertsV2StatusesQuery, token, nil)
+	adverts, err := c.fetchAdvertsV2(ctx, token, advertsV2StatusesQuery)
 	if err != nil {
 		return nil, err
 	}
-
-	var response wbAdvertsV2Response
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal adverts v2 campaigns: %v", err))
+	if len(adverts) > 0 {
+		adverts = c.enrichAdvertsWithoutNMIDs(ctx, token, adverts)
 	}
 
-	result := make([]WBCampaignDTO, 0, len(response.Adverts))
-	for _, advert := range response.Adverts {
+	result := make([]WBCampaignDTO, 0, len(adverts))
+	for _, advert := range adverts {
 		advertID := firstNonZeroInt64(advert.ID, advert.AdvertID)
 		if advertID == 0 {
 			continue
@@ -167,6 +168,95 @@ func collectPromotionCountItems(value interface{}, out *[]WBPromotionCountDTO) {
 	}
 }
 
+func (c *Client) fetchAdvertsV2(ctx context.Context, token, path string) ([]wbAdvertV2, error) {
+	_, body, err := c.doRequest(ctx, "GET", path, token, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response wbAdvertsV2Response
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal adverts v2 campaigns: %v", err))
+	}
+	return response.Adverts, nil
+}
+
+func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, adverts []wbAdvertV2) []wbAdvertV2 {
+	missingIDs := make([]int64, 0)
+	for _, advert := range adverts {
+		advertID := firstNonZeroInt64(advert.ID, advert.AdvertID)
+		if advertID == 0 || len(collectAdvertNMIDs(advert)) > 0 {
+			continue
+		}
+		missingIDs = append(missingIDs, advertID)
+	}
+	if len(missingIDs) == 0 {
+		return adverts
+	}
+
+	detailsByID := make(map[int64]wbAdvertV2, len(missingIDs))
+	for start := 0; start < len(missingIDs); start += advertsV2DetailBatchSize {
+		end := start + advertsV2DetailBatchSize
+		if end > len(missingIDs) {
+			end = len(missingIDs)
+		}
+		path := fmt.Sprintf("/api/advert/v2/adverts?ids=%s&statuses=%s", joinInt64s(missingIDs[start:end]), advertsV2DetailStatuses)
+		details, err := c.fetchAdvertsV2(ctx, token, path)
+		if err != nil {
+			c.logger.Warn().Err(err).Ints64("advert_ids", missingIDs[start:end]).Msg("failed to enrich WB adverts with nm_settings")
+			continue
+		}
+		for _, detail := range details {
+			advertID := firstNonZeroInt64(detail.ID, detail.AdvertID)
+			if advertID == 0 {
+				continue
+			}
+			detailsByID[advertID] = detail
+		}
+	}
+
+	for i := range adverts {
+		advertID := firstNonZeroInt64(adverts[i].ID, adverts[i].AdvertID)
+		detail, ok := detailsByID[advertID]
+		if !ok || len(collectAdvertNMIDs(detail)) == 0 {
+			continue
+		}
+		adverts[i] = mergeAdvertV2(adverts[i], detail)
+	}
+	return adverts
+}
+
+func mergeAdvertV2(base, detail wbAdvertV2) wbAdvertV2 {
+	if base.ID == 0 {
+		base.ID = detail.ID
+	}
+	if base.AdvertID == 0 {
+		base.AdvertID = detail.AdvertID
+	}
+	if base.Name == "" {
+		base.Name = detail.Name
+	}
+	if base.Settings.Name == "" {
+		base.Settings.Name = detail.Settings.Name
+	}
+	if base.BidType == "" {
+		base.BidType = detail.BidType
+	}
+	if base.PaymentType == "" {
+		base.PaymentType = detail.PaymentType
+	}
+	if base.Settings.PaymentType == "" {
+		base.Settings.PaymentType = detail.Settings.PaymentType
+	}
+	if len(base.AutoParams.NMs) == 0 {
+		base.AutoParams.NMs = detail.AutoParams.NMs
+	}
+	if len(base.NMSettings) == 0 {
+		base.NMSettings = detail.NMSettings
+	}
+	return base
+}
+
 func collectAdvertNMIDs(advert wbAdvertV2) []int64 {
 	if len(advert.AutoParams.NMs) == 0 && len(advert.NMSettings) == 0 {
 		return nil
@@ -185,14 +275,15 @@ func collectAdvertNMIDs(advert wbAdvertV2) []int64 {
 		result = append(result, nmID)
 	}
 	for _, item := range advert.NMSettings {
-		if item.NMID == 0 {
+		nmID := firstNonZeroInt64(item.NMID, item.NMIDCamel)
+		if nmID == 0 {
 			continue
 		}
-		if _, ok := seen[item.NMID]; ok {
+		if _, ok := seen[nmID]; ok {
 			continue
 		}
-		seen[item.NMID] = struct{}{}
-		result = append(result, item.NMID)
+		seen[nmID] = struct{}{}
+		result = append(result, nmID)
 	}
 	return result
 }
@@ -204,13 +295,14 @@ func collectAdvertProductSettings(advert wbAdvertV2) []WBCampaignProductDTO {
 	result := make([]WBCampaignProductDTO, 0, len(advert.NMSettings))
 	seen := make(map[int64]struct{}, len(advert.NMSettings))
 	for _, item := range advert.NMSettings {
-		if item.NMID == 0 {
+		nmID := firstNonZeroInt64(item.NMID, item.NMIDCamel)
+		if nmID == 0 {
 			continue
 		}
-		if _, ok := seen[item.NMID]; ok {
+		if _, ok := seen[nmID]; ok {
 			continue
 		}
-		seen[item.NMID] = struct{}{}
+		seen[nmID] = struct{}{}
 
 		subjectName := strings.TrimSpace(item.SubjectName)
 		if subjectName == "" {
@@ -222,13 +314,21 @@ func collectAdvertProductSettings(advert wbAdvertV2) []WBCampaignProductDTO {
 		}
 		searchBid, recommendationBid := parseAdvertBidsKopecks(item.BidsKopecks)
 		result = append(result, WBCampaignProductDTO{
-			NmID:               item.NMID,
+			NmID:               nmID,
 			SubjectName:        subjectNamePtr,
 			BidSearch:          searchBid,
 			BidRecommendations: recommendationBid,
 		})
 	}
 	return result
+}
+
+func joinInt64s(values []int64) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatInt(value, 10))
+	}
+	return strings.Join(parts, ",")
 }
 
 func rawString(value interface{}) string {

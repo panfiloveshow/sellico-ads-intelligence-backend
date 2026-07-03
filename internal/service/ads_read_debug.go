@@ -25,8 +25,15 @@ type NormQueryDebugReport struct {
 	BackendVersion            string                   `json:"backendVersion"`
 	DateFrom                  string                   `json:"dateFrom"`
 	DateTo                    string                   `json:"dateTo"`
+	SelectedCabinetID         string                   `json:"selectedCabinetId,omitempty"`
+	SelectedCabinetName       string                   `json:"selectedCabinetName,omitempty"`
+	CampaignsCount            int                      `json:"campaignsCount"`
+	EligibleCampaignsCount    int                      `json:"eligibleCampaignsCount"`
+	ProductStatsPairsCount    int                      `json:"productStatsPairsCount"`
+	CampaignProductPairsCount int                      `json:"campaignProductPairsCount"`
 	PairsCount                int                      `json:"pairsCount"`
 	FirstPairs                []NormQueryDebugPair     `json:"firstPairs"`
+	WBCampaignProbeError      string                   `json:"wbCampaignProbeError,omitempty"`
 	WBFirstStatus             int                      `json:"wbFirstStatus"`
 	WBFirstResponseItemsCount int                      `json:"wbFirstResponseItemsCount"`
 	WBFirstItem               interface{}              `json:"wbFirstItem,omitempty"`
@@ -52,15 +59,23 @@ func (s *AdsReadService) DebugNormQuery(ctx context.Context, workspaceID uuid.UU
 	}
 
 	candidates := s.normQueryDebugPairs(data, dateFrom, dateTo, filter)
+	diagnostics := s.normQueryDebugDiagnostics(data, dateFrom, dateTo, filter)
 	report := &NormQueryDebugReport{
-		BackendVersion: s.backendVersion,
-		DateFrom:       dateFrom.Format("2006-01-02"),
-		DateTo:         dateTo.Format("2006-01-02"),
-		PairsCount:     len(candidates),
-		FirstPairs:     firstDebugPairs(candidates, 10),
-		ReadSample:     []map[string]interface{}{},
+		BackendVersion:            s.backendVersion,
+		DateFrom:                  dateFrom.Format("2006-01-02"),
+		DateTo:                    dateTo.Format("2006-01-02"),
+		SelectedCabinetID:         diagnostics.selectedCabinetID,
+		SelectedCabinetName:       diagnostics.selectedCabinetName,
+		CampaignsCount:            diagnostics.campaignsCount,
+		EligibleCampaignsCount:    diagnostics.eligibleCampaignsCount,
+		ProductStatsPairsCount:    diagnostics.productStatsPairsCount,
+		CampaignProductPairsCount: diagnostics.campaignProductPairsCount,
+		PairsCount:                len(candidates),
+		FirstPairs:                firstDebugPairs(candidates, 10),
+		ReadSample:                []map[string]interface{}{},
 	}
 	if len(candidates) == 0 {
+		report.WBCampaignProbeError = s.probeNormQueryCampaignSource(ctx, data, filter)
 		return report, nil
 	}
 
@@ -101,6 +116,96 @@ func (s *AdsReadService) DebugNormQuery(ctx context.Context, workspaceID uuid.UU
 	report.ReadSample = sampleQueryRows(rows, 5)
 
 	return report, nil
+}
+
+type normQueryDebugDiagnostics struct {
+	selectedCabinetID         string
+	selectedCabinetName       string
+	campaignsCount            int
+	eligibleCampaignsCount    int
+	productStatsPairsCount    int
+	campaignProductPairsCount int
+}
+
+func (s *AdsReadService) normQueryDebugDiagnostics(data *adsWorkspaceData, dateFrom, dateTo time.Time, filter QuerySummaryFilter) normQueryDebugDiagnostics {
+	diag := normQueryDebugDiagnostics{}
+	if filter.SellerCabinetID != nil {
+		diag.selectedCabinetID = filter.SellerCabinetID.String()
+		if cabinet, ok := data.cabinets[*filter.SellerCabinetID]; ok {
+			diag.selectedCabinetName = cabinet.Name
+		}
+	}
+
+	activeProductStatPairs := make(map[productCampaignKey]struct{})
+	for key, stats := range data.productStatsByLink {
+		if !campaignInFilter(data, key.campaignID, filter) {
+			continue
+		}
+		for _, stat := range stats {
+			if !dateInRange(stat.Date, dateFrom, dateTo) {
+				continue
+			}
+			orders := int64(0)
+			if stat.Orders != nil {
+				orders = *stat.Orders
+			}
+			if stat.Spend > 0 || stat.Clicks > 0 || orders > 0 {
+				activeProductStatPairs[key] = struct{}{}
+				break
+			}
+		}
+	}
+	diag.productStatsPairsCount = len(activeProductStatPairs)
+
+	for _, campaign := range data.campaigns {
+		if filter.SellerCabinetID != nil && campaign.SellerCabinetID != *filter.SellerCabinetID {
+			continue
+		}
+		diag.campaignsCount++
+		if isWBAdvertStatsEligibleStatus(campaign.Status) && campaign.WBCampaignID > 0 {
+			diag.eligibleCampaignsCount++
+		}
+		diag.campaignProductPairsCount += len(data.campaignProductIDs[campaign.ID])
+	}
+	return diag
+}
+
+func campaignInFilter(data *adsWorkspaceData, campaignID uuid.UUID, filter QuerySummaryFilter) bool {
+	if filter.SellerCabinetID == nil {
+		return true
+	}
+	for _, campaign := range data.campaigns {
+		if campaign.ID == campaignID {
+			return campaign.SellerCabinetID == *filter.SellerCabinetID
+		}
+	}
+	return false
+}
+
+func (s *AdsReadService) probeNormQueryCampaignSource(ctx context.Context, data *adsWorkspaceData, filter QuerySummaryFilter) string {
+	if filter.SellerCabinetID == nil {
+		return ""
+	}
+	cabinet, ok := data.cabinets[*filter.SellerCabinetID]
+	if !ok {
+		return "selected seller cabinet not found"
+	}
+	token, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
+	if err != nil {
+		return "failed to decrypt selected seller cabinet token"
+	}
+	campaigns, err := s.wbClient.ListCampaigns(ctx, token)
+	if err != nil {
+		return fmt.Sprintf("WB campaign source probe failed: %v", err)
+	}
+	pairs := 0
+	for _, campaign := range campaigns {
+		pairs += len(campaign.NMIDs)
+	}
+	if pairs == 0 {
+		return fmt.Sprintf("WB campaign source probe returned %d campaigns but 0 campaign-product pairs", len(campaigns))
+	}
+	return ""
 }
 
 func (s *AdsReadService) normQueryDebugPairs(data *adsWorkspaceData, dateFrom, dateTo time.Time, filter QuerySummaryFilter) []normQueryDebugCandidate {

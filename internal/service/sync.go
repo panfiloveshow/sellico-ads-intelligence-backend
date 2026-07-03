@@ -1588,7 +1588,7 @@ func float64PtrToPgFloat8(value *float64) pgtype.Float8 {
 }
 
 func phraseIdentityKey(nmID int64, normQuery string) string {
-	return fmt.Sprintf("%d:%s", nmID, normQuery)
+	return fmt.Sprintf("%d:%s", nmID, strings.TrimSpace(normQuery))
 }
 
 func (s *SyncService) upsertPhraseFromNormQueryStat(ctx context.Context, workspaceID, cabinetID, campaignID uuid.UUID, wbCampaignID int, statDTO wb.WBSearchClusterStatDTO, summary *SyncSummary) (uuid.UUID, bool) {
