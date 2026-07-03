@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ type sellerCabinetServicer interface {
 	Get(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) (*domain.SellerCabinet, error)
 	ListCampaigns(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, limit, offset int32) ([]domain.Campaign, error)
 	ListProducts(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, limit, offset int32) ([]domain.Product, error)
+	GetCommunicationReputation(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, nmID int64, isAnswered bool, take int) (*service.SellerCabinetCommunicationReputation, error)
 	Delete(ctx context.Context, actorID uuid.UUID, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) error
 	TriggerSellerCabinetSync(ctx context.Context, actorID uuid.UUID, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) (*service.SyncTriggerResult, error)
 }
@@ -176,6 +178,52 @@ func (h *SellerCabinetHandler) ListProducts(w http.ResponseWriter, r *http.Reque
 		PerPage: pg.PerPage,
 		Total:   int64(len(items)),
 	})
+}
+
+// CommunicationReputation handles GET /seller-cabinets/{id}/communication/reputation.
+func (h *SellerCabinetHandler) CommunicationReputation(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	nmID, err := strconv.ParseInt(r.URL.Query().Get("nm_id"), 10, 64)
+	if err != nil || nmID <= 0 {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "nm_id is required"))
+		return
+	}
+
+	take := 20
+	if rawTake := r.URL.Query().Get("take"); rawTake != "" {
+		parsed, parseErr := strconv.Atoi(rawTake)
+		if parseErr != nil || parsed <= 0 || parsed > 100 {
+			writeAppError(w, apperror.New(apperror.ErrValidation, "take must be between 1 and 100"))
+			return
+		}
+		take = parsed
+	}
+
+	isAnswered := false
+	if rawAnswered := r.URL.Query().Get("is_answered"); rawAnswered != "" {
+		parsed, parseErr := strconv.ParseBool(rawAnswered)
+		if parseErr != nil {
+			writeAppError(w, apperror.New(apperror.ErrValidation, "is_answered must be true or false"))
+			return
+		}
+		isAnswered = parsed
+	}
+
+	principal, _ := middleware.PrincipalFromContext(r.Context())
+	workspaceRef, _ := middleware.WorkspaceRefFromContext(r.Context())
+
+	report, err := h.svc.GetCommunicationReputation(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), nmID, isAnswered, take)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	dto.WriteJSON(w, http.StatusOK, dto.SellerCabinetCommunicationReputationFromService(*report))
 }
 
 // Delete handles DELETE /seller-cabinets/{id}.

@@ -18,19 +18,23 @@ type workspaceExtensionEvidence struct {
 	bids         []domain.ExtensionBidSnapshot
 	positions    []domain.ExtensionPositionSnapshot
 	signals      []domain.ExtensionUISignal
+	domRows      []domain.ExtensionDOMRowSnapshot
 
 	// Pre-built indexes for O(1) entity lookup (audit fix: CRITICAL O(N²))
-	pageByProduct    map[uuid.UUID][]int
-	pageByPhrase     map[uuid.UUID][]int
-	pageByCampaign   map[uuid.UUID][]int
-	bidByPhrase      map[uuid.UUID][]int
-	bidByCampaign    map[uuid.UUID][]int
-	posByProduct     map[uuid.UUID][]int
-	posByPhrase      map[uuid.UUID][]int
-	posByCampaign    map[uuid.UUID][]int
-	sigByProduct     map[uuid.UUID][]int
-	sigByPhrase      map[uuid.UUID][]int
-	sigByCampaign    map[uuid.UUID][]int
+	pageByProduct  map[uuid.UUID][]int
+	pageByPhrase   map[uuid.UUID][]int
+	pageByCampaign map[uuid.UUID][]int
+	bidByPhrase    map[uuid.UUID][]int
+	bidByCampaign  map[uuid.UUID][]int
+	posByProduct   map[uuid.UUID][]int
+	posByPhrase    map[uuid.UUID][]int
+	posByCampaign  map[uuid.UUID][]int
+	sigByProduct   map[uuid.UUID][]int
+	sigByPhrase    map[uuid.UUID][]int
+	sigByCampaign  map[uuid.UUID][]int
+	domByProduct   map[uuid.UUID][]int
+	domByPhrase    map[uuid.UUID][]int
+	domByCampaign  map[uuid.UUID][]int
 }
 
 func loadWorkspaceExtensionEvidence(ctx context.Context, queries *sqlcgen.Queries, workspaceID uuid.UUID, limit int32) (*workspaceExtensionEvidence, error) {
@@ -91,12 +95,28 @@ func loadWorkspaceExtensionEvidence(ctx context.Context, queries *sqlcgen.Querie
 	if err != nil {
 		return nil, err
 	}
+	domRows, err := queries.ListExtensionDOMRowSnapshotsFiltered(ctx, sqlcgen.ListExtensionDOMRowSnapshotsFilteredParams{
+		WorkspaceID:      uuidToPgtype(workspaceID),
+		Limit:            limit,
+		Offset:           0,
+		PageTypeFilter:   textToPgtype(""),
+		TableRoleFilter:  textToPgtype(""),
+		CampaignIDFilter: uuidToPgtypePtr(nil),
+		PhraseIDFilter:   uuidToPgtypePtr(nil),
+		ProductIDFilter:  uuidToPgtypePtr(nil),
+		QueryFilter:      textToPgtype(""),
+		RegionFilter:     textToPgtype(""),
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	result := &workspaceExtensionEvidence{
 		pageContexts: make([]domain.ExtensionPageContext, len(pageContextRows)),
 		bids:         make([]domain.ExtensionBidSnapshot, len(bidRows)),
 		positions:    make([]domain.ExtensionPositionSnapshot, len(positionRows)),
 		signals:      make([]domain.ExtensionUISignal, len(signalRows)),
+		domRows:      make([]domain.ExtensionDOMRowSnapshot, len(domRows)),
 	}
 	for i, row := range pageContextRows {
 		result.pageContexts[i] = extensionPageContextFromSqlc(row)
@@ -109,6 +129,9 @@ func loadWorkspaceExtensionEvidence(ctx context.Context, queries *sqlcgen.Querie
 	}
 	for i, row := range signalRows {
 		result.signals[i] = extensionUISignalFromSqlc(row)
+	}
+	for i, row := range domRows {
+		result.domRows[i] = extensionDOMRowSnapshotFromSqlc(row)
 	}
 
 	result.buildIndexes()
@@ -172,6 +195,21 @@ func (e *workspaceExtensionEvidence) buildIndexes() {
 			e.sigByCampaign[*item.CampaignID] = append(e.sigByCampaign[*item.CampaignID], i)
 		}
 	}
+
+	e.domByProduct = make(map[uuid.UUID][]int)
+	e.domByPhrase = make(map[uuid.UUID][]int)
+	e.domByCampaign = make(map[uuid.UUID][]int)
+	for i, item := range e.domRows {
+		if item.ProductID != nil {
+			e.domByProduct[*item.ProductID] = append(e.domByProduct[*item.ProductID], i)
+		}
+		if item.PhraseID != nil {
+			e.domByPhrase[*item.PhraseID] = append(e.domByPhrase[*item.PhraseID], i)
+		}
+		if item.CampaignID != nil {
+			e.domByCampaign[*item.CampaignID] = append(e.domByCampaign[*item.CampaignID], i)
+		}
+	}
 }
 
 // productEvidenceIndexed uses pre-built indexes for O(1) product evidence lookup.
@@ -184,6 +222,7 @@ func (e *workspaceExtensionEvidence) productEvidenceIndexed(productID uuid.UUID)
 		nil, // bids don't have product index
 		e.posByProduct[productID],
 		e.sigByProduct[productID],
+		e.domByProduct[productID],
 	)
 }
 
@@ -197,27 +236,37 @@ func (e *workspaceExtensionEvidence) campaignEvidenceIndexed(campaignID uuid.UUI
 		e.bidByCampaign[campaignID],
 		e.posByCampaign[campaignID],
 		e.sigByCampaign[campaignID],
+		e.domByCampaign[campaignID],
 	)
 }
 
 // phraseEvidenceIndexed uses pre-built indexes for O(1) phrase evidence lookup.
 func (e *workspaceExtensionEvidence) phraseEvidenceIndexed(phraseID uuid.UUID) *domain.SourceEvidence {
+	return e.phraseEvidenceIndexedWithBid(phraseID, nil)
+}
+
+func (e *workspaceExtensionEvidence) phraseEvidenceIndexedWithBid(phraseID uuid.UUID, apiBid *int64) *domain.SourceEvidence {
 	if e == nil {
 		return backendOnlyEvidence(domain.SourceAPI, 0.75)
 	}
-	return e.buildEvidenceFromIndexes(domain.SourceAPI, 0.75,
+	evidence := e.buildEvidenceFromIndexes(domain.SourceAPI, 0.75,
 		e.pageByPhrase[phraseID],
 		e.bidByPhrase[phraseID],
 		e.posByPhrase[phraseID],
 		e.sigByPhrase[phraseID],
+		e.domByPhrase[phraseID],
 	)
+	if apiBid != nil {
+		e.addBidMismatchIssue(evidence, *apiBid, e.bidByPhrase[phraseID])
+	}
+	return evidence
 }
 
 // buildEvidenceFromIndexes builds evidence from pre-indexed item positions.
 func (e *workspaceExtensionEvidence) buildEvidenceFromIndexes(
 	defaultSource string,
 	defaultConfidence float64,
-	pageIdxs, bidIdxs, posIdxs, sigIdxs []int,
+	pageIdxs, bidIdxs, posIdxs, sigIdxs, domIdxs []int,
 ) *domain.SourceEvidence {
 	typePresence := 0
 	latest := time.Time{}
@@ -272,6 +321,18 @@ func (e *workspaceExtensionEvidence) buildEvidenceFromIndexes(
 		}
 	}
 
+	if len(domIdxs) > 0 {
+		typePresence++
+		for _, i := range domIdxs {
+			item := e.domRows[i]
+			if item.CapturedAt.After(latest) {
+				latest = item.CapturedAt
+			}
+			totalConfidence += item.Confidence
+			confidenceSamples++
+		}
+	}
+
 	if typePresence == 0 {
 		return backendOnlyEvidence(defaultSource, defaultConfidence)
 	}
@@ -286,18 +347,18 @@ func (e *workspaceExtensionEvidence) buildEvidenceFromIndexes(
 		confidence = totalConfidence / float64(confidenceSamples)
 	}
 
-	return &domain.SourceEvidence{
+	return hydrateSourceEvidence(&domain.SourceEvidence{
 		Source:             source,
 		CapturedAt:         &capturedAt,
 		FreshnessState:     freshnessState(capturedAt),
 		Confidence:         confidence,
 		Coverage:           evidenceCoverage(typePresence),
 		ConfirmedInCabinet: true,
-	}
+	})
 }
 
 func (e *workspaceExtensionEvidence) workspaceEvidence(defaultSource string) *domain.SourceEvidence {
-	return e.buildEvidence(defaultSource, 0.75, func(any) bool { return true }, func(any) bool { return true }, func(any) bool { return true }, func(any) bool { return true })
+	return e.buildEvidence(defaultSource, 0.75, func(any) bool { return true }, func(any) bool { return true }, func(any) bool { return true }, func(any) bool { return true }, func(any) bool { return true })
 }
 
 func (e *workspaceExtensionEvidence) productEvidence(productID uuid.UUID, wbProductID int64) *domain.SourceEvidence {
@@ -313,6 +374,9 @@ func (e *workspaceExtensionEvidence) productEvidence(productID uuid.UUID, wbProd
 		},
 		func(item any) bool {
 			return matchSignalProduct(item.(domain.ExtensionUISignal), productID, wbProductID)
+		},
+		func(item any) bool {
+			return matchDOMRowProduct(item.(domain.ExtensionDOMRowSnapshot), productID, wbProductID)
 		},
 	)
 }
@@ -331,6 +395,9 @@ func (e *workspaceExtensionEvidence) campaignEvidence(campaignID uuid.UUID, wbCa
 		func(item any) bool {
 			return matchSignalCampaign(item.(domain.ExtensionUISignal), campaignID, wbCampaignID)
 		},
+		func(item any) bool {
+			return matchDOMRowCampaign(item.(domain.ExtensionDOMRowSnapshot), campaignID, wbCampaignID)
+		},
 	)
 }
 
@@ -347,6 +414,9 @@ func (e *workspaceExtensionEvidence) phraseEvidence(phraseID uuid.UUID, keyword 
 		},
 		func(item any) bool {
 			return matchSignalPhrase(item.(domain.ExtensionUISignal), phraseID, keyword, campaignID, wbCampaignID)
+		},
+		func(item any) bool {
+			return matchDOMRowPhrase(item.(domain.ExtensionDOMRowSnapshot), phraseID, keyword, campaignID, wbCampaignID)
 		},
 	)
 }
@@ -372,6 +442,9 @@ func (e *workspaceExtensionEvidence) recommendationEvidence(rec domain.Recommend
 			func(item any) bool {
 				return matchSignalPhrase(item.(domain.ExtensionUISignal), *rec.PhraseID, keyword, *rec.CampaignID, 0)
 			},
+			func(item any) bool {
+				return matchDOMRowPhrase(item.(domain.ExtensionDOMRowSnapshot), *rec.PhraseID, keyword, *rec.CampaignID, 0)
+			},
 		)
 	case rec.PhraseID != nil:
 		return e.buildEvidence(domain.SourceDerived, rec.Confidence,
@@ -386,6 +459,9 @@ func (e *workspaceExtensionEvidence) recommendationEvidence(rec domain.Recommend
 			},
 			func(item any) bool {
 				return matchSignalPhrase(item.(domain.ExtensionUISignal), *rec.PhraseID, keyword, uuid.Nil, 0)
+			},
+			func(item any) bool {
+				return matchDOMRowPhrase(item.(domain.ExtensionDOMRowSnapshot), *rec.PhraseID, keyword, uuid.Nil, 0)
 			},
 		)
 	case rec.ProductID != nil:
@@ -406,6 +482,7 @@ func (e *workspaceExtensionEvidence) buildEvidence(
 	bidMatch func(any) bool,
 	positionMatch func(any) bool,
 	signalMatch func(any) bool,
+	domMatch func(any) bool,
 ) *domain.SourceEvidence {
 	if e == nil {
 		return backendOnlyEvidence(defaultSource, defaultConfidence)
@@ -480,6 +557,22 @@ func (e *workspaceExtensionEvidence) buildEvidence(
 		typePresence++
 	}
 
+	hasDOM := false
+	for _, item := range e.domRows {
+		if !domMatch(item) {
+			continue
+		}
+		hasDOM = true
+		if item.CapturedAt.After(latest) {
+			latest = item.CapturedAt
+		}
+		totalConfidence += item.Confidence
+		confidenceSamples++
+	}
+	if hasDOM {
+		typePresence++
+	}
+
 	if typePresence == 0 {
 		return backendOnlyEvidence(defaultSource, defaultConfidence)
 	}
@@ -494,24 +587,119 @@ func (e *workspaceExtensionEvidence) buildEvidence(
 		confidence = totalConfidence / float64(confidenceSamples)
 	}
 
-	return &domain.SourceEvidence{
+	return hydrateSourceEvidence(&domain.SourceEvidence{
 		Source:             source,
 		CapturedAt:         &capturedAt,
 		FreshnessState:     freshnessState(capturedAt),
 		Confidence:         confidence,
 		Coverage:           evidenceCoverage(typePresence),
 		ConfirmedInCabinet: true,
-	}
+	})
 }
 
 func backendOnlyEvidence(source string, confidence float64) *domain.SourceEvidence {
-	return &domain.SourceEvidence{
+	return hydrateSourceEvidence(&domain.SourceEvidence{
 		Source:             source,
 		FreshnessState:     "no_live_capture",
 		Confidence:         confidence,
 		Coverage:           "none",
 		ConfirmedInCabinet: false,
+	})
+}
+
+func hydrateSourceEvidence(evidence *domain.SourceEvidence) *domain.SourceEvidence {
+	if evidence == nil {
+		return nil
 	}
+	switch evidence.Source {
+	case domain.SourceAPI:
+		evidence.SourceLabel = "API WB"
+		evidence.SourcePriority = []string{"official_wb_api"}
+	case domain.SourceExtension:
+		evidence.SourceLabel = "Кабинет WB"
+		evidence.SourcePriority = []string{"wb_cabinet_evidence"}
+	case "mixed":
+		evidence.SourceLabel = "API WB + кабинет WB"
+		evidence.SourcePriority = []string{"official_wb_api", "wb_cabinet_evidence"}
+	case domain.SourceDerived:
+		evidence.SourceLabel = "Расчет Sellico"
+		evidence.SourcePriority = []string{"sellico_derived"}
+	default:
+		if evidence.Source != "" {
+			evidence.SourceLabel = evidence.Source
+		}
+	}
+	if evidence.Coverage == "low" || evidence.Coverage == "none" {
+		if evidence.Source == "mixed" || evidence.Source == domain.SourceExtension {
+			evidence.Issues = append(evidence.Issues, domain.SourceEvidenceIssue{
+				Type:     "partial_cabinet_evidence",
+				Severity: "info",
+				Message:  "Кабинет WB подтверждает только часть live evidence; бизнес-метрики остаются за официальным API.",
+			})
+		}
+	}
+	return evidence
+}
+
+func (e *workspaceExtensionEvidence) addBidMismatchIssue(evidence *domain.SourceEvidence, apiBid int64, bidIdxs []int) {
+	if evidence == nil || apiBid <= 0 {
+		return
+	}
+	latestBid, ok := e.latestVisibleBidFromIndexes(bidIdxs)
+	if !ok || latestBid == apiBid {
+		return
+	}
+	evidence.Issues = append(evidence.Issues, domain.SourceEvidenceIssue{
+		Type:           "api_extension_bid_mismatch",
+		Severity:       "warning",
+		Message:        "Ставка из официальной синхронизации WB отличается от live-значения, видимого в кабинете WB. Не применяйте автодействие без обновления синхронизации или повторного capture.",
+		APIValue:       fmt.Sprintf("%d", apiBid),
+		ExtensionValue: fmt.Sprintf("%d", latestBid),
+	})
+}
+
+func (e *workspaceExtensionEvidence) latestVisibleBidFromIndexes(bidIdxs []int) (int64, bool) {
+	var latest domain.ExtensionBidSnapshot
+	found := false
+	for _, i := range bidIdxs {
+		if i < 0 || i >= len(e.bids) {
+			continue
+		}
+		item := e.bids[i]
+		if item.VisibleBid == nil || *item.VisibleBid <= 0 {
+			continue
+		}
+		if !found || item.CapturedAt.After(latest.CapturedAt) {
+			latest = item
+			found = true
+		}
+	}
+	if !found || latest.VisibleBid == nil {
+		return 0, false
+	}
+	return *latest.VisibleBid, true
+}
+
+func (e *workspaceExtensionEvidence) bidMismatchCount(phrases []domain.Phrase, campaignIDs map[uuid.UUID]struct{}) int {
+	if e == nil {
+		return 0
+	}
+	count := 0
+	for _, phrase := range phrases {
+		if phrase.CurrentBid == nil || *phrase.CurrentBid <= 0 {
+			continue
+		}
+		if len(campaignIDs) > 0 {
+			if _, ok := campaignIDs[phrase.CampaignID]; !ok {
+				continue
+			}
+		}
+		latestBid, ok := e.latestVisibleBidFromIndexes(e.bidByPhrase[phrase.ID])
+		if ok && latestBid != *phrase.CurrentBid {
+			count++
+		}
+	}
+	return count
 }
 
 func evidenceCoverage(typePresence int) string {
@@ -586,6 +774,10 @@ func matchSignalProduct(item domain.ExtensionUISignal, productID uuid.UUID, wbPr
 	return (item.ProductID != nil && *item.ProductID == productID) || metadataMatchesWBProductID(item.Metadata, wbProductID)
 }
 
+func matchDOMRowProduct(item domain.ExtensionDOMRowSnapshot, productID uuid.UUID, wbProductID int64) bool {
+	return (item.ProductID != nil && *item.ProductID == productID) || metadataMatchesWBProductID(item.Metadata, wbProductID)
+}
+
 func matchPageContextCampaign(item domain.ExtensionPageContext, campaignID uuid.UUID, wbCampaignID int64) bool {
 	return (item.CampaignID != nil && *item.CampaignID == campaignID) || metadataMatchesWBCampaignID(item.Metadata, wbCampaignID)
 }
@@ -599,6 +791,10 @@ func matchPositionCampaign(item domain.ExtensionPositionSnapshot, campaignID uui
 }
 
 func matchSignalCampaign(item domain.ExtensionUISignal, campaignID uuid.UUID, wbCampaignID int64) bool {
+	return (item.CampaignID != nil && *item.CampaignID == campaignID) || metadataMatchesWBCampaignID(item.Metadata, wbCampaignID)
+}
+
+func matchDOMRowCampaign(item domain.ExtensionDOMRowSnapshot, campaignID uuid.UUID, wbCampaignID int64) bool {
 	return (item.CampaignID != nil && *item.CampaignID == campaignID) || metadataMatchesWBCampaignID(item.Metadata, wbCampaignID)
 }
 
@@ -650,6 +846,19 @@ func matchSignalPhrase(item domain.ExtensionUISignal, phraseID uuid.UUID, keywor
 			return true
 		}
 		return matchSignalCampaign(item, campaignID, wbCampaignID)
+	}
+	return false
+}
+
+func matchDOMRowPhrase(item domain.ExtensionDOMRowSnapshot, phraseID uuid.UUID, keyword string, campaignID uuid.UUID, wbCampaignID int64) bool {
+	if item.PhraseID != nil && *item.PhraseID == phraseID {
+		return true
+	}
+	if keyword != "" && item.Query != nil && normalizeEvidenceQuery(*item.Query) == normalizeEvidenceQuery(keyword) {
+		if campaignID == uuid.Nil {
+			return true
+		}
+		return matchDOMRowCampaign(item, campaignID, wbCampaignID)
 	}
 	return false
 }

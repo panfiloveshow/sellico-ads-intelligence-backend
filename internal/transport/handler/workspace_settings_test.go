@@ -68,6 +68,11 @@ func TestWorkspaceSettingsHandler_UpdateSettings(t *testing.T) {
 				ChatID:   "-100123",
 				Enabled:  true,
 			},
+			Email: &domain.EmailSettings{
+				Enabled:       true,
+				Recipients:    []string{"client@example.com"},
+				ClientReports: true,
+			},
 		},
 	}
 
@@ -76,6 +81,8 @@ func TestWorkspaceSettingsHandler_UpdateSettings(t *testing.T) {
 			assert.Equal(t, userID, actor)
 			assert.Equal(t, wsID, ws)
 			assert.True(t, in.Notifications.Telegram.Enabled)
+			assert.True(t, in.Notifications.Email.ClientReports)
+			assert.Equal(t, []string{"client@example.com"}, in.Notifications.Email.Recipients)
 			return &in, nil
 		},
 	}
@@ -91,6 +98,40 @@ func TestWorkspaceSettingsHandler_UpdateSettings(t *testing.T) {
 	h.UpdateSettings(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWorkspaceSettingsHandler_UpdateSettingsRejectsInvalidEmailRecipient(t *testing.T) {
+	wsID := uuid.New()
+	userID := uuid.New()
+	input := domain.WorkspaceSettings{
+		Notifications: &domain.NotificationSettings{
+			Email: &domain.EmailSettings{
+				Enabled:    true,
+				Recipients: []string{"not-an-email"},
+			},
+		},
+	}
+
+	svc := &mockSettingsService{
+		updateSettingsFn: func(context.Context, uuid.UUID, uuid.UUID, domain.WorkspaceSettings) (*domain.WorkspaceSettings, error) {
+			t.Fatal("service should not be called for invalid email settings")
+			return nil, nil
+		},
+	}
+
+	h := NewWorkspaceSettingsHandler(svc)
+	body, err := json.Marshal(input)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), middleware.WorkspaceIDKey, wsID)
+	ctx = context.WithValue(ctx, middleware.UserIDKey, userID)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	h.UpdateSettings(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "notifications.email.recipients.0")
 }
 
 func TestWorkspaceSettingsHandler_GetSettings_MissingWorkspace(t *testing.T) {

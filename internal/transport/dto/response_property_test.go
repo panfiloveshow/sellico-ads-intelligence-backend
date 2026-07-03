@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/envelope"
 	"pgregory.net/rapid"
 )
@@ -154,4 +157,121 @@ func TestProperty_WriteValidationError_AllFieldsHaveValidationCode(t *testing.T)
 			}
 		}
 	})
+}
+
+func TestAdsOverviewFromDomainMapsRecommendationTaskTotals(t *testing.T) {
+	response := AdsOverviewFromDomain(domain.AdsOverview{
+		Totals: domain.AdsOverviewTotals{
+			ActiveRecommendations:  7,
+			OverdueRecommendations: 2,
+			DecisionQueueBuckets: map[string]int{
+				"losses": 3,
+			},
+			TaskOwnerBuckets: map[string]int{
+				domain.RecommendationTaskOwnerMarketer: 4,
+			},
+		},
+	})
+
+	if response.Totals.ActiveRecommendations != 7 {
+		t.Fatalf("expected active recommendation total 7, got %d", response.Totals.ActiveRecommendations)
+	}
+	if response.Totals.OverdueRecommendations != 2 {
+		t.Fatalf("expected overdue recommendation total 2, got %d", response.Totals.OverdueRecommendations)
+	}
+	if response.Totals.DecisionQueueBuckets["losses"] != 3 {
+		t.Fatalf("expected decision queue buckets to be mapped, got %+v", response.Totals.DecisionQueueBuckets)
+	}
+	if response.Totals.TaskOwnerBuckets[domain.RecommendationTaskOwnerMarketer] != 4 {
+		t.Fatalf("expected task owner buckets to be mapped, got %+v", response.Totals.TaskOwnerBuckets)
+	}
+}
+
+func TestRecommendationTaskMetadataUsesCreatedAtAndActiveStatus(t *testing.T) {
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+
+	ageHours, dueAt, slaHours, overdue := recommendationTaskMetadata(domain.Recommendation{
+		Status:    domain.RecommendationStatusActive,
+		CreatedAt: now.Add(-72 * time.Hour),
+	}, now)
+	if ageHours != 72 || !overdue {
+		t.Fatalf("expected 72h overdue active recommendation, got age=%d overdue=%v", ageHours, overdue)
+	}
+	if dueAt == nil || !dueAt.Equal(now.Add(-24*time.Hour)) {
+		t.Fatalf("expected due_at from created_at + SLA, got %v", dueAt)
+	}
+	if slaHours != 48 {
+		t.Fatalf("expected 48h task SLA, got %d", slaHours)
+	}
+
+	ageHours, dueAt, slaHours, overdue = recommendationTaskMetadata(domain.Recommendation{
+		Status:    domain.RecommendationStatusCompleted,
+		CreatedAt: now.Add(-96 * time.Hour),
+	}, now)
+	if ageHours != 96 || overdue {
+		t.Fatalf("completed recommendation must not be overdue, got age=%d overdue=%v", ageHours, overdue)
+	}
+	if dueAt == nil || !dueAt.Equal(now.Add(-48*time.Hour)) || slaHours != 48 {
+		t.Fatalf("expected completed task to keep factual SLA metadata, due_at=%v sla=%d", dueAt, slaHours)
+	}
+}
+
+func TestRecommendationFromDomainExposesTaskMetadata(t *testing.T) {
+	response := RecommendationFromDomain(domain.Recommendation{
+		ID:          uuid.New(),
+		WorkspaceID: uuid.New(),
+		Title:       "Проверить слабый кластер",
+		Description: "Подтвержденная рекомендация",
+		Type:        domain.RecommendationTypeHighSpendLowOrders,
+		Severity:    domain.SeverityHigh,
+		Status:      domain.RecommendationStatusActive,
+		CreatedAt:   time.Now().Add(-72 * time.Hour),
+		UpdatedAt:   time.Now().Add(-71 * time.Hour),
+	})
+
+	if !response.IsOverdue {
+		t.Fatal("expected active recommendation older than threshold to be marked overdue")
+	}
+	if response.TaskCategory != domain.RecommendationTaskCategoryLosses {
+		t.Fatalf("expected loss-control task category, got %q", response.TaskCategory)
+	}
+	if response.TaskOwnerRole != domain.RecommendationTaskOwnerMarketer {
+		t.Fatalf("expected marketer task owner role, got %q", response.TaskOwnerRole)
+	}
+	if response.TaskSLAHours != 48 || response.TaskDueAt == nil {
+		t.Fatalf("expected SLA metadata in recommendation response, sla=%d due_at=%v", response.TaskSLAHours, response.TaskDueAt)
+	}
+	if response.TaskAgeHours < 71 {
+		t.Fatalf("expected task age from created_at, got %d", response.TaskAgeHours)
+	}
+}
+
+func TestCampaignRecommendationsFromDomainExposesTaskMetadata(t *testing.T) {
+	createdAt := time.Now().Add(-72 * time.Hour)
+
+	response := campaignRecommendationsFromDomain([]domain.CampaignRecommendationSummary{
+		{
+			ID:         uuid.New(),
+			Scope:      "campaign",
+			Title:      "Снизить слабую ставку",
+			Type:       domain.RecommendationTypeLowerBid,
+			Severity:   domain.SeverityHigh,
+			Confidence: 0.9,
+			Status:     domain.RecommendationStatusActive,
+			CreatedAt:  createdAt,
+		},
+	})
+
+	if len(response) != 1 {
+		t.Fatalf("expected one campaign recommendation, got %d", len(response))
+	}
+	if response[0].TaskCategory != domain.RecommendationTaskCategoryLosses || !response[0].IsOverdue {
+		t.Fatalf("expected overdue loss-control task metadata, got %+v", response[0])
+	}
+	if response[0].TaskOwnerRole != domain.RecommendationTaskOwnerMarketer {
+		t.Fatalf("expected campaign recommendation owner role, got %+v", response[0])
+	}
+	if response[0].TaskSLAHours != 48 || response[0].TaskDueAt == nil || response[0].TaskAgeHours < 71 {
+		t.Fatalf("expected campaign recommendation SLA metadata, got %+v", response[0])
+	}
 }

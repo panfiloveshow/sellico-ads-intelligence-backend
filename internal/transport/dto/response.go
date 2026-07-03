@@ -141,30 +141,103 @@ type SellerCabinetResponse struct {
 }
 
 type SellerCabinetAutoSyncResponse struct {
-	JobRunID        uuid.UUID                   `json:"job_run_id"`
-	Status          string                      `json:"status"`
-	ResultState     string                      `json:"result_state"`
-	FreshnessState  string                      `json:"freshness_state"`
-	SyncPhase       string                      `json:"sync_phase,omitempty"`
-	FinishedAt      *time.Time                  `json:"finished_at,omitempty"`
-	PhaseRetries    []AdsSyncPhaseRetryResponse `json:"phase_retries_queued,omitempty"`
-	Cabinets        int                         `json:"cabinets"`
-	Campaigns       int                         `json:"campaigns"`
-	CampaignStats   int                         `json:"campaign_stats"`
-	ProductStats    int                         `json:"product_stats"`
-	CampaignBudgets int                         `json:"campaign_budgets"`
-	BusinessOrders  int                         `json:"business_orders"`
-	BusinessSales   int                         `json:"business_sales"`
-	Phrases         int                         `json:"phrases"`
-	PhraseStats     int                         `json:"phrase_stats"`
-	Products        int                         `json:"products"`
-	SyncIssues      int                         `json:"sync_issues"`
+	JobRunID          uuid.UUID                   `json:"job_run_id"`
+	Status            string                      `json:"status"`
+	ResultState       string                      `json:"result_state"`
+	FreshnessState    string                      `json:"freshness_state"`
+	SyncPhase         string                      `json:"sync_phase,omitempty"`
+	FinishedAt        *time.Time                  `json:"finished_at,omitempty"`
+	RateLimited       bool                        `json:"rate_limited"`
+	RateLimitEndpoint string                      `json:"rate_limit_endpoint,omitempty"`
+	RetryAfterSeconds int                         `json:"retry_after_seconds,omitempty"`
+	NextAllowedAt     *time.Time                  `json:"next_allowed_at,omitempty"`
+	PhaseRetries      []AdsSyncPhaseRetryResponse `json:"phase_retries_queued,omitempty"`
+	Cabinets          int                         `json:"cabinets"`
+	Campaigns         int                         `json:"campaigns"`
+	CampaignStats     int                         `json:"campaign_stats"`
+	ProductStats      int                         `json:"product_stats"`
+	CampaignBudgets   int                         `json:"campaign_budgets"`
+	BusinessOrders    int                         `json:"business_orders"`
+	BusinessSales     int                         `json:"business_sales"`
+	Phrases           int                         `json:"phrases"`
+	PhraseStats       int                         `json:"phrase_stats"`
+	Products          int                         `json:"products"`
+	WBErrors          int                         `json:"wb_errors"`
+	SyncIssues        int                         `json:"sync_issues"`
 }
 
 type AdsSyncPhaseRetryResponse struct {
 	Phase  string     `json:"phase"`
 	Status string     `json:"status"`
 	RunAt  *time.Time `json:"run_at,omitempty"`
+}
+
+type SellerCabinetCommunicationReputationResponse struct {
+	SellerCabinetID uuid.UUID                                  `json:"seller_cabinet_id"`
+	WBProductID     int64                                      `json:"wb_product_id"`
+	Source          string                                     `json:"source"`
+	GeneratedAt     time.Time                                  `json:"generated_at"`
+	IsAnswered      bool                                       `json:"is_answered"`
+	NewItems        SellerCabinetCommunicationNewItemsResponse `json:"new_items"`
+	Counts          SellerCabinetCommunicationCountsResponse   `json:"counts"`
+	Questions       []SellerCabinetQuestionEvidenceResponse    `json:"questions"`
+	Feedbacks       []SellerCabinetFeedbackEvidenceResponse    `json:"feedbacks"`
+}
+
+type SellerCabinetCommunicationNewItemsResponse struct {
+	HasNewQuestions bool `json:"has_new_questions"`
+	HasNewFeedbacks bool `json:"has_new_feedbacks"`
+}
+
+type SellerCabinetCommunicationCountsResponse struct {
+	UnansweredQuestions      int `json:"unanswered_questions"`
+	UnansweredQuestionsToday int `json:"unanswered_questions_today"`
+	UnansweredFeedbacks      int `json:"unanswered_feedbacks"`
+	UnansweredFeedbacksToday int `json:"unanswered_feedbacks_today"`
+}
+
+type SellerCabinetCommunicationProductDetailsResponse struct {
+	IMTID           int64  `json:"imt_id,omitempty"`
+	NMID            int64  `json:"nm_id"`
+	ProductName     string `json:"product_name,omitempty"`
+	SupplierArticle string `json:"supplier_article,omitempty"`
+	SupplierName    string `json:"supplier_name,omitempty"`
+	BrandName       string `json:"brand_name,omitempty"`
+	Size            string `json:"size,omitempty"`
+}
+
+type SellerCabinetCommunicationAnswerResponse struct {
+	Text       string `json:"text,omitempty"`
+	State      string `json:"state,omitempty"`
+	Editable   bool   `json:"editable"`
+	CreateDate string `json:"create_date,omitempty"`
+}
+
+type SellerCabinetQuestionEvidenceResponse struct {
+	ID             string                                           `json:"id"`
+	Text           string                                           `json:"text,omitempty"`
+	CreatedDate    string                                           `json:"created_date,omitempty"`
+	State          string                                           `json:"state,omitempty"`
+	Answer         *SellerCabinetCommunicationAnswerResponse        `json:"answer,omitempty"`
+	ProductDetails SellerCabinetCommunicationProductDetailsResponse `json:"product_details"`
+	WasViewed      bool                                             `json:"was_viewed"`
+	IsWarned       bool                                             `json:"is_warned"`
+}
+
+type SellerCabinetFeedbackEvidenceResponse struct {
+	ID               string                                           `json:"id"`
+	Text             string                                           `json:"text,omitempty"`
+	Pros             string                                           `json:"pros,omitempty"`
+	Cons             string                                           `json:"cons,omitempty"`
+	ProductValuation int                                              `json:"product_valuation,omitempty"`
+	CreatedDate      string                                           `json:"created_date,omitempty"`
+	Answer           *SellerCabinetCommunicationAnswerResponse        `json:"answer,omitempty"`
+	State            string                                           `json:"state,omitempty"`
+	ProductDetails   SellerCabinetCommunicationProductDetailsResponse `json:"product_details"`
+	WasViewed        bool                                             `json:"was_viewed"`
+	OrderStatus      string                                           `json:"order_status,omitempty"`
+	SubjectID        int64                                            `json:"subject_id,omitempty"`
+	SubjectName      string                                           `json:"subject_name,omitempty"`
 }
 
 // SellerCabinetFromDomain maps domain.SellerCabinet to SellerCabinetResponse.
@@ -196,29 +269,119 @@ func SellerCabinetFromDomain(sc domain.SellerCabinet) SellerCabinetResponse {
 	}
 }
 
+func SellerCabinetCommunicationReputationFromService(report service.SellerCabinetCommunicationReputation) SellerCabinetCommunicationReputationResponse {
+	return SellerCabinetCommunicationReputationResponse{
+		SellerCabinetID: report.SellerCabinetID,
+		WBProductID:     report.WBProductID,
+		Source:          report.Source,
+		GeneratedAt:     report.GeneratedAt,
+		IsAnswered:      report.IsAnswered,
+		NewItems: SellerCabinetCommunicationNewItemsResponse{
+			HasNewQuestions: report.NewItems.HasNewQuestions,
+			HasNewFeedbacks: report.NewItems.HasNewFeedbacks,
+		},
+		Counts: SellerCabinetCommunicationCountsResponse{
+			UnansweredQuestions:      report.Counts.UnansweredQuestions,
+			UnansweredQuestionsToday: report.Counts.UnansweredQuestionsToday,
+			UnansweredFeedbacks:      report.Counts.UnansweredFeedbacks,
+			UnansweredFeedbacksToday: report.Counts.UnansweredFeedbacksToday,
+		},
+		Questions: sellerCabinetQuestionEvidenceFromService(report.Questions),
+		Feedbacks: sellerCabinetFeedbackEvidenceFromService(report.Feedbacks),
+	}
+}
+
+func sellerCabinetQuestionEvidenceFromService(items []service.SellerCabinetQuestionEvidence) []SellerCabinetQuestionEvidenceResponse {
+	result := make([]SellerCabinetQuestionEvidenceResponse, 0, len(items))
+	for _, item := range items {
+		result = append(result, SellerCabinetQuestionEvidenceResponse{
+			ID:             item.ID,
+			Text:           item.Text,
+			CreatedDate:    item.CreatedDate,
+			State:          item.State,
+			Answer:         sellerCabinetCommunicationAnswerFromService(item.Answer),
+			ProductDetails: sellerCabinetCommunicationProductDetailsFromService(item.ProductDetails),
+			WasViewed:      item.WasViewed,
+			IsWarned:       item.IsWarned,
+		})
+	}
+	return result
+}
+
+func sellerCabinetFeedbackEvidenceFromService(items []service.SellerCabinetFeedbackEvidence) []SellerCabinetFeedbackEvidenceResponse {
+	result := make([]SellerCabinetFeedbackEvidenceResponse, 0, len(items))
+	for _, item := range items {
+		result = append(result, SellerCabinetFeedbackEvidenceResponse{
+			ID:               item.ID,
+			Text:             item.Text,
+			Pros:             item.Pros,
+			Cons:             item.Cons,
+			ProductValuation: item.ProductValuation,
+			CreatedDate:      item.CreatedDate,
+			Answer:           sellerCabinetCommunicationAnswerFromService(item.Answer),
+			State:            item.State,
+			ProductDetails:   sellerCabinetCommunicationProductDetailsFromService(item.ProductDetails),
+			WasViewed:        item.WasViewed,
+			OrderStatus:      item.OrderStatus,
+			SubjectID:        item.SubjectID,
+			SubjectName:      item.SubjectName,
+		})
+	}
+	return result
+}
+
+func sellerCabinetCommunicationProductDetailsFromService(item service.SellerCabinetCommunicationProductDetails) SellerCabinetCommunicationProductDetailsResponse {
+	return SellerCabinetCommunicationProductDetailsResponse{
+		IMTID:           item.IMTID,
+		NMID:            item.NMID,
+		ProductName:     item.ProductName,
+		SupplierArticle: item.SupplierArticle,
+		SupplierName:    item.SupplierName,
+		BrandName:       item.BrandName,
+		Size:            item.Size,
+	}
+}
+
+func sellerCabinetCommunicationAnswerFromService(item *service.SellerCabinetCommunicationAnswer) *SellerCabinetCommunicationAnswerResponse {
+	if item == nil {
+		return nil
+	}
+	return &SellerCabinetCommunicationAnswerResponse{
+		Text:       item.Text,
+		State:      item.State,
+		Editable:   item.Editable,
+		CreateDate: item.CreateDate,
+	}
+}
+
 func sellerCabinetAutoSyncFromDomain(sync *domain.SellerCabinetAutoSyncSummary) *SellerCabinetAutoSyncResponse {
 	if sync == nil {
 		return nil
 	}
 	return &SellerCabinetAutoSyncResponse{
-		JobRunID:        sync.JobRunID,
-		Status:          sync.Status,
-		ResultState:     sync.ResultState,
-		FreshnessState:  sync.FreshnessState,
-		SyncPhase:       sync.SyncPhase,
-		FinishedAt:      sync.FinishedAt,
-		PhaseRetries:    adsSyncPhaseRetriesFromDomain(sync.PhaseRetries),
-		Cabinets:        sync.Cabinets,
-		Campaigns:       sync.Campaigns,
-		CampaignStats:   sync.CampaignStats,
-		ProductStats:    sync.ProductStats,
-		CampaignBudgets: sync.CampaignBudgets,
-		BusinessOrders:  sync.BusinessOrders,
-		BusinessSales:   sync.BusinessSales,
-		Phrases:         sync.Phrases,
-		PhraseStats:     sync.PhraseStats,
-		Products:        sync.Products,
-		SyncIssues:      sync.SyncIssues,
+		JobRunID:          sync.JobRunID,
+		Status:            sync.Status,
+		ResultState:       sync.ResultState,
+		FreshnessState:    sync.FreshnessState,
+		SyncPhase:         sync.SyncPhase,
+		FinishedAt:        sync.FinishedAt,
+		RateLimited:       sync.RateLimited,
+		RateLimitEndpoint: sync.RateLimitEndpoint,
+		RetryAfterSeconds: sync.RetryAfterSeconds,
+		NextAllowedAt:     sync.NextAllowedAt,
+		PhaseRetries:      adsSyncPhaseRetriesFromDomain(sync.PhaseRetries),
+		Cabinets:          sync.Cabinets,
+		Campaigns:         sync.Campaigns,
+		CampaignStats:     sync.CampaignStats,
+		ProductStats:      sync.ProductStats,
+		CampaignBudgets:   sync.CampaignBudgets,
+		BusinessOrders:    sync.BusinessOrders,
+		BusinessSales:     sync.BusinessSales,
+		Phrases:           sync.Phrases,
+		PhraseStats:       sync.PhraseStats,
+		Products:          sync.Products,
+		WBErrors:          sync.WBErrors,
+		SyncIssues:        sync.SyncIssues,
 	}
 }
 
@@ -431,18 +594,84 @@ type AdsMetricsSummaryResponse struct {
 }
 
 type ProductBusinessSummaryResponse struct {
-	Orders          int64   `json:"orders"`
-	CanceledOrders  int64   `json:"canceled_orders"`
-	Sales           int64   `json:"sales"`
-	Returns         int64   `json:"returns"`
-	OrderedRevenue  int64   `json:"ordered_revenue"`
-	SoldRevenue     int64   `json:"sold_revenue"`
-	ReturnedRevenue int64   `json:"returned_revenue"`
-	BuyoutRate      float64 `json:"buyout_rate"`
-	ReturnRate      float64 `json:"return_rate"`
-	AdSpend         int64   `json:"ad_spend"`
-	AdToSoldRevenue float64 `json:"ad_to_sold_revenue"`
-	DataMode        string  `json:"data_mode"`
+	Orders                             int64      `json:"orders"`
+	CanceledOrders                     int64      `json:"canceled_orders"`
+	Sales                              int64      `json:"sales"`
+	Returns                            int64      `json:"returns"`
+	OrderedRevenue                     int64      `json:"ordered_revenue"`
+	SoldRevenue                        int64      `json:"sold_revenue"`
+	ReturnedRevenue                    int64      `json:"returned_revenue"`
+	BuyoutRate                         float64    `json:"buyout_rate"`
+	ReturnRate                         float64    `json:"return_rate"`
+	AdSpend                            int64      `json:"ad_spend"`
+	AdToSoldRevenue                    float64    `json:"ad_to_sold_revenue"`
+	DataMode                           string     `json:"data_mode"`
+	SalesFunnelOpenCount               int64      `json:"sales_funnel_open_count"`
+	SalesFunnelCartCount               int64      `json:"sales_funnel_cart_count"`
+	SalesFunnelOrderCount              int64      `json:"sales_funnel_order_count"`
+	SalesFunnelOpenToCartConversion    *float64   `json:"sales_funnel_open_to_cart_conversion,omitempty"`
+	SalesFunnelCartToOrderConversion   *float64   `json:"sales_funnel_cart_to_order_conversion,omitempty"`
+	SalesFunnelSource                  string     `json:"sales_funnel_source,omitempty"`
+	SalesFunnelDataMode                string     `json:"sales_funnel_data_mode,omitempty"`
+	SalesFunnelCapturedAt              *time.Time `json:"sales_funnel_captured_at,omitempty"`
+	CostPrice                          *int64     `json:"cost_price,omitempty"`
+	LogisticsCost                      *int64     `json:"logistics_cost,omitempty"`
+	OtherCosts                         *int64     `json:"other_costs,omitempty"`
+	TaxRatePercent                     *float64   `json:"tax_rate_percent,omitempty"`
+	CommissionPercent                  *float64   `json:"commission_percent,omitempty"`
+	TargetMarginPercent                *float64   `json:"target_margin_percent,omitempty"`
+	MaxAllowedDRR                      *float64   `json:"max_allowed_drr,omitempty"`
+	MarginBeforeAds                    *int64     `json:"margin_before_ads,omitempty"`
+	MarginBeforeAdsTotal               *int64     `json:"margin_before_ads_total,omitempty"`
+	MarginBeforeAdsPercent             *float64   `json:"margin_before_ads_percent,omitempty"`
+	ProfitAfterAds                     *int64     `json:"profit_after_ads,omitempty"`
+	MarginalDRR                        *float64   `json:"marginal_drr,omitempty"`
+	EconomicsSource                    string     `json:"economics_source,omitempty"`
+	EconomicsDataMode                  string     `json:"economics_data_mode,omitempty"`
+	WBCommissionSubjectName            string     `json:"wb_commission_subject_name,omitempty"`
+	WBCommissionMarketplacePercent     *float64   `json:"wb_commission_marketplace_percent,omitempty"`
+	WBCommissionSupplierPercent        *float64   `json:"wb_commission_supplier_percent,omitempty"`
+	WBCommissionPickupPercent          *float64   `json:"wb_commission_pickup_percent,omitempty"`
+	WBCommissionBookingPercent         *float64   `json:"wb_commission_booking_percent,omitempty"`
+	WBCommissionSupplierExpressPercent *float64   `json:"wb_commission_supplier_express_percent,omitempty"`
+	WBCommissionDataMode               string     `json:"wb_commission_data_mode,omitempty"`
+}
+
+type ProductStockEvidenceResponse struct {
+	StockTotal int32     `json:"stock_total"`
+	Source     string    `json:"source"`
+	CapturedAt time.Time `json:"captured_at"`
+}
+
+type ProductStockRunoutForecastResponse struct {
+	State             string    `json:"state"`
+	StockTotal        int32     `json:"stock_total"`
+	AverageDailySales float64   `json:"average_daily_sales"`
+	DaysToEmpty       *float64  `json:"days_to_empty,omitempty"`
+	PeriodDays        int       `json:"period_days"`
+	Source            string    `json:"source"`
+	CapturedAt        time.Time `json:"captured_at"`
+	Reason            string    `json:"reason,omitempty"`
+}
+
+type DecisionScoreSummaryResponse struct {
+	Value           *int     `json:"value,omitempty"`
+	DataMode        string   `json:"data_mode"`
+	Evidence        []string `json:"evidence,omitempty"`
+	MissingEvidence []string `json:"missing_evidence,omitempty"`
+}
+
+type ProductDecisionScoresResponse struct {
+	Advertising DecisionScoreSummaryResponse `json:"advertising"`
+	Readiness   DecisionScoreSummaryResponse `json:"readiness"`
+	Growth      DecisionScoreSummaryResponse `json:"growth"`
+}
+
+type ProductDecisionSummaryResponse struct {
+	Decision        string   `json:"decision"`
+	DataMode        string   `json:"data_mode"`
+	Reason          string   `json:"reason"`
+	MissingEvidence []string `json:"missing_evidence,omitempty"`
 }
 
 type AdsMetricsDeltaResponse struct {
@@ -485,25 +714,49 @@ type AttentionItemResponse struct {
 }
 
 type SourceEvidenceResponse struct {
-	Source             string     `json:"source"`
-	CapturedAt         *time.Time `json:"captured_at,omitempty"`
-	FreshnessState     string     `json:"freshness_state"`
-	Confidence         float64    `json:"confidence"`
-	Coverage           string     `json:"coverage"`
-	ConfirmedInCabinet bool       `json:"confirmed_in_cabinet"`
+	Source             string                        `json:"source"`
+	SourceLabel        string                        `json:"source_label,omitempty"`
+	SourcePriority     []string                      `json:"source_priority,omitempty"`
+	CapturedAt         *time.Time                    `json:"captured_at,omitempty"`
+	FreshnessState     string                        `json:"freshness_state"`
+	Confidence         float64                       `json:"confidence"`
+	Coverage           string                        `json:"coverage"`
+	ConfirmedInCabinet bool                          `json:"confirmed_in_cabinet"`
+	Issues             []SourceEvidenceIssueResponse `json:"issues,omitempty"`
+}
+
+type SourceEvidenceIssueResponse struct {
+	Type           string `json:"type"`
+	Severity       string `json:"severity"`
+	Message        string `json:"message"`
+	APIValue       string `json:"api_value,omitempty"`
+	ExtensionValue string `json:"extension_value,omitempty"`
 }
 
 func sourceEvidenceFromDomain(evidence *domain.SourceEvidence) *SourceEvidenceResponse {
 	if evidence == nil {
 		return nil
 	}
+	issues := make([]SourceEvidenceIssueResponse, len(evidence.Issues))
+	for i, issue := range evidence.Issues {
+		issues[i] = SourceEvidenceIssueResponse{
+			Type:           issue.Type,
+			Severity:       issue.Severity,
+			Message:        issue.Message,
+			APIValue:       issue.APIValue,
+			ExtensionValue: issue.ExtensionValue,
+		}
+	}
 	return &SourceEvidenceResponse{
 		Source:             evidence.Source,
+		SourceLabel:        evidence.SourceLabel,
+		SourcePriority:     evidence.SourcePriority,
 		CapturedAt:         evidence.CapturedAt,
 		FreshnessState:     evidence.FreshnessState,
 		Confidence:         evidence.Confidence,
 		Coverage:           evidence.Coverage,
 		ConfirmedInCabinet: evidence.ConfirmedInCabinet,
+		Issues:             issues,
 	}
 }
 
@@ -524,39 +777,45 @@ type CabinetSummaryResponse struct {
 }
 
 type ProductAdsSummaryResponse struct {
-	ID               uuid.UUID                      `json:"id"`
-	WorkspaceID      uuid.UUID                      `json:"workspace_id"`
-	SellerCabinetID  uuid.UUID                      `json:"seller_cabinet_id"`
-	IntegrationID    *string                        `json:"integration_id,omitempty"`
-	IntegrationName  string                         `json:"integration_name"`
-	CabinetName      string                         `json:"cabinet_name"`
-	CampaignID       *uuid.UUID                     `json:"campaign_id,omitempty"`
-	CampaignName     *string                        `json:"campaign_name,omitempty"`
-	WBCampaignID     *int64                         `json:"wb_campaign_id,omitempty"`
-	RowKey           string                         `json:"row_key,omitempty"`
-	WBProductID      int64                          `json:"wb_product_id"`
-	Title            string                         `json:"title"`
-	Brand            *string                        `json:"brand,omitempty"`
-	Category         *string                        `json:"category,omitempty"`
-	ImageURL         *string                        `json:"image_url,omitempty"`
-	Price            *int64                         `json:"price,omitempty"`
-	CampaignsCount   int                            `json:"campaigns_count"`
-	QueriesCount     int                            `json:"queries_count"`
-	HealthStatus     string                         `json:"health_status"`
-	HealthReason     *string                        `json:"health_reason,omitempty"`
-	PrimaryAction    *string                        `json:"primary_action,omitempty"`
-	FreshnessState   string                         `json:"freshness_state"`
-	Performance      AdsMetricsSummaryResponse      `json:"performance"`
-	Business         ProductBusinessSummaryResponse `json:"business"`
-	PeriodCompare    *AdsPeriodCompareResponse      `json:"period_compare,omitempty"`
-	RelatedCampaigns []AdsEntityRefResponse         `json:"related_campaigns,omitempty"`
-	TopQueries       []AdsEntityRefResponse         `json:"top_queries,omitempty"`
-	WasteQueries     []AdsEntityRefResponse         `json:"waste_queries,omitempty"`
-	WinningQueries   []AdsEntityRefResponse         `json:"winning_queries,omitempty"`
-	Evidence         *SourceEvidenceResponse        `json:"evidence,omitempty"`
-	DataCoverageNote *string                        `json:"data_coverage_note,omitempty"`
-	CreatedAt        time.Time                      `json:"created_at"`
-	UpdatedAt        time.Time                      `json:"updated_at"`
+	ID               uuid.UUID                           `json:"id"`
+	WorkspaceID      uuid.UUID                           `json:"workspace_id"`
+	SellerCabinetID  uuid.UUID                           `json:"seller_cabinet_id"`
+	IntegrationID    *string                             `json:"integration_id,omitempty"`
+	IntegrationName  string                              `json:"integration_name"`
+	CabinetName      string                              `json:"cabinet_name"`
+	CampaignID       *uuid.UUID                          `json:"campaign_id,omitempty"`
+	CampaignName     *string                             `json:"campaign_name,omitempty"`
+	WBCampaignID     *int64                              `json:"wb_campaign_id,omitempty"`
+	RowKey           string                              `json:"row_key,omitempty"`
+	WBProductID      int64                               `json:"wb_product_id"`
+	Title            string                              `json:"title"`
+	Brand            *string                             `json:"brand,omitempty"`
+	Category         *string                             `json:"category,omitempty"`
+	ImageURL         *string                             `json:"image_url,omitempty"`
+	Price            *int64                              `json:"price,omitempty"`
+	Rating           *float64                            `json:"rating,omitempty"`
+	ReviewsCount     *int                                `json:"reviews_count,omitempty"`
+	CampaignsCount   int                                 `json:"campaigns_count"`
+	QueriesCount     int                                 `json:"queries_count"`
+	HealthStatus     string                              `json:"health_status"`
+	HealthReason     *string                             `json:"health_reason,omitempty"`
+	PrimaryAction    *string                             `json:"primary_action,omitempty"`
+	FreshnessState   string                              `json:"freshness_state"`
+	Performance      AdsMetricsSummaryResponse           `json:"performance"`
+	Business         ProductBusinessSummaryResponse      `json:"business"`
+	Scores           ProductDecisionScoresResponse       `json:"scores"`
+	Decision         ProductDecisionSummaryResponse      `json:"decision"`
+	PeriodCompare    *AdsPeriodCompareResponse           `json:"period_compare,omitempty"`
+	RelatedCampaigns []AdsEntityRefResponse              `json:"related_campaigns,omitempty"`
+	TopQueries       []AdsEntityRefResponse              `json:"top_queries,omitempty"`
+	WasteQueries     []AdsEntityRefResponse              `json:"waste_queries,omitempty"`
+	WinningQueries   []AdsEntityRefResponse              `json:"winning_queries,omitempty"`
+	StockEvidence    *ProductStockEvidenceResponse       `json:"stock_evidence,omitempty"`
+	StockRunout      *ProductStockRunoutForecastResponse `json:"stock_runout,omitempty"`
+	Evidence         *SourceEvidenceResponse             `json:"evidence,omitempty"`
+	DataCoverageNote *string                             `json:"data_coverage_note,omitempty"`
+	CreatedAt        time.Time                           `json:"created_at"`
+	UpdatedAt        time.Time                           `json:"updated_at"`
 }
 
 type CampaignPerformanceSummaryResponse struct {
@@ -580,6 +839,9 @@ type CampaignPerformanceSummaryResponse struct {
 	WBUpdatedAt              *time.Time                                  `json:"wb_updated_at,omitempty"`
 	WBDeletedAt              *time.Time                                  `json:"wb_deleted_at,omitempty"`
 	LatestBudget             *CampaignBudgetSummaryResponse              `json:"latest_budget,omitempty"`
+	BudgetPace               *CampaignBudgetPaceSummaryResponse          `json:"budget_pace,omitempty"`
+	BudgetRunout             *CampaignBudgetRunoutSummaryResponse        `json:"budget_runout,omitempty"`
+	AdFinance                *CampaignFinanceSummaryResponse             `json:"ad_finance,omitempty"`
 	LastSync                 *time.Time                                  `json:"last_sync,omitempty"`
 	HealthStatus             string                                      `json:"health_status"`
 	HealthReason             *string                                     `json:"health_reason,omitempty"`
@@ -592,6 +854,8 @@ type CampaignPerformanceSummaryResponse struct {
 	TopQueries               []AdsEntityRefResponse                      `json:"top_queries,omitempty"`
 	WasteQueries             []AdsEntityRefResponse                      `json:"waste_queries,omitempty"`
 	WinningQueries           []AdsEntityRefResponse                      `json:"winning_queries,omitempty"`
+	RecentBidChanges         []CampaignBidChangeSummaryResponse          `json:"recent_bid_changes,omitempty"`
+	ActiveRecommendations    []CampaignRecommendationSummaryResponse     `json:"active_recommendations,omitempty"`
 	Evidence                 *SourceEvidenceResponse                     `json:"evidence,omitempty"`
 	CreatedAt                time.Time                                   `json:"created_at"`
 	UpdatedAt                time.Time                                   `json:"updated_at"`
@@ -604,6 +868,38 @@ type CampaignBudgetSummaryResponse struct {
 	CapturedAt time.Time `json:"captured_at"`
 }
 
+type CampaignBudgetPaceSummaryResponse struct {
+	State                            string   `json:"state"`
+	PeriodDays                       int      `json:"period_days"`
+	DailyBudget                      int64    `json:"daily_budget"`
+	WeeklyBudget                     int64    `json:"weekly_budget"`
+	MonthlyBudget                    int64    `json:"monthly_budget"`
+	PlannedSpend                     int64    `json:"planned_spend"`
+	ActualSpend                      int64    `json:"actual_spend"`
+	UtilizationPercent               float64  `json:"utilization_percent"`
+	ProjectedTodaySpend              *int64   `json:"projected_today_spend,omitempty"`
+	ProjectedTodayUtilizationPercent *float64 `json:"projected_today_utilization_percent,omitempty"`
+	Reason                           string   `json:"reason,omitempty"`
+}
+
+type CampaignBudgetRunoutSummaryResponse struct {
+	State           string    `json:"state"`
+	RemainingBudget int64     `json:"remaining_budget"`
+	SpendToday      int64     `json:"spend_today"`
+	HoursElapsed    float64   `json:"hours_elapsed"`
+	HoursToEmpty    float64   `json:"hours_to_empty"`
+	CapturedAt      time.Time `json:"captured_at"`
+	Reason          string    `json:"reason,omitempty"`
+}
+
+type CampaignFinanceSummaryResponse struct {
+	DocumentsCount   int            `json:"documents_count"`
+	Amount           int64          `json:"amount"`
+	DocumentTypes    map[string]int `json:"document_types,omitempty"`
+	LatestDocumentAt *time.Time     `json:"latest_document_at,omitempty"`
+	DataMode         string         `json:"data_mode"`
+}
+
 type CampaignProductPerformanceSummaryResponse struct {
 	ID                 uuid.UUID                 `json:"id"`
 	ProductID          uuid.UUID                 `json:"product_id"`
@@ -614,6 +910,42 @@ type CampaignProductPerformanceSummaryResponse struct {
 	BidRecommendations *int64                    `json:"bid_recommendations,omitempty"`
 	ProductTotalCarts  *int64                    `json:"product_total_carts,omitempty"`
 	Performance        AdsMetricsSummaryResponse `json:"performance"`
+}
+
+type CampaignBidChangeSummaryResponse struct {
+	ID               uuid.UUID  `json:"id"`
+	ProductID        *uuid.UUID `json:"product_id,omitempty"`
+	PhraseID         *uuid.UUID `json:"phrase_id,omitempty"`
+	RecommendationID *uuid.UUID `json:"recommendation_id,omitempty"`
+	Placement        string     `json:"placement"`
+	OldBid           int        `json:"old_bid"`
+	NewBid           int        `json:"new_bid"`
+	Reason           string     `json:"reason"`
+	Source           string     `json:"source"`
+	WBStatus         string     `json:"wb_status"`
+	CanRollback      bool       `json:"can_rollback"`
+	RollbackBid      *int       `json:"rollback_bid,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
+type CampaignRecommendationSummaryResponse struct {
+	ID            uuid.UUID  `json:"id"`
+	PhraseID      *uuid.UUID `json:"phrase_id,omitempty"`
+	ProductID     *uuid.UUID `json:"product_id,omitempty"`
+	Scope         string     `json:"scope"`
+	Title         string     `json:"title"`
+	Type          string     `json:"type"`
+	Severity      string     `json:"severity"`
+	Confidence    float64    `json:"confidence"`
+	NextAction    *string    `json:"next_action,omitempty"`
+	Status        string     `json:"status"`
+	TaskCategory  string     `json:"task_category,omitempty"`
+	TaskOwnerRole string     `json:"task_owner_role,omitempty"`
+	TaskSLAHours  int        `json:"task_sla_hours"`
+	TaskDueAt     *time.Time `json:"task_due_at,omitempty"`
+	TaskAgeHours  int        `json:"task_age_hours"`
+	IsOverdue     bool       `json:"is_overdue"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type QueryPerformanceSummaryResponse struct {
@@ -650,12 +982,17 @@ type QueryPerformanceSummaryResponse struct {
 }
 
 type AdsOverviewTotalsResponse struct {
-	Cabinets        int `json:"cabinets"`
-	Products        int `json:"products"`
-	Campaigns       int `json:"campaigns"`
-	Queries         int `json:"queries"`
-	ActiveCampaigns int `json:"active_campaigns"`
-	AttentionItems  int `json:"attention_items"`
+	Cabinets               int            `json:"cabinets"`
+	Products               int            `json:"products"`
+	Campaigns              int            `json:"campaigns"`
+	Queries                int            `json:"queries"`
+	ActiveCampaigns        int            `json:"active_campaigns"`
+	AttentionItems         int            `json:"attention_items"`
+	ActiveRecommendations  int            `json:"active_recommendations"`
+	OverdueRecommendations int            `json:"overdue_recommendations"`
+	DecisionQueueBuckets   map[string]int `json:"decision_queue_buckets,omitempty"`
+	TaskOwnerBuckets       map[string]int `json:"task_owner_buckets,omitempty"`
+	ProductDecisions       map[string]int `json:"product_decisions,omitempty"`
 }
 
 type AdsOverviewResponse struct {
@@ -669,6 +1006,21 @@ type AdsOverviewResponse struct {
 	TopCampaigns       []CampaignPerformanceSummaryResponse `json:"top_campaigns"`
 	TopQueries         []QueryPerformanceSummaryResponse    `json:"top_queries"`
 	Totals             AdsOverviewTotalsResponse            `json:"totals"`
+}
+
+type AdsClientAuditReportResponse struct {
+	ReportType      string                `json:"report_type"`
+	GeneratedAt     time.Time             `json:"generated_at"`
+	DateFrom        string                `json:"date_from,omitempty"`
+	DateTo          string                `json:"date_to,omitempty"`
+	Report          string                `json:"report"`
+	DataStatus      AdsDataStatusResponse `json:"data_status"`
+	Recommendations int                   `json:"recommendations"`
+	AttentionItems  int                   `json:"attention_items"`
+	ActiveCampaigns int                   `json:"active_campaigns"`
+	Campaigns       int                   `json:"campaigns"`
+	Products        int                   `json:"products"`
+	Queries         int                   `json:"queries"`
 }
 
 type AdsDataStatusResponse struct {
@@ -694,6 +1046,8 @@ type AdsDataStatusResponse struct {
 	ProductsTotal            int                          `json:"products_total"`
 	QueriesWithStats         int                          `json:"queries_with_stats"`
 	QueriesTotal             int                          `json:"queries_total"`
+	UnitEconomicsState       string                       `json:"unit_economics_state"`
+	UnitEconomicsReason      string                       `json:"unit_economics_reason,omitempty"`
 	Issues                   []AdsDataStatusIssueResponse `json:"issues,omitempty"`
 }
 
@@ -715,12 +1069,17 @@ func AdsOverviewFromDomain(overview domain.AdsOverview) AdsOverviewResponse {
 		TopCampaigns:       campaignSummariesFromDomain(overview.TopCampaigns),
 		TopQueries:         querySummariesFromDomain(overview.TopQueries),
 		Totals: AdsOverviewTotalsResponse{
-			Cabinets:        overview.Totals.Cabinets,
-			Products:        overview.Totals.Products,
-			Campaigns:       overview.Totals.Campaigns,
-			Queries:         overview.Totals.Queries,
-			ActiveCampaigns: overview.Totals.ActiveCampaigns,
-			AttentionItems:  overview.Totals.AttentionItems,
+			Cabinets:               overview.Totals.Cabinets,
+			Products:               overview.Totals.Products,
+			Campaigns:              overview.Totals.Campaigns,
+			Queries:                overview.Totals.Queries,
+			ActiveCampaigns:        overview.Totals.ActiveCampaigns,
+			AttentionItems:         overview.Totals.AttentionItems,
+			ActiveRecommendations:  overview.Totals.ActiveRecommendations,
+			OverdueRecommendations: overview.Totals.OverdueRecommendations,
+			DecisionQueueBuckets:   overview.Totals.DecisionQueueBuckets,
+			TaskOwnerBuckets:       overview.Totals.TaskOwnerBuckets,
+			ProductDecisions:       overview.Totals.ProductDecisions,
 		},
 	}
 }
@@ -749,6 +1108,8 @@ func adsDataStatusFromDomain(status domain.AdsDataStatus) AdsDataStatusResponse 
 		ProductsTotal:            status.ProductsTotal,
 		QueriesWithStats:         status.QueriesWithStats,
 		QueriesTotal:             status.QueriesTotal,
+		UnitEconomicsState:       status.UnitEconomicsState,
+		UnitEconomicsReason:      status.UnitEconomicsReason,
 		Issues:                   adsDataStatusIssuesFromDomain(status.Issues),
 	}
 }
@@ -790,6 +1151,8 @@ func ProductAdsSummaryFromDomain(product domain.ProductAdsSummary) ProductAdsSum
 		Category:         product.Category,
 		ImageURL:         product.ImageURL,
 		Price:            product.Price,
+		Rating:           product.Rating,
+		ReviewsCount:     product.ReviewsCount,
 		CampaignsCount:   product.CampaignsCount,
 		QueriesCount:     product.QueriesCount,
 		HealthStatus:     product.HealthStatus,
@@ -798,15 +1161,72 @@ func ProductAdsSummaryFromDomain(product domain.ProductAdsSummary) ProductAdsSum
 		FreshnessState:   product.FreshnessState,
 		Performance:      adsMetricsFromDomain(product.Performance),
 		Business:         productBusinessFromDomain(product.Business),
+		Scores:           productDecisionScoresFromDomain(product.Scores),
+		Decision:         productDecisionFromDomain(product.Decision),
 		PeriodCompare:    adsPeriodCompareFromDomain(product.PeriodCompare),
 		RelatedCampaigns: entityRefsFromDomain(product.RelatedCampaigns),
 		TopQueries:       entityRefsFromDomain(product.TopQueries),
 		WasteQueries:     entityRefsFromDomain(product.WasteQueries),
 		WinningQueries:   entityRefsFromDomain(product.WinningQueries),
+		StockEvidence:    productStockEvidenceFromDomain(product.StockEvidence),
+		StockRunout:      productStockRunoutFromDomain(product.StockRunout),
 		Evidence:         sourceEvidenceFromDomain(product.Evidence),
 		DataCoverageNote: product.DataCoverageNote,
 		CreatedAt:        product.CreatedAt,
 		UpdatedAt:        product.UpdatedAt,
+	}
+}
+
+func productStockEvidenceFromDomain(evidence *domain.ProductStockEvidence) *ProductStockEvidenceResponse {
+	if evidence == nil {
+		return nil
+	}
+	return &ProductStockEvidenceResponse{
+		StockTotal: evidence.StockTotal,
+		Source:     evidence.Source,
+		CapturedAt: evidence.CapturedAt,
+	}
+}
+
+func productStockRunoutFromDomain(forecast *domain.ProductStockRunoutForecast) *ProductStockRunoutForecastResponse {
+	if forecast == nil {
+		return nil
+	}
+	return &ProductStockRunoutForecastResponse{
+		State:             forecast.State,
+		StockTotal:        forecast.StockTotal,
+		AverageDailySales: forecast.AverageDailySales,
+		DaysToEmpty:       forecast.DaysToEmpty,
+		PeriodDays:        forecast.PeriodDays,
+		Source:            forecast.Source,
+		CapturedAt:        forecast.CapturedAt,
+		Reason:            forecast.Reason,
+	}
+}
+
+func productDecisionScoresFromDomain(scores domain.ProductDecisionScores) ProductDecisionScoresResponse {
+	return ProductDecisionScoresResponse{
+		Advertising: decisionScoreFromDomain(scores.Advertising),
+		Readiness:   decisionScoreFromDomain(scores.Readiness),
+		Growth:      decisionScoreFromDomain(scores.Growth),
+	}
+}
+
+func decisionScoreFromDomain(score domain.DecisionScoreSummary) DecisionScoreSummaryResponse {
+	return DecisionScoreSummaryResponse{
+		Value:           score.Value,
+		DataMode:        score.DataMode,
+		Evidence:        score.Evidence,
+		MissingEvidence: score.MissingEvidence,
+	}
+}
+
+func productDecisionFromDomain(decision domain.ProductDecisionSummary) ProductDecisionSummaryResponse {
+	return ProductDecisionSummaryResponse{
+		Decision:        decision.Decision,
+		DataMode:        decision.DataMode,
+		Reason:          decision.Reason,
+		MissingEvidence: decision.MissingEvidence,
 	}
 }
 
@@ -832,6 +1252,9 @@ func CampaignPerformanceSummaryFromDomain(campaign domain.CampaignPerformanceSum
 		WBUpdatedAt:              campaign.WBUpdatedAt,
 		WBDeletedAt:              campaign.WBDeletedAt,
 		LatestBudget:             campaignBudgetFromDomain(campaign.LatestBudget),
+		BudgetPace:               campaignBudgetPaceFromDomain(campaign.BudgetPace),
+		BudgetRunout:             campaignBudgetRunoutFromDomain(campaign.BudgetRunout),
+		AdFinance:                campaignFinanceFromDomain(campaign.AdFinance),
 		LastSync:                 campaign.LastSync,
 		HealthStatus:             campaign.HealthStatus,
 		HealthReason:             campaign.HealthReason,
@@ -844,6 +1267,8 @@ func CampaignPerformanceSummaryFromDomain(campaign domain.CampaignPerformanceSum
 		TopQueries:               entityRefsFromDomain(campaign.TopQueries),
 		WasteQueries:             entityRefsFromDomain(campaign.WasteQueries),
 		WinningQueries:           entityRefsFromDomain(campaign.WinningQueries),
+		RecentBidChanges:         campaignBidChangesFromDomain(campaign.RecentBidChanges),
+		ActiveRecommendations:    campaignRecommendationsFromDomain(campaign.ActiveRecommendations),
 		Evidence:                 sourceEvidenceFromDomain(campaign.Evidence),
 		CreatedAt:                campaign.CreatedAt,
 		UpdatedAt:                campaign.UpdatedAt,
@@ -897,6 +1322,53 @@ func campaignBudgetFromDomain(budget *domain.CampaignBudgetSummary) *CampaignBud
 	}
 }
 
+func campaignBudgetPaceFromDomain(pace *domain.CampaignBudgetPaceSummary) *CampaignBudgetPaceSummaryResponse {
+	if pace == nil {
+		return nil
+	}
+	return &CampaignBudgetPaceSummaryResponse{
+		State:                            pace.State,
+		PeriodDays:                       pace.PeriodDays,
+		DailyBudget:                      pace.DailyBudget,
+		WeeklyBudget:                     pace.WeeklyBudget,
+		MonthlyBudget:                    pace.MonthlyBudget,
+		PlannedSpend:                     pace.PlannedSpend,
+		ActualSpend:                      pace.ActualSpend,
+		UtilizationPercent:               pace.UtilizationPercent,
+		ProjectedTodaySpend:              pace.ProjectedTodaySpend,
+		ProjectedTodayUtilizationPercent: pace.ProjectedTodayUtilizationPercent,
+		Reason:                           pace.Reason,
+	}
+}
+
+func campaignBudgetRunoutFromDomain(runout *domain.CampaignBudgetRunoutSummary) *CampaignBudgetRunoutSummaryResponse {
+	if runout == nil {
+		return nil
+	}
+	return &CampaignBudgetRunoutSummaryResponse{
+		State:           runout.State,
+		RemainingBudget: runout.RemainingBudget,
+		SpendToday:      runout.SpendToday,
+		HoursElapsed:    runout.HoursElapsed,
+		HoursToEmpty:    runout.HoursToEmpty,
+		CapturedAt:      runout.CapturedAt,
+		Reason:          runout.Reason,
+	}
+}
+
+func campaignFinanceFromDomain(summary *domain.CampaignFinanceSummary) *CampaignFinanceSummaryResponse {
+	if summary == nil {
+		return nil
+	}
+	return &CampaignFinanceSummaryResponse{
+		DocumentsCount:   summary.DocumentsCount,
+		Amount:           summary.Amount,
+		DocumentTypes:    summary.DocumentTypes,
+		LatestDocumentAt: summary.LatestDocumentAt,
+		DataMode:         summary.DataMode,
+	}
+}
+
 func campaignProductsFromDomain(items []domain.CampaignProductPerformanceSummary) []CampaignProductPerformanceSummaryResponse {
 	if len(items) == 0 {
 		return nil
@@ -913,6 +1385,62 @@ func campaignProductsFromDomain(items []domain.CampaignProductPerformanceSummary
 			BidRecommendations: item.BidRecommendations,
 			ProductTotalCarts:  item.ProductTotalCarts,
 			Performance:        adsMetricsFromDomain(item.Performance),
+		}
+	}
+	return result
+}
+
+func campaignBidChangesFromDomain(items []domain.CampaignBidChangeSummary) []CampaignBidChangeSummaryResponse {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]CampaignBidChangeSummaryResponse, len(items))
+	for i, item := range items {
+		result[i] = CampaignBidChangeSummaryResponse{
+			ID:               item.ID,
+			ProductID:        item.ProductID,
+			PhraseID:         item.PhraseID,
+			RecommendationID: item.RecommendationID,
+			Placement:        item.Placement,
+			OldBid:           item.OldBid,
+			NewBid:           item.NewBid,
+			Reason:           item.Reason,
+			Source:           item.Source,
+			WBStatus:         item.WBStatus,
+			CanRollback:      item.CanRollback,
+			RollbackBid:      item.RollbackBid,
+			CreatedAt:        item.CreatedAt,
+		}
+	}
+	return result
+}
+
+func campaignRecommendationsFromDomain(items []domain.CampaignRecommendationSummary) []CampaignRecommendationSummaryResponse {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]CampaignRecommendationSummaryResponse, len(items))
+	now := time.Now()
+	for i, item := range items {
+		taskAgeHours, taskDueAt, taskSLAHours, isOverdue := recommendationTaskMetadataFromFields(item.CreatedAt, item.Status, now)
+		result[i] = CampaignRecommendationSummaryResponse{
+			ID:            item.ID,
+			PhraseID:      item.PhraseID,
+			ProductID:     item.ProductID,
+			Scope:         item.Scope,
+			Title:         item.Title,
+			Type:          item.Type,
+			Severity:      item.Severity,
+			Confidence:    item.Confidence,
+			NextAction:    item.NextAction,
+			Status:        item.Status,
+			TaskCategory:  domain.RecommendationTaskCategory(item.Type),
+			TaskOwnerRole: domain.RecommendationTaskOwnerRole(item.Type),
+			TaskSLAHours:  taskSLAHours,
+			TaskDueAt:     taskDueAt,
+			TaskAgeHours:  taskAgeHours,
+			IsOverdue:     isOverdue,
+			CreatedAt:     item.CreatedAt,
 		}
 	}
 	return result
@@ -1006,18 +1534,47 @@ func adsMetricsFromDomain(metrics domain.AdsMetricsSummary) AdsMetricsSummaryRes
 
 func productBusinessFromDomain(metrics domain.ProductBusinessSummary) ProductBusinessSummaryResponse {
 	return ProductBusinessSummaryResponse{
-		Orders:          metrics.Orders,
-		CanceledOrders:  metrics.CanceledOrders,
-		Sales:           metrics.Sales,
-		Returns:         metrics.Returns,
-		OrderedRevenue:  metrics.OrderedRevenue,
-		SoldRevenue:     metrics.SoldRevenue,
-		ReturnedRevenue: metrics.ReturnedRevenue,
-		BuyoutRate:      metrics.BuyoutRate,
-		ReturnRate:      metrics.ReturnRate,
-		AdSpend:         metrics.AdSpend,
-		AdToSoldRevenue: metrics.AdToSoldRevenue,
-		DataMode:        metrics.DataMode,
+		Orders:                             metrics.Orders,
+		CanceledOrders:                     metrics.CanceledOrders,
+		Sales:                              metrics.Sales,
+		Returns:                            metrics.Returns,
+		OrderedRevenue:                     metrics.OrderedRevenue,
+		SoldRevenue:                        metrics.SoldRevenue,
+		ReturnedRevenue:                    metrics.ReturnedRevenue,
+		BuyoutRate:                         metrics.BuyoutRate,
+		ReturnRate:                         metrics.ReturnRate,
+		AdSpend:                            metrics.AdSpend,
+		AdToSoldRevenue:                    metrics.AdToSoldRevenue,
+		DataMode:                           metrics.DataMode,
+		SalesFunnelOpenCount:               metrics.SalesFunnelOpenCount,
+		SalesFunnelCartCount:               metrics.SalesFunnelCartCount,
+		SalesFunnelOrderCount:              metrics.SalesFunnelOrderCount,
+		SalesFunnelOpenToCartConversion:    metrics.SalesFunnelOpenToCartConversion,
+		SalesFunnelCartToOrderConversion:   metrics.SalesFunnelCartToOrderConversion,
+		SalesFunnelSource:                  metrics.SalesFunnelSource,
+		SalesFunnelDataMode:                metrics.SalesFunnelDataMode,
+		SalesFunnelCapturedAt:              metrics.SalesFunnelCapturedAt,
+		CostPrice:                          metrics.CostPrice,
+		LogisticsCost:                      metrics.LogisticsCost,
+		OtherCosts:                         metrics.OtherCosts,
+		TaxRatePercent:                     metrics.TaxRatePercent,
+		CommissionPercent:                  metrics.CommissionPercent,
+		TargetMarginPercent:                metrics.TargetMarginPercent,
+		MaxAllowedDRR:                      metrics.MaxAllowedDRR,
+		MarginBeforeAds:                    metrics.MarginBeforeAds,
+		MarginBeforeAdsTotal:               metrics.MarginBeforeAdsTotal,
+		MarginBeforeAdsPercent:             metrics.MarginBeforeAdsPercent,
+		ProfitAfterAds:                     metrics.ProfitAfterAds,
+		MarginalDRR:                        metrics.MarginalDRR,
+		EconomicsSource:                    metrics.EconomicsSource,
+		EconomicsDataMode:                  metrics.EconomicsDataMode,
+		WBCommissionSubjectName:            metrics.WBCommissionSubjectName,
+		WBCommissionMarketplacePercent:     metrics.WBCommissionMarketplacePercent,
+		WBCommissionSupplierPercent:        metrics.WBCommissionSupplierPercent,
+		WBCommissionPickupPercent:          metrics.WBCommissionPickupPercent,
+		WBCommissionBookingPercent:         metrics.WBCommissionBookingPercent,
+		WBCommissionSupplierExpressPercent: metrics.WBCommissionSupplierExpressPercent,
+		WBCommissionDataMode:               metrics.WBCommissionDataMode,
 	}
 }
 
@@ -1381,6 +1938,12 @@ type RecommendationResponse struct {
 	SourceMetrics   json.RawMessage         `json:"source_metrics"`
 	NextAction      *string                 `json:"next_action,omitempty"`
 	Status          string                  `json:"status"`
+	TaskCategory    string                  `json:"task_category,omitempty"`
+	TaskOwnerRole   string                  `json:"task_owner_role,omitempty"`
+	TaskSLAHours    int                     `json:"task_sla_hours"`
+	TaskDueAt       *time.Time              `json:"task_due_at,omitempty"`
+	TaskAgeHours    int                     `json:"task_age_hours"`
+	IsOverdue       bool                    `json:"is_overdue"`
 	Evidence        *SourceEvidenceResponse `json:"evidence,omitempty"`
 	CreatedAt       time.Time               `json:"created_at"`
 	UpdatedAt       time.Time               `json:"updated_at"`
@@ -1388,6 +1951,7 @@ type RecommendationResponse struct {
 
 // RecommendationFromDomain maps domain.Recommendation to RecommendationResponse.
 func RecommendationFromDomain(r domain.Recommendation) RecommendationResponse {
+	taskAgeHours, taskDueAt, taskSLAHours, isOverdue := recommendationTaskMetadata(r, time.Now())
 	return RecommendationResponse{
 		ID:              r.ID,
 		WorkspaceID:     r.WorkspaceID,
@@ -1403,10 +1967,31 @@ func RecommendationFromDomain(r domain.Recommendation) RecommendationResponse {
 		SourceMetrics:   r.SourceMetrics,
 		NextAction:      r.NextAction,
 		Status:          r.Status,
+		TaskCategory:    domain.RecommendationTaskCategory(r.Type),
+		TaskOwnerRole:   domain.RecommendationTaskOwnerRole(r.Type),
+		TaskSLAHours:    taskSLAHours,
+		TaskDueAt:       taskDueAt,
+		TaskAgeHours:    taskAgeHours,
+		IsOverdue:       isOverdue,
 		Evidence:        sourceEvidenceFromDomain(r.Evidence),
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 	}
+}
+
+func recommendationTaskMetadata(r domain.Recommendation, now time.Time) (int, *time.Time, int, bool) {
+	return recommendationTaskMetadataFromFields(r.CreatedAt, r.Status, now)
+}
+
+func recommendationTaskMetadataFromFields(createdAt time.Time, status string, now time.Time) (int, *time.Time, int, bool) {
+	taskSLAHours := int(domain.RecommendationOverdueAfter.Hours())
+	if createdAt.IsZero() || now.Before(createdAt) {
+		return 0, nil, taskSLAHours, false
+	}
+	dueAt := createdAt.Add(domain.RecommendationOverdueAfter)
+	ageHours := int(now.Sub(createdAt).Hours())
+	isOverdue := status == domain.RecommendationStatusActive && now.Sub(createdAt) >= domain.RecommendationOverdueAfter
+	return ageHours, &dueAt, taskSLAHours, isOverdue
 }
 
 // --- Export responses ---
@@ -1472,6 +2057,14 @@ type ExtensionVersionResponse struct {
 	Version string `json:"version"`
 }
 
+type ExtensionTokenResponse struct {
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresInSeconds int64  `json:"expires_in_seconds"`
+	WorkspaceID      string `json:"workspace_id"`
+	Role             string `json:"role"`
+}
+
 type ExtensionIngestAcceptedResponse struct {
 	Accepted int `json:"accepted"`
 }
@@ -1511,6 +2104,92 @@ func ExtensionPageContextFromDomain(item domain.ExtensionPageContext) ExtensionP
 		Region:          item.Region,
 		ActiveFilters:   item.ActiveFilters,
 		Metadata:        item.Metadata,
+		CapturedAt:      item.CapturedAt,
+		CreatedAt:       item.CreatedAt,
+	}
+}
+
+type ExtensionNetworkCaptureResponse struct {
+	ID              uuid.UUID       `json:"id"`
+	SessionID       uuid.UUID       `json:"session_id"`
+	WorkspaceID     uuid.UUID       `json:"workspace_id"`
+	UserID          uuid.UUID       `json:"user_id"`
+	SellerCabinetID *uuid.UUID      `json:"seller_cabinet_id,omitempty"`
+	CampaignID      *uuid.UUID      `json:"campaign_id,omitempty"`
+	PhraseID        *uuid.UUID      `json:"phrase_id,omitempty"`
+	ProductID       *uuid.UUID      `json:"product_id,omitempty"`
+	PageType        string          `json:"page_type"`
+	EndpointKey     string          `json:"endpoint_key"`
+	Query           *string         `json:"query,omitempty"`
+	Region          *string         `json:"region,omitempty"`
+	Payload         json.RawMessage `json:"payload,omitempty"`
+	CapturedAt      time.Time       `json:"captured_at"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
+func ExtensionNetworkCaptureFromDomain(item domain.ExtensionNetworkCapture) ExtensionNetworkCaptureResponse {
+	return ExtensionNetworkCaptureResponse{
+		ID:              item.ID,
+		SessionID:       item.SessionID,
+		WorkspaceID:     item.WorkspaceID,
+		UserID:          item.UserID,
+		SellerCabinetID: item.SellerCabinetID,
+		CampaignID:      item.CampaignID,
+		PhraseID:        item.PhraseID,
+		ProductID:       item.ProductID,
+		PageType:        item.PageType,
+		EndpointKey:     item.EndpointKey,
+		Query:           item.Query,
+		Region:          item.Region,
+		Payload:         item.Payload,
+		CapturedAt:      item.CapturedAt,
+		CreatedAt:       item.CreatedAt,
+	}
+}
+
+type ExtensionDOMRowSnapshotResponse struct {
+	ID              uuid.UUID       `json:"id"`
+	SessionID       uuid.UUID       `json:"session_id"`
+	WorkspaceID     uuid.UUID       `json:"workspace_id"`
+	UserID          uuid.UUID       `json:"user_id"`
+	SellerCabinetID *uuid.UUID      `json:"seller_cabinet_id,omitempty"`
+	CampaignID      *uuid.UUID      `json:"campaign_id,omitempty"`
+	PhraseID        *uuid.UUID      `json:"phrase_id,omitempty"`
+	ProductID       *uuid.UUID      `json:"product_id,omitempty"`
+	PageType        string          `json:"page_type"`
+	TableRole       string          `json:"table_role"`
+	RowKey          string          `json:"row_key"`
+	Query           *string         `json:"query,omitempty"`
+	Region          *string         `json:"region,omitempty"`
+	VisibleText     string          `json:"visible_text"`
+	Cells           json.RawMessage `json:"cells,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Source          string          `json:"source"`
+	Confidence      float64         `json:"confidence"`
+	CapturedAt      time.Time       `json:"captured_at"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
+func ExtensionDOMRowSnapshotFromDomain(item domain.ExtensionDOMRowSnapshot) ExtensionDOMRowSnapshotResponse {
+	return ExtensionDOMRowSnapshotResponse{
+		ID:              item.ID,
+		SessionID:       item.SessionID,
+		WorkspaceID:     item.WorkspaceID,
+		UserID:          item.UserID,
+		SellerCabinetID: item.SellerCabinetID,
+		CampaignID:      item.CampaignID,
+		PhraseID:        item.PhraseID,
+		ProductID:       item.ProductID,
+		PageType:        item.PageType,
+		TableRole:       item.TableRole,
+		RowKey:          item.RowKey,
+		Query:           item.Query,
+		Region:          item.Region,
+		VisibleText:     item.VisibleText,
+		Cells:           item.Cells,
+		Metadata:        item.Metadata,
+		Source:          item.Source,
+		Confidence:      item.Confidence,
 		CapturedAt:      item.CapturedAt,
 		CreatedAt:       item.CreatedAt,
 	}
@@ -1651,15 +2330,322 @@ func ExtensionUISignalFromDomain(item domain.ExtensionUISignal) ExtensionUISigna
 }
 
 type ExtensionWidgetDataStatusResponse struct {
-	Source             string     `json:"source"`
-	CapturedAt         *time.Time `json:"captured_at,omitempty"`
-	FreshnessState     string     `json:"freshness_state"`
-	Confidence         float64    `json:"confidence"`
-	Coverage           string     `json:"coverage"`
-	ConfirmedInCabinet bool       `json:"confirmed_in_cabinet"`
+	Source             string                                `json:"source"`
+	CapturedAt         *time.Time                            `json:"captured_at,omitempty"`
+	FreshnessState     string                                `json:"freshness_state"`
+	Confidence         float64                               `json:"confidence"`
+	Coverage           string                                `json:"coverage"`
+	ConfirmedInCabinet bool                                  `json:"confirmed_in_cabinet"`
+	EvidenceCounts     ExtensionWidgetEvidenceCountsResponse `json:"evidence_counts"`
+	Issues             []ExtensionWidgetIssueResponse        `json:"issues,omitempty"`
+	NextActions        []ExtensionWidgetActionResponse       `json:"next_actions,omitempty"`
+}
+
+type ExtensionWidgetEvidenceCountsResponse struct {
+	BidSnapshots      int `json:"bid_snapshots"`
+	PositionSnapshots int `json:"position_snapshots"`
+	UISignals         int `json:"ui_signals"`
+}
+
+type ExtensionWidgetIssueResponse struct {
+	Stage      string `json:"stage"`
+	Severity   string `json:"severity"`
+	Message    string `json:"message"`
+	ActionPath string `json:"action_path,omitempty"`
+}
+
+type ExtensionWidgetActionResponse struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	ActionPath string `json:"action_path"`
+	Tone       string `json:"tone,omitempty"`
+}
+
+type ExtensionWidgetPrimaryInsightResponse struct {
+	Title      string                         `json:"title"`
+	Message    string                         `json:"message"`
+	Severity   string                         `json:"severity"`
+	Source     string                         `json:"source"`
+	Evidence   []string                       `json:"evidence,omitempty"`
+	NextAction *ExtensionWidgetActionResponse `json:"next_action,omitempty"`
+}
+
+type ExtensionEvidenceSummaryResponse struct {
+	WorkspaceID        uuid.UUID                       `json:"workspace_id"`
+	GeneratedAt        time.Time                       `json:"generated_at"`
+	LatestCapturedAt   *time.Time                      `json:"latest_captured_at,omitempty"`
+	NetworkCaptures    int                             `json:"network_captures"`
+	BidSnapshots       int                             `json:"bid_snapshots"`
+	PositionSnapshots  int                             `json:"position_snapshots"`
+	UISignals          int                             `json:"ui_signals"`
+	EndpointCounts     map[string]int                  `json:"endpoint_counts"`
+	SeverityCounts     map[string]int                  `json:"severity_counts"`
+	FreshnessState     string                          `json:"freshness_state"`
+	Coverage           string                          `json:"coverage"`
+	ConfirmedInCabinet bool                            `json:"confirmed_in_cabinet"`
+	Issues             []ExtensionWidgetIssueResponse  `json:"issues,omitempty"`
+	NextActions        []ExtensionWidgetActionResponse `json:"next_actions,omitempty"`
+}
+
+type ExtensionEvidenceDebugCountsResponse struct {
+	PageContexts      int `json:"page_contexts"`
+	NetworkCaptures   int `json:"network_captures"`
+	DOMRowSnapshots   int `json:"dom_row_snapshots"`
+	BidSnapshots      int `json:"bid_snapshots"`
+	PositionSnapshots int `json:"position_snapshots"`
+	UISignals         int `json:"ui_signals"`
+}
+
+type ExtensionEvidenceDebugResponse struct {
+	WorkspaceID       uuid.UUID                               `json:"workspace_id"`
+	Scope             string                                  `json:"scope"`
+	CampaignID        *uuid.UUID                              `json:"campaign_id,omitempty"`
+	ProductID         *uuid.UUID                              `json:"product_id,omitempty"`
+	PhraseID          *uuid.UUID                              `json:"phrase_id,omitempty"`
+	Query             string                                  `json:"query,omitempty"`
+	GeneratedAt       time.Time                               `json:"generated_at"`
+	LatestCapturedAt  *time.Time                              `json:"latest_captured_at,omitempty"`
+	Counts            ExtensionEvidenceDebugCountsResponse    `json:"counts"`
+	DataStatus        ExtensionWidgetDataStatusResponse       `json:"data_status"`
+	PageContexts      []ExtensionPageContextResponse          `json:"page_contexts"`
+	NetworkCaptures   []ExtensionNetworkCaptureResponse       `json:"network_captures"`
+	DOMRowSnapshots   []ExtensionDOMRowSnapshotResponse       `json:"dom_row_snapshots"`
+	BidSnapshots      []ExtensionLiveBidSnapshotResponse      `json:"bid_snapshots"`
+	PositionSnapshots []ExtensionLivePositionSnapshotResponse `json:"position_snapshots"`
+	UISignals         []ExtensionUISignalResponse             `json:"ui_signals"`
+	Issues            []ExtensionWidgetIssueResponse          `json:"issues,omitempty"`
+	NextActions       []ExtensionWidgetActionResponse         `json:"next_actions,omitempty"`
+}
+
+type ExtensionEvidenceSupportSummaryResponse struct {
+	SourceLabel        string `json:"source_label"`
+	Readiness          string `json:"readiness"`
+	CapturedSignals    int    `json:"captured_signals"`
+	MissingSignals     int    `json:"missing_signals"`
+	ConfirmedInCabinet bool   `json:"confirmed_in_cabinet"`
+	FreshnessState     string `json:"freshness_state"`
+	Coverage           string `json:"coverage"`
+}
+
+type ExtensionEvidenceSupportSectionResponse struct {
+	ID               string     `json:"id"`
+	Title            string     `json:"title"`
+	Status           string     `json:"status"`
+	Detail           string     `json:"detail"`
+	EvidenceCount    int        `json:"evidence_count"`
+	LatestCapturedAt *time.Time `json:"latest_captured_at,omitempty"`
+}
+
+type ExtensionEvidenceSupportChecklistItemResponse struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Done       bool   `json:"done"`
+	Detail     string `json:"detail"`
+	ActionPath string `json:"action_path"`
+}
+
+type ExtensionEvidenceSupportReportResponse struct {
+	WorkspaceID      uuid.UUID                                       `json:"workspace_id"`
+	Scope            string                                          `json:"scope"`
+	CampaignID       *uuid.UUID                                      `json:"campaign_id,omitempty"`
+	ProductID        *uuid.UUID                                      `json:"product_id,omitempty"`
+	PhraseID         *uuid.UUID                                      `json:"phrase_id,omitempty"`
+	Query            string                                          `json:"query,omitempty"`
+	GeneratedAt      time.Time                                       `json:"generated_at"`
+	LatestCapturedAt *time.Time                                      `json:"latest_captured_at,omitempty"`
+	Summary          ExtensionEvidenceSupportSummaryResponse         `json:"summary"`
+	Sections         []ExtensionEvidenceSupportSectionResponse       `json:"sections"`
+	Checklist        []ExtensionEvidenceSupportChecklistItemResponse `json:"checklist"`
+	Issues           []ExtensionWidgetIssueResponse                  `json:"issues,omitempty"`
+	NextActions      []ExtensionWidgetActionResponse                 `json:"next_actions,omitempty"`
+}
+
+func ExtensionEvidenceSummaryFromService(summary service.ExtensionEvidenceSummary) ExtensionEvidenceSummaryResponse {
+	issues := make([]ExtensionWidgetIssueResponse, len(summary.Issues))
+	for i, item := range summary.Issues {
+		issues[i] = ExtensionWidgetIssueResponse{
+			Stage:      item.Stage,
+			Severity:   item.Severity,
+			Message:    item.Message,
+			ActionPath: item.ActionPath,
+		}
+	}
+	actions := make([]ExtensionWidgetActionResponse, len(summary.NextActions))
+	for i, item := range summary.NextActions {
+		actions[i] = ExtensionWidgetActionResponse{
+			ID:         item.ID,
+			Label:      item.Label,
+			ActionPath: item.ActionPath,
+			Tone:       item.Tone,
+		}
+	}
+	return ExtensionEvidenceSummaryResponse{
+		WorkspaceID:        summary.WorkspaceID,
+		GeneratedAt:        summary.GeneratedAt,
+		LatestCapturedAt:   summary.LatestCapturedAt,
+		NetworkCaptures:    summary.NetworkCaptures,
+		BidSnapshots:       summary.BidSnapshots,
+		PositionSnapshots:  summary.PositionSnapshots,
+		UISignals:          summary.UISignals,
+		EndpointCounts:     summary.EndpointCounts,
+		SeverityCounts:     summary.SeverityCounts,
+		FreshnessState:     summary.FreshnessState,
+		Coverage:           summary.Coverage,
+		ConfirmedInCabinet: summary.ConfirmedInCabinet,
+		Issues:             issues,
+		NextActions:        actions,
+	}
+}
+
+func ExtensionEvidenceDebugFromService(debug service.ExtensionEvidenceDebug) ExtensionEvidenceDebugResponse {
+	pageContexts := make([]ExtensionPageContextResponse, len(debug.PageContexts))
+	for i, item := range debug.PageContexts {
+		pageContexts[i] = ExtensionPageContextFromDomain(item)
+	}
+	networkCaptures := make([]ExtensionNetworkCaptureResponse, len(debug.NetworkCaptures))
+	for i, item := range debug.NetworkCaptures {
+		networkCaptures[i] = ExtensionNetworkCaptureFromDomain(item)
+	}
+	domRowSnapshots := make([]ExtensionDOMRowSnapshotResponse, len(debug.DOMRowSnapshots))
+	for i, item := range debug.DOMRowSnapshots {
+		domRowSnapshots[i] = ExtensionDOMRowSnapshotFromDomain(item)
+	}
+	bidSnapshots := make([]ExtensionLiveBidSnapshotResponse, len(debug.BidSnapshots))
+	for i, item := range debug.BidSnapshots {
+		bidSnapshots[i] = ExtensionLiveBidSnapshotFromDomain(item)
+	}
+	positionSnapshots := make([]ExtensionLivePositionSnapshotResponse, len(debug.PositionSnapshots))
+	for i, item := range debug.PositionSnapshots {
+		positionSnapshots[i] = ExtensionLivePositionSnapshotFromDomain(item)
+	}
+	uiSignals := make([]ExtensionUISignalResponse, len(debug.UISignals))
+	for i, item := range debug.UISignals {
+		uiSignals[i] = ExtensionUISignalFromDomain(item)
+	}
+	issues := make([]ExtensionWidgetIssueResponse, len(debug.Issues))
+	for i, item := range debug.Issues {
+		issues[i] = ExtensionWidgetIssueResponse{
+			Stage:      item.Stage,
+			Severity:   item.Severity,
+			Message:    item.Message,
+			ActionPath: item.ActionPath,
+		}
+	}
+	actions := make([]ExtensionWidgetActionResponse, len(debug.NextActions))
+	for i, item := range debug.NextActions {
+		actions[i] = ExtensionWidgetActionResponse{
+			ID:         item.ID,
+			Label:      item.Label,
+			ActionPath: item.ActionPath,
+			Tone:       item.Tone,
+		}
+	}
+	return ExtensionEvidenceDebugResponse{
+		WorkspaceID:       debug.WorkspaceID,
+		Scope:             debug.Scope,
+		CampaignID:        debug.CampaignID,
+		ProductID:         debug.ProductID,
+		PhraseID:          debug.PhraseID,
+		Query:             debug.Query,
+		GeneratedAt:       debug.GeneratedAt,
+		LatestCapturedAt:  debug.LatestCapturedAt,
+		Counts:            ExtensionEvidenceDebugCountsResponse(debug.Counts),
+		DataStatus:        ExtensionWidgetDataStatusFromService(debug.DataStatus),
+		PageContexts:      pageContexts,
+		NetworkCaptures:   networkCaptures,
+		DOMRowSnapshots:   domRowSnapshots,
+		BidSnapshots:      bidSnapshots,
+		PositionSnapshots: positionSnapshots,
+		UISignals:         uiSignals,
+		Issues:            issues,
+		NextActions:       actions,
+	}
+}
+
+func ExtensionEvidenceSupportReportFromService(report service.ExtensionEvidenceSupportReport) ExtensionEvidenceSupportReportResponse {
+	sections := make([]ExtensionEvidenceSupportSectionResponse, len(report.Sections))
+	for i, item := range report.Sections {
+		sections[i] = ExtensionEvidenceSupportSectionResponse{
+			ID:               item.ID,
+			Title:            item.Title,
+			Status:           item.Status,
+			Detail:           item.Detail,
+			EvidenceCount:    item.EvidenceCount,
+			LatestCapturedAt: item.LatestCapturedAt,
+		}
+	}
+	checklist := make([]ExtensionEvidenceSupportChecklistItemResponse, len(report.Checklist))
+	for i, item := range report.Checklist {
+		checklist[i] = ExtensionEvidenceSupportChecklistItemResponse{
+			ID:         item.ID,
+			Label:      item.Label,
+			Done:       item.Done,
+			Detail:     item.Detail,
+			ActionPath: item.ActionPath,
+		}
+	}
+	issues := make([]ExtensionWidgetIssueResponse, len(report.Issues))
+	for i, item := range report.Issues {
+		issues[i] = ExtensionWidgetIssueResponse{
+			Stage:      item.Stage,
+			Severity:   item.Severity,
+			Message:    item.Message,
+			ActionPath: item.ActionPath,
+		}
+	}
+	actions := make([]ExtensionWidgetActionResponse, len(report.NextActions))
+	for i, item := range report.NextActions {
+		actions[i] = ExtensionWidgetActionResponse{
+			ID:         item.ID,
+			Label:      item.Label,
+			ActionPath: item.ActionPath,
+			Tone:       item.Tone,
+		}
+	}
+	return ExtensionEvidenceSupportReportResponse{
+		WorkspaceID:      report.WorkspaceID,
+		Scope:            report.Scope,
+		CampaignID:       report.CampaignID,
+		ProductID:        report.ProductID,
+		PhraseID:         report.PhraseID,
+		Query:            report.Query,
+		GeneratedAt:      report.GeneratedAt,
+		LatestCapturedAt: report.LatestCapturedAt,
+		Summary: ExtensionEvidenceSupportSummaryResponse{
+			SourceLabel:        report.Summary.SourceLabel,
+			Readiness:          report.Summary.Readiness,
+			CapturedSignals:    report.Summary.CapturedSignals,
+			MissingSignals:     report.Summary.MissingSignals,
+			ConfirmedInCabinet: report.Summary.ConfirmedInCabinet,
+			FreshnessState:     report.Summary.FreshnessState,
+			Coverage:           report.Summary.Coverage,
+		},
+		Sections:    sections,
+		Checklist:   checklist,
+		Issues:      issues,
+		NextActions: actions,
+	}
 }
 
 func ExtensionWidgetDataStatusFromService(status service.ExtensionWidgetDataStatus) ExtensionWidgetDataStatusResponse {
+	issues := make([]ExtensionWidgetIssueResponse, len(status.Issues))
+	for i, item := range status.Issues {
+		issues[i] = ExtensionWidgetIssueResponse{
+			Stage:      item.Stage,
+			Severity:   item.Severity,
+			Message:    item.Message,
+			ActionPath: item.ActionPath,
+		}
+	}
+	actions := make([]ExtensionWidgetActionResponse, len(status.NextActions))
+	for i, item := range status.NextActions {
+		actions[i] = ExtensionWidgetActionResponse{
+			ID:         item.ID,
+			Label:      item.Label,
+			ActionPath: item.ActionPath,
+			Tone:       item.Tone,
+		}
+	}
 	return ExtensionWidgetDataStatusResponse{
 		Source:             status.Source,
 		CapturedAt:         status.CapturedAt,
@@ -1667,6 +2653,33 @@ func ExtensionWidgetDataStatusFromService(status service.ExtensionWidgetDataStat
 		Confidence:         status.Confidence,
 		Coverage:           status.Coverage,
 		ConfirmedInCabinet: status.ConfirmedInCabinet,
+		EvidenceCounts: ExtensionWidgetEvidenceCountsResponse{
+			BidSnapshots:      status.EvidenceCounts.BidSnapshots,
+			PositionSnapshots: status.EvidenceCounts.PositionSnapshots,
+			UISignals:         status.EvidenceCounts.UISignals,
+		},
+		Issues:      issues,
+		NextActions: actions,
+	}
+}
+
+func ExtensionWidgetPrimaryInsightFromService(insight service.ExtensionWidgetPrimaryInsight) ExtensionWidgetPrimaryInsightResponse {
+	var nextAction *ExtensionWidgetActionResponse
+	if insight.NextAction != nil {
+		nextAction = &ExtensionWidgetActionResponse{
+			ID:         insight.NextAction.ID,
+			Label:      insight.NextAction.Label,
+			ActionPath: insight.NextAction.ActionPath,
+			Tone:       insight.NextAction.Tone,
+		}
+	}
+	return ExtensionWidgetPrimaryInsightResponse{
+		Title:      insight.Title,
+		Message:    insight.Message,
+		Severity:   insight.Severity,
+		Source:     insight.Source,
+		Evidence:   insight.Evidence,
+		NextAction: nextAction,
 	}
 }
 
@@ -1680,6 +2693,7 @@ type ExtensionSearchWidgetResponse struct {
 	LiveBidSnapshot  *ExtensionLiveBidSnapshotResponse       `json:"live_bid_snapshot,omitempty"`
 	LivePositions    []ExtensionLivePositionSnapshotResponse `json:"live_positions"`
 	UISignals        []ExtensionUISignalResponse             `json:"ui_signals"`
+	PrimaryInsight   ExtensionWidgetPrimaryInsightResponse   `json:"primary_insight"`
 	DataStatus       ExtensionWidgetDataStatusResponse       `json:"data_status"`
 	Recommendations  []RecommendationResponse                `json:"recommendations"`
 }
@@ -1733,6 +2747,7 @@ func ExtensionSearchWidgetFromService(widget service.ExtensionSearchWidget) Exte
 		LiveBidSnapshot:  liveBidSnapshot,
 		LivePositions:    livePositions,
 		UISignals:        uiSignals,
+		PrimaryInsight:   ExtensionWidgetPrimaryInsightFromService(widget.PrimaryInsight),
 		DataStatus:       ExtensionWidgetDataStatusFromService(widget.DataStatus),
 		Recommendations:  recommendations,
 	}
@@ -1743,6 +2758,7 @@ type ExtensionProductWidgetResponse struct {
 	Positions       []PositionResponse                      `json:"positions"`
 	LivePositions   []ExtensionLivePositionSnapshotResponse `json:"live_positions"`
 	UISignals       []ExtensionUISignalResponse             `json:"ui_signals"`
+	PrimaryInsight  ExtensionWidgetPrimaryInsightResponse   `json:"primary_insight"`
 	DataStatus      ExtensionWidgetDataStatusResponse       `json:"data_status"`
 	Recommendations []RecommendationResponse                `json:"recommendations"`
 }
@@ -1773,19 +2789,21 @@ func ExtensionProductWidgetFromService(widget service.ExtensionProductWidget) Ex
 		Positions:       positions,
 		LivePositions:   livePositions,
 		UISignals:       uiSignals,
+		PrimaryInsight:  ExtensionWidgetPrimaryInsightFromService(widget.PrimaryInsight),
 		DataStatus:      ExtensionWidgetDataStatusFromService(widget.DataStatus),
 		Recommendations: recommendations,
 	}
 }
 
 type ExtensionCampaignWidgetResponse struct {
-	Campaign        CampaignResponse                   `json:"campaign"`
-	Stats           []CampaignStatResponse             `json:"stats"`
-	Phrases         []PhraseResponse                   `json:"phrases"`
-	LiveBids        []ExtensionLiveBidSnapshotResponse `json:"live_bids"`
-	UISignals       []ExtensionUISignalResponse        `json:"ui_signals"`
-	DataStatus      ExtensionWidgetDataStatusResponse  `json:"data_status"`
-	Recommendations []RecommendationResponse           `json:"recommendations"`
+	Campaign        CampaignResponse                      `json:"campaign"`
+	Stats           []CampaignStatResponse                `json:"stats"`
+	Phrases         []PhraseResponse                      `json:"phrases"`
+	LiveBids        []ExtensionLiveBidSnapshotResponse    `json:"live_bids"`
+	UISignals       []ExtensionUISignalResponse           `json:"ui_signals"`
+	PrimaryInsight  ExtensionWidgetPrimaryInsightResponse `json:"primary_insight"`
+	DataStatus      ExtensionWidgetDataStatusResponse     `json:"data_status"`
+	Recommendations []RecommendationResponse              `json:"recommendations"`
 }
 
 func ExtensionCampaignWidgetFromService(widget service.ExtensionCampaignWidget) ExtensionCampaignWidgetResponse {
@@ -1820,6 +2838,7 @@ func ExtensionCampaignWidgetFromService(widget service.ExtensionCampaignWidget) 
 		Phrases:         phrases,
 		LiveBids:        liveBids,
 		UISignals:       uiSignals,
+		PrimaryInsight:  ExtensionWidgetPrimaryInsightFromService(widget.PrimaryInsight),
 		DataStatus:      ExtensionWidgetDataStatusFromService(widget.DataStatus),
 		Recommendations: recommendations,
 	}

@@ -3,113 +3,554 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sellico Extension Settings</title>
+    <title>Настройки Sellico Live</title>
     <style>
+      :root {
+        color-scheme: light;
+        --bg: #f8fafc;
+        --surface: #ffffff;
+        --surface-soft: #f1f5f9;
+        --border: rgba(15, 23, 42, 0.1);
+        --text: #0f172a;
+        --muted: #64748b;
+        --accent: #2563eb;
+        --accent-dark: #1d4ed8;
+        --success: #15803d;
+        --danger: #b91c1c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
         padding: 32px;
+        background: var(--bg);
+        color: var(--text);
         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        color: #1f2937;
-        background: linear-gradient(180deg, #fffaf0 0%, #f8fbff 100%);
+        letter-spacing: 0;
       }
+
       .shell {
-        max-width: 760px;
+        max-width: 900px;
         margin: 0 auto;
-        background: rgba(255,255,255,0.88);
-        border: 1px solid rgba(15,23,42,0.08);
-        border-radius: 24px;
-        padding: 28px;
-        box-shadow: 0 24px 70px rgba(15,23,42,0.08);
       }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 52px 1fr;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+
+      .logo {
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        background: var(--accent);
+        color: #ffffff;
+        box-shadow: 0 16px 38px rgba(37, 99, 235, 0.24);
+      }
+
+      .logo svg {
+        width: 28px;
+        height: 28px;
+      }
+
       h1 {
         margin: 0;
-        font-size: 24px;
+        font-size: 26px;
+        line-height: 1.2;
       }
+
       p {
         margin: 4px 0 0;
-        color: #667085;
+        color: var(--muted);
       }
-      .grid {
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 16px;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: var(--surface);
+        box-shadow: 0 18px 55px rgba(15, 23, 42, 0.08);
+      }
+
+      .form-card {
+        padding: 22px;
+      }
+
+      .steps {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 28px 1fr;
+        gap: 10px;
+        align-items: start;
+        padding: 12px;
+        border-radius: 14px;
+        background: var(--surface-soft);
+      }
+
+      .step strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .step span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .step-number {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: #dbeafe;
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      form {
         display: grid;
         gap: 16px;
       }
+
       label {
         display: grid;
-        gap: 8px;
-        font-weight: 600;
+        gap: 7px;
+        color: var(--text);
+        font-weight: 750;
       }
-      input[type="text"], input[type="password"] {
+
+      label small {
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      input[type="text"],
+      input[type="password"] {
         width: 100%;
-        border: 1px solid #d0d5dd;
+        min-height: 44px;
+        border: 1px solid #cbd5e1;
         border-radius: 12px;
-        padding: 12px 14px;
+        padding: 10px 12px;
+        background: #ffffff;
+        color: var(--text);
         font: inherit;
+        outline: none;
       }
-      .row {
+
+      input[type="text"]:focus,
+      input[type="password"]:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      }
+
+      .toggle {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface-soft);
+      }
+
+      .toggle input {
+        width: 18px;
+        height: 18px;
+        margin-top: 2px;
+        accent-color: var(--accent);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 4px;
+      }
+
+      button {
+        min-height: 42px;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        padding: 10px 16px;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      .primary {
+        background: var(--accent);
+        color: #ffffff;
+      }
+
+      .primary:hover {
+        background: var(--accent-dark);
+      }
+
+      .secondary {
+        border-color: var(--border);
+        background: #ffffff;
+        color: var(--text);
+      }
+
+      .secondary:hover {
+        background: var(--surface-soft);
+      }
+
+      .danger {
+        border-color: rgba(185, 28, 28, 0.22);
+        background: #fff1f2;
+        color: var(--danger);
+      }
+
+      .danger:hover {
+        background: #ffe4e6;
+      }
+
+      .status {
+        min-height: 44px;
+        padding: 12px;
+        border-radius: 14px;
+        background: var(--surface-soft);
+        color: var(--muted);
+      }
+
+      .status[data-tone="success"] {
+        background: #dcfce7;
+        color: var(--success);
+      }
+
+      .status[data-tone="error"] {
+        background: #fee2e2;
+        color: var(--danger);
+      }
+
+      .status[data-tone="info"] {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+
+      .support-panel {
+        display: grid;
+        gap: 16px;
+        margin-top: 16px;
+        padding: 22px;
+      }
+
+      .support-form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .support-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+
+      select,
+      input[type="number"] {
+        width: 100%;
+        min-height: 44px;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: #ffffff;
+        color: var(--text);
+        font: inherit;
+        outline: none;
+      }
+
+      select:focus,
+      input[type="number"]:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      }
+
+      .support-result {
+        display: grid;
+        gap: 12px;
+      }
+
+      .support-summary {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
         gap: 10px;
       }
-      button {
-        margin-top: 18px;
-        border: 0;
-        border-radius: 12px;
-        padding: 12px 18px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        background: #f59e0b;
-        color: #1f2937;
+
+      .metric {
+        min-height: 78px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--surface-soft);
       }
-      .status {
-        margin-top: 14px;
-        min-height: 20px;
-        color: #475467;
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 18px;
+        line-height: 1.2;
+      }
+
+      .support-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .support-list li {
+        display: grid;
+        grid-template-columns: 92px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #ffffff;
+      }
+
+      .badge {
+        display: inline-grid;
+        place-items: center;
+        min-height: 26px;
+        border-radius: 999px;
+        padding: 4px 9px;
+        background: #e2e8f0;
+        color: #334155;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .badge[data-status="ready"],
+      .badge[data-status="true"] {
+        background: #dcfce7;
+        color: var(--success);
+      }
+
+      .badge[data-status="missing"],
+      .badge[data-status="false"] {
+        background: #fee2e2;
+        color: var(--danger);
+      }
+
+      .section-title {
+        display: grid;
+        gap: 3px;
+        padding-top: 6px;
+      }
+
+      .section-title strong {
+        font-size: 15px;
+      }
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      @media (max-width: 760px) {
+        body {
+          padding: 18px;
+        }
+
+        .layout,
+        .field-grid,
+        .support-grid,
+        .support-summary {
+          grid-template-columns: 1fr;
+        }
+
+        .support-list li {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 16px;">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="48" height="48">
-          <defs>
-            <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" style="stop-color:#f59e0b;stop-opacity:1" />
-              <stop offset="100%" style="stop-color:#d97706;stop-opacity:1" />
-            </linearGradient>
-          </defs>
-          <circle cx="50" cy="50" r="48" fill="url(#logoGrad)"/>
-          <text x="50" y="68" font-family="Arial Black, sans-serif" font-size="50" font-weight="900" fill="white" text-anchor="middle">S</text>
-        </svg>
+    <main class="shell">
+      <header class="hero">
+        <div class="logo" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M12 2 4 6.4v11.2L12 22l8-4.4V6.4L12 2Zm0 2.3 5.8 3.2L12 10.7 6.2 7.5 12 4.3Zm-6 5 5 2.8v6.7l-5-2.8V9.3Zm7 9.5v-6.7l5-2.8V16l-5 2.8Z"/>
+          </svg>
+        </div>
         <div>
-          <h1 style="margin: 0; font-size: 24px;">Sellico Ads Intelligence</h1>
-          <p style="margin: 4px 0 0; color: #667085;">Настрой backend и доступ, чтобы расширение могло автоматически собирать live-данные в кабинете WB.</p>
+          <h1>Настройки Sellico Live</h1>
+          <p>Расширение собирает только реальные сигналы из вашего кабинета Wildberries и передает их в Sellico.</p>
         </div>
-      </div>
-      <form id="settings-form" class="grid">
-        <label>
-          Backend URL
-          <input id="backendUrl" type="text" placeholder="http://127.0.0.1:8080" />
-        </label>
-        <label>
-          Access token
-          <input id="accessToken" type="password" placeholder="Автоматически из cookies sellico.ru (можно оставить пустым)" />
-        </label>
-        <label>
-          Workspace ID
-          <input id="workspaceId" type="text" placeholder="UUID workspace" />
-        </label>
-        <label class="row">
-          <input id="autoCapture" type="checkbox" />
-          Автоматически собирать context, snapshots и UI signals на поддержанных страницах
-        </label>
-        <div style="display: flex; gap: 10px;">
-          <button type="submit">Сохранить</button>
-          <button type="button" id="test-connection" style="background: #e5e7eb; color: #374151;">Проверить подключение</button>
+      </header>
+
+      <section class="layout">
+        <form id="settings-form" class="card form-card">
+          <label>
+            Backend URL
+            <small>Боевой Ads API: `https://ads.sellico.ru`. Для локальной разработки можно указать `http://127.0.0.1:8080`.</small>
+            <input id="backendUrl" type="text" placeholder="https://ads.sellico.ru" autocomplete="off" />
+          </label>
+
+          <div class="section-title">
+            <strong>Подключение через Sellico</strong>
+            <small>Введите данные Sellico один раз. Пароль не сохраняется; расширение сохранит только access token в своем защищенном storage.</small>
+          </div>
+
+          <div class="field-grid">
+            <label>
+              Email Sellico
+              <input id="sellicoEmail" type="text" placeholder="name@example.com" autocomplete="username" />
+            </label>
+
+            <label>
+              Пароль Sellico
+              <input id="sellicoPassword" type="password" placeholder="Пароль" autocomplete="current-password" />
+            </label>
+          </div>
+
+          <label>
+            Access token
+            <small>Резервный способ для разработки. В обычной работе используйте вход через Sellico выше.</small>
+            <input id="accessToken" type="password" placeholder="JWT без Bearer" autocomplete="off" />
+          </label>
+
+          <label>
+            Workspace ID
+            <small>Workspace, куда будут сохраняться snapshots и сигналы из кабинета.</small>
+            <input id="workspaceId" type="text" placeholder="UUID workspace" autocomplete="off" />
+          </label>
+
+          <label class="toggle">
+            <input id="autoCapture" type="checkbox" />
+            <span>
+              Автоматически собирать реальные сигналы на страницах WB
+              <small>Page context, UI warnings, ставки, позиции и allowlisted network captures.</small>
+            </span>
+          </label>
+
+          <div class="actions">
+            <button type="submit" class="primary">Сохранить</button>
+            <button type="button" id="login-sellico" class="secondary">Войти и подключить</button>
+            <button type="button" id="connect-sellico" class="secondary">Открыть Sellico</button>
+            <button type="button" id="test-connection" class="secondary">Проверить подключение</button>
+            <button type="button" id="reset-auth" class="danger">Сбросить авторизацию</button>
+          </div>
+
+          <div class="status" id="status" data-tone="info">Настройки еще не проверялись.</div>
+        </form>
+
+        <aside class="card steps" aria-label="Как подключить">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div>
+              <strong>Войдите через Sellico</strong>
+              <span>Расширение проверит доступ и workspace через Ads API.</span>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">2</div>
+            <div>
+              <strong>Укажите workspace</strong>
+              <span>Так данные попадут в правильный проект.</span>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">3</div>
+            <div>
+              <strong>Откройте кабинет WB</strong>
+              <span>На страницах кампаний появится панель Sellico Live.</span>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">4</div>
+            <div>
+              <strong>Проверьте captures</strong>
+              <span>Если API WB неполный, Sellico увидит реальные подсказки кабинета.</span>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="card support-panel" aria-label="Support evidence debug">
+        <div class="section-title">
+          <strong>Support evidence debug</strong>
+          <small>Проверка реального evidence по кампании, товару или запросу. Экран читает только сохраненные captures из backend и не создает бизнес-метрики.</small>
         </div>
-        <div class="status" id="status"></div>
-      </form>
-    </div>
+
+        <form id="support-form" class="support-form">
+          <div class="support-grid">
+            <label>
+              Scope
+              <select id="supportScope">
+                <option value="campaign">campaign</option>
+                <option value="product">product</option>
+                <option value="query">query</option>
+              </select>
+            </label>
+
+            <label>
+              Limit
+              <input id="supportLimit" type="number" min="1" max="50" value="20" />
+            </label>
+
+            <label>
+              Query
+              <input id="supportQuery" type="text" placeholder="например: термоэтикетки" autocomplete="off" />
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label>
+              Campaign ID
+              <input id="supportCampaignId" type="text" placeholder="UUID кампании" autocomplete="off" />
+            </label>
+
+            <label>
+              Product ID
+              <input id="supportProductId" type="text" placeholder="UUID товара" autocomplete="off" />
+            </label>
+          </div>
+
+          <label>
+            Phrase ID
+            <input id="supportPhraseId" type="text" placeholder="UUID фразы, если есть" autocomplete="off" />
+          </label>
+
+          <div class="actions">
+            <button type="submit" class="primary">Загрузить evidence report</button>
+          </div>
+        </form>
+
+        <div class="status" id="supportStatus" data-tone="info">Укажите scope и ID, затем загрузите report.</div>
+        <div id="supportResult" class="support-result" hidden></div>
+      </section>
+    </main>
+
     <script src="options.js"></script>
   </body>
-  </html>
+</html>

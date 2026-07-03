@@ -476,6 +476,17 @@ func (g *ExportGenerator) buildRows(ctx context.Context, exportTask *domain.Expo
 			}
 		}
 		return []string{"id", "workspace_id", "campaign_id", "phrase_id", "product_id", "title", "description", "type", "severity", "confidence", "source_metrics", "next_action", "status", "created_at", "updated_at"}, result, nil
+	case "bid_changes":
+		rows, err := g.queries.ListBidChangesByWorkspace(ctx, sqlcgen.ListBidChangesByWorkspaceParams{
+			WorkspaceID: uuidToPgtype(exportTask.WorkspaceID),
+			Limit:       exportBatchLimit,
+			Offset:      0,
+		})
+		if err != nil {
+			return nil, nil, apperror.New(apperror.ErrInternal, "failed to list bid changes for export")
+		}
+		filtered := filterBidChangesByDate(rows, filters)
+		return bidChangeExportHeaders(), bidChangeExportRows(filtered), nil
 	default:
 		return nil, nil, apperror.New(apperror.ErrValidation, "unsupported export entity type")
 	}
@@ -593,6 +604,62 @@ func filterPhraseStatsByDate(rows []sqlcgen.PhraseStat, filters exportFilters) [
 	return filtered
 }
 
+func filterBidChangesByDate(rows []sqlcgen.BidChange, filters exportFilters) []sqlcgen.BidChange {
+	dateFrom, dateTo, err := filters.dateRange()
+	if err != nil || (dateFrom == nil && dateTo == nil) {
+		return rows
+	}
+	filtered := make([]sqlcgen.BidChange, 0, len(rows))
+	for _, row := range rows {
+		if !row.CreatedAt.Valid {
+			continue
+		}
+		createdAt := row.CreatedAt.Time
+		if dateFrom != nil && createdAt.Before(*dateFrom) {
+			continue
+		}
+		if dateTo != nil && createdAt.After(dateTo.Add(24*time.Hour-time.Nanosecond)) {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	return filtered
+}
+
+func bidChangeExportHeaders() []string {
+	return []string{
+		"id", "workspace_id", "seller_cabinet_id", "campaign_id", "product_id", "phrase_id",
+		"strategy_id", "recommendation_id", "placement", "old_bid", "new_bid", "reason",
+		"source", "acos", "roas", "wb_status", "created_at",
+	}
+}
+
+func bidChangeExportRows(rows []sqlcgen.BidChange) [][]string {
+	result := make([][]string, len(rows))
+	for i, row := range rows {
+		result[i] = []string{
+			pgUUIDToString(row.ID),
+			pgUUIDToString(row.WorkspaceID),
+			pgUUIDToString(row.SellerCabinetID),
+			pgUUIDToString(row.CampaignID),
+			pgUUIDToString(row.ProductID),
+			pgUUIDToString(row.PhraseID),
+			pgUUIDToString(row.StrategyID),
+			pgUUIDToString(row.RecommendationID),
+			row.Placement,
+			fmt.Sprintf("%d", row.OldBid),
+			fmt.Sprintf("%d", row.NewBid),
+			row.Reason,
+			row.Source,
+			pgFloat8ToString(row.Acos),
+			pgFloat8ToString(row.Roas),
+			row.WbStatus,
+			pgTimestamptzToString(row.CreatedAt),
+		}
+	}
+	return result
+}
+
 func exportContentType(format string) string {
 	switch format {
 	case domain.ExportFormatXLSX:
@@ -681,4 +748,25 @@ func uuidPtrToString(value *uuid.UUID) string {
 		return ""
 	}
 	return value.String()
+}
+
+func pgUUIDToString(value pgtype.UUID) string {
+	if !value.Valid {
+		return ""
+	}
+	return uuidFromPgtype(value).String()
+}
+
+func pgFloat8ToString(value pgtype.Float8) string {
+	if !value.Valid {
+		return ""
+	}
+	return fmt.Sprintf("%.2f", value.Float64)
+}
+
+func pgTimestamptzToString(value pgtype.Timestamptz) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.Time.UTC().Format(time.RFC3339)
 }

@@ -51,9 +51,19 @@ type Config struct {
 	// Export
 	ExportStoragePath string // env: EXPORT_STORAGE_PATH, default: "./exports"
 
+	// Email reports
+	SMTPHost      string        // env: SMTP_HOST, optional; empty disables email delivery
+	SMTPPort      int           // env: SMTP_PORT, default: 587
+	SMTPUsername  string        // env: SMTP_USERNAME, optional
+	SMTPPassword  string        // env: SMTP_PASSWORD, optional
+	SMTPFromEmail string        // env: SMTP_FROM_EMAIL, required when SMTP_HOST is set
+	SMTPFromName  string        // env: SMTP_FROM_NAME, default: "Sellico Ads Intelligence"
+	SMTPTimeout   time.Duration // env: SMTP_TIMEOUT, default: 10s
+
 	// Sellico API
-	SellicoAPIBaseURL string        // env: SELLICO_API_BASE_URL, default: "https://sellico.ru/api"
-	SellicoAPITimeout time.Duration // env: SELLICO_API_TIMEOUT, default: 5s
+	SellicoAPIBaseURL                 string        // env: SELLICO_API_BASE_URL, default: "https://sellico.ru/api"
+	SellicoAPITimeout                 time.Duration // env: SELLICO_API_TIMEOUT, default: 5s
+	SellicoUnitEconomicsReadinessPath string        // env: SELLICO_UNIT_ECONOMICS_READINESS_PATH, optional; empty disables bid scale-up economics checks
 
 	// Sellico service-account credentials. The backend uses them to call the
 	// service-account endpoints documented in financial-dashboard/rules.md
@@ -88,37 +98,45 @@ type Config struct {
 // and terminates the process with a descriptive message if any required variable is missing.
 func Load() *Config {
 	cfg := &Config{
-		ServerHost:             getEnvOrDefault("SERVER_HOST", "0.0.0.0"),
-		ServerPort:             getEnvAsInt("SERVER_PORT", 8080),
-		AppVersion:             getEnvOrDefault("APP_VERSION", "dev"),
-		DatabaseURL:            requireEnv("DATABASE_URL"),
-		DBMaxConns:             getEnvAsInt("DB_MAX_CONNS", 25),
-		DBMinConns:             getEnvAsInt("DB_MIN_CONNS", 5),
-		DBMaxConnIdleTime:      getEnvAsDuration("DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
-		RedisURL:               requireEnv("REDIS_URL"),
-		JWTSecret:              requireEnv("JWT_SECRET"),
-		JWTAccessTokenTTL:      getEnvAsDuration("JWT_ACCESS_TOKEN_TTL", 15*time.Minute),
-		JWTRefreshTokenTTL:     getEnvAsDuration("JWT_REFRESH_TOKEN_TTL", 168*time.Hour),
-		EncryptionKey:          requireEnv("ENCRYPTION_KEY"),
-		WBAPIBaseURL:           getEnvOrDefault("WB_API_BASE_URL", "https://advert-api.wildberries.ru"),
-		WBAPIRateLimit:         getEnvAsInt("WB_API_RATE_LIMIT", 10),
-		AdsReadEntityLimit:     getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
-		AdsReadStatsLimit:      getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
-		WBParserMinDelay:       getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
-		WBParserProxies:        getEnvAsSlice("WB_PARSER_PROXIES", ","),
-		ExportStoragePath:      getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
-		SellicoAPIBaseURL:      getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
-		SellicoAPITimeout:      getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
-		SellicoServiceToken:    getEnvOrDefault("SELLICO_API_TOKEN", ""),
-		SellicoServiceEmail:    getEnvOrDefault("SELLICO_EMAIL", ""),
-		SellicoServicePassword: getEnvOrDefault("SELLICO_PASSWORD", ""),
-		SyncInterval:           getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
-		RecommendationInterval: getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
-		BidAutomationInterval:  getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),
-		CORSAllowOrigins:       getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
-		RateLimitRPS:           getEnvAsFloat("RATE_LIMIT_RPS", 20),
-		RateLimitBurst:         getEnvAsInt("RATE_LIMIT_BURST", 40),
-		LogLevel:               getEnvOrDefault("LOG_LEVEL", "info"),
+		ServerHost:                        getEnvOrDefault("SERVER_HOST", "0.0.0.0"),
+		ServerPort:                        getEnvAsInt("SERVER_PORT", 8080),
+		AppVersion:                        getEnvOrDefault("APP_VERSION", "dev"),
+		DatabaseURL:                       requireEnv("DATABASE_URL"),
+		DBMaxConns:                        getEnvAsInt("DB_MAX_CONNS", 25),
+		DBMinConns:                        getEnvAsInt("DB_MIN_CONNS", 5),
+		DBMaxConnIdleTime:                 getEnvAsDuration("DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
+		RedisURL:                          requireEnv("REDIS_URL"),
+		JWTSecret:                         requireEnv("JWT_SECRET"),
+		JWTAccessTokenTTL:                 getEnvAsDuration("JWT_ACCESS_TOKEN_TTL", 15*time.Minute),
+		JWTRefreshTokenTTL:                getEnvAsDuration("JWT_REFRESH_TOKEN_TTL", 168*time.Hour),
+		EncryptionKey:                     requireEnv("ENCRYPTION_KEY"),
+		WBAPIBaseURL:                      getEnvOrDefault("WB_API_BASE_URL", "https://advert-api.wildberries.ru"),
+		WBAPIRateLimit:                    getEnvAsInt("WB_API_RATE_LIMIT", 10),
+		AdsReadEntityLimit:                getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
+		AdsReadStatsLimit:                 getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
+		WBParserMinDelay:                  getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
+		WBParserProxies:                   getEnvAsSlice("WB_PARSER_PROXIES", ","),
+		ExportStoragePath:                 getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
+		SMTPHost:                          getEnvOrDefault("SMTP_HOST", ""),
+		SMTPPort:                          getEnvAsInt("SMTP_PORT", 587),
+		SMTPUsername:                      getEnvOrDefault("SMTP_USERNAME", ""),
+		SMTPPassword:                      getEnvOrDefault("SMTP_PASSWORD", ""),
+		SMTPFromEmail:                     getEnvOrDefault("SMTP_FROM_EMAIL", ""),
+		SMTPFromName:                      getEnvOrDefault("SMTP_FROM_NAME", "Sellico Ads Intelligence"),
+		SMTPTimeout:                       getEnvAsDuration("SMTP_TIMEOUT", 10*time.Second),
+		SellicoAPIBaseURL:                 getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
+		SellicoAPITimeout:                 getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
+		SellicoUnitEconomicsReadinessPath: getEnvOrDefault("SELLICO_UNIT_ECONOMICS_READINESS_PATH", ""),
+		SellicoServiceToken:               getEnvOrDefault("SELLICO_API_TOKEN", ""),
+		SellicoServiceEmail:               getEnvOrDefault("SELLICO_EMAIL", ""),
+		SellicoServicePassword:            getEnvOrDefault("SELLICO_PASSWORD", ""),
+		SyncInterval:                      getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
+		RecommendationInterval:            getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
+		BidAutomationInterval:             getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),
+		CORSAllowOrigins:                  getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
+		RateLimitRPS:                      getEnvAsFloat("RATE_LIMIT_RPS", 20),
+		RateLimitBurst:                    getEnvAsInt("RATE_LIMIT_BURST", 40),
+		LogLevel:                          getEnvOrDefault("LOG_LEVEL", "info"),
 	}
 
 	if err := validateConfig(cfg); err != nil {
@@ -140,6 +158,14 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.RateLimitBurst < 0 {
 		return fmt.Errorf("RATE_LIMIT_BURST must be non-negative")
+	}
+	if cfg.SMTPHost != "" {
+		if cfg.SMTPPort <= 0 {
+			return fmt.Errorf("SMTP_PORT must be positive when SMTP_HOST is set")
+		}
+		if cfg.SMTPFromEmail == "" {
+			return fmt.Errorf("SMTP_FROM_EMAIL must be set when SMTP_HOST is set")
+		}
 	}
 	return nil
 }

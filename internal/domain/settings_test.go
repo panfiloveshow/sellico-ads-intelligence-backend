@@ -12,6 +12,8 @@ func TestRecommendationThresholds_Merged_AllDefaults(t *testing.T) {
 
 	assert.Equal(t, DefaultCampaignHighImpressions, merged.CampaignHighImpressions)
 	assert.Equal(t, DefaultCampaignZeroOrdersClick, merged.CampaignZeroOrdersClick)
+	assert.Equal(t, DefaultCampaignMaxSpendNoOrder, merged.CampaignMaxSpendNoOrder)
+	assert.Equal(t, DefaultCampaignMaxTestSpend, merged.CampaignMaxTestSpend)
 	assert.Equal(t, DefaultCampaignHighCPC, merged.CampaignHighCPC)
 	assert.Equal(t, DefaultCampaignPoorCPO, merged.CampaignPoorCPO)
 	assert.Equal(t, DefaultCampaignStrongROAS, merged.CampaignStrongROAS)
@@ -34,6 +36,8 @@ func TestRecommendationThresholds_Merged_PartialOverride(t *testing.T) {
 
 	// Defaults
 	assert.Equal(t, DefaultCampaignZeroOrdersClick, merged.CampaignZeroOrdersClick)
+	assert.Equal(t, DefaultCampaignMaxSpendNoOrder, merged.CampaignMaxSpendNoOrder)
+	assert.Equal(t, DefaultCampaignMaxTestSpend, merged.CampaignMaxTestSpend)
 	assert.Equal(t, DefaultCampaignHighCPC, merged.CampaignHighCPC)
 	assert.Equal(t, DefaultPhraseHighImpressions, merged.PhraseHighImpressions)
 }
@@ -42,6 +46,8 @@ func TestRecommendationThresholds_Merged_FullOverride(t *testing.T) {
 	th := &RecommendationThresholds{
 		CampaignHighImpressions: 500,
 		CampaignZeroOrdersClick: 20,
+		CampaignMaxSpendNoOrder: 2500,
+		CampaignMaxTestSpend:    4000,
 		CampaignHighCPC:         30.0,
 		CampaignPoorCPO:         1000.0,
 		CampaignRaiseBidClicks:  30,
@@ -56,6 +62,8 @@ func TestRecommendationThresholds_Merged_FullOverride(t *testing.T) {
 
 	assert.Equal(t, 500, merged.CampaignHighImpressions)
 	assert.Equal(t, 20, merged.CampaignZeroOrdersClick)
+	assert.Equal(t, int64(2500), merged.CampaignMaxSpendNoOrder)
+	assert.Equal(t, int64(4000), merged.CampaignMaxTestSpend)
 	assert.Equal(t, 30.0, merged.CampaignHighCPC)
 	assert.Equal(t, 1000.0, merged.CampaignPoorCPO)
 	assert.Equal(t, 30, merged.CampaignRaiseBidClicks)
@@ -70,5 +78,45 @@ func TestRecommendationThresholds_Merged_FullOverride(t *testing.T) {
 func TestDefaultThresholds(t *testing.T) {
 	th := DefaultThresholds()
 	assert.Equal(t, DefaultCampaignHighImpressions, th.CampaignHighImpressions)
+	assert.Equal(t, DefaultCampaignMaxSpendNoOrder, th.CampaignMaxSpendNoOrder)
+	assert.Equal(t, DefaultCampaignMaxTestSpend, th.CampaignMaxTestSpend)
 	assert.Equal(t, DefaultSERPCompetitorTop, th.SERPCompetitorTop)
+}
+
+func TestWorkspaceSettingsValidateEmailRecipients(t *testing.T) {
+	settings := WorkspaceSettings{
+		Notifications: &NotificationSettings{
+			Email: &EmailSettings{
+				Enabled:       true,
+				Recipients:    []string{"owner@example.com", "client@example.com"},
+				ClientReports: true,
+			},
+		},
+	}
+
+	assert.Empty(t, settings.Validate())
+}
+
+func TestWorkspaceSettingsValidateEmailRequiresRecipientsWhenEnabled(t *testing.T) {
+	settings := WorkspaceSettings{
+		Notifications: &NotificationSettings{
+			Email: &EmailSettings{Enabled: true},
+		},
+	}
+
+	errs := settings.Validate()
+	assert.Equal(t, "must contain at least one recipient when email notifications are enabled", errs["notifications.email.recipients"])
+}
+
+func TestWorkspaceSettingsValidateEmailRejectsInvalidRecipient(t *testing.T) {
+	settings := WorkspaceSettings{
+		Notifications: &NotificationSettings{
+			Email: &EmailSettings{
+				Recipients: []string{"bad-address"},
+			},
+		},
+	}
+
+	errs := settings.Validate()
+	assert.Equal(t, "must be a valid email address", errs["notifications.email.recipients.0"])
 }

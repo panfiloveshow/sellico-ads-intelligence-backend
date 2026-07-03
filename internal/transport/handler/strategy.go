@@ -59,6 +59,15 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	if params.MaxBid < 0 {
 		errors["params.max_bid"] = "must be non-negative"
 	}
+	if params.MaxCPC < 0 {
+		errors["params.max_cpc"] = "must be non-negative"
+	}
+	if params.MaxCPO < 0 {
+		errors["params.max_cpo"] = "must be non-negative"
+	}
+	if params.AutomationLevel < 0 || params.AutomationLevel > 4 {
+		errors["params.automation_level"] = "must be between 1 and 4"
+	}
 	if params.MinBid > 0 && params.MaxBid > 0 && params.MinBid > params.MaxBid {
 		errors["params.min_bid"] = "must be less than or equal to max_bid"
 	}
@@ -70,6 +79,18 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	}
 	if params.MinClicks < 0 {
 		errors["params.min_clicks"] = "must be non-negative"
+	}
+	if params.MinStockForIncrease < 0 {
+		errors["params.min_stock_for_increase"] = "must be non-negative"
+	}
+	if params.CooldownMinutes < 0 {
+		errors["params.cooldown_minutes"] = "must be non-negative"
+	}
+	if params.MaxChangesPerDay < 0 {
+		errors["params.max_changes_per_day"] = "must be non-negative"
+	}
+	if params.MaxDataAgeHours < 0 {
+		errors["params.max_data_age_hours"] = "must be non-negative"
 	}
 	return errors
 }

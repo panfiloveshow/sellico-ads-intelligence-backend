@@ -21,13 +21,18 @@ var (
 	ErrInvalidSignature = errors.New("invalid token signature")
 )
 
+const ExtensionTokenAudience = "sellico-ads-extension"
+
 // TokenClaims holds the parsed claims from a JWT token.
 type TokenClaims struct {
-	UserID    uuid.UUID
-	ExpiresAt time.Time
-	IssuedAt  time.Time
-	TokenType string // "access" or "refresh"
-	JTI       string // only for refresh tokens
+	UserID      uuid.UUID
+	WorkspaceID *uuid.UUID
+	ExpiresAt   time.Time
+	IssuedAt    time.Time
+	TokenType   string // "access", "refresh", or "extension"
+	JTI         string // only for refresh tokens
+	Role        string
+	Audience    string
 }
 
 // header is the fixed JWT header for HS256.
@@ -38,11 +43,14 @@ type header struct {
 
 // payload represents the JWT payload claims.
 type payload struct {
-	Sub  string `json:"sub"`
-	Exp  int64  `json:"exp"`
-	Iat  int64  `json:"iat"`
-	Type string `json:"type"`
-	JTI  string `json:"jti,omitempty"`
+	Sub         string `json:"sub"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Exp         int64  `json:"exp"`
+	Iat         int64  `json:"iat"`
+	Type        string `json:"type"`
+	JTI         string `json:"jti,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Audience    string `json:"aud,omitempty"`
 }
 
 // base64URLEncode encodes data using base64url encoding without padding per RFC 7515.
@@ -93,6 +101,21 @@ func GenerateAccessToken(userID uuid.UUID, secret string, ttl time.Duration) (st
 		Exp:  now.Add(ttl).Unix(),
 		Iat:  now.Unix(),
 		Type: "access",
+	}
+	return generateToken(p, secret)
+}
+
+// GenerateExtensionToken creates a workspace-scoped token for the browser extension.
+func GenerateExtensionToken(userID, workspaceID uuid.UUID, role, secret string, ttl time.Duration) (string, error) {
+	now := time.Now()
+	p := payload{
+		Sub:         userID.String(),
+		WorkspaceID: workspaceID.String(),
+		Exp:         now.Add(ttl).Unix(),
+		Iat:         now.Unix(),
+		Type:        "extension",
+		Role:        role,
+		Audience:    ExtensionTokenAudience,
 	}
 	return generateToken(p, secret)
 }
@@ -161,12 +184,32 @@ func ValidateToken(tokenString string, secret string) (*TokenClaims, error) {
 		return nil, fmt.Errorf("%w: invalid user id: %v", ErrInvalidToken, err)
 	}
 
+	var workspaceID *uuid.UUID
+	if p.WorkspaceID != "" {
+		parsedWorkspaceID, err := uuid.Parse(p.WorkspaceID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid workspace id: %v", ErrInvalidToken, err)
+		}
+		workspaceID = &parsedWorkspaceID
+	}
+	if p.Type == "extension" {
+		if p.Audience != ExtensionTokenAudience {
+			return nil, fmt.Errorf("%w: invalid extension audience", ErrInvalidToken)
+		}
+		if workspaceID == nil {
+			return nil, fmt.Errorf("%w: extension token requires workspace id", ErrInvalidToken)
+		}
+	}
+
 	return &TokenClaims{
-		UserID:    userID,
-		ExpiresAt: time.Unix(p.Exp, 0),
-		IssuedAt:  time.Unix(p.Iat, 0),
-		TokenType: p.Type,
-		JTI:       p.JTI,
+		UserID:      userID,
+		WorkspaceID: workspaceID,
+		ExpiresAt:   time.Unix(p.Exp, 0),
+		IssuedAt:    time.Unix(p.Iat, 0),
+		TokenType:   p.Type,
+		JTI:         p.JTI,
+		Role:        p.Role,
+		Audience:    p.Audience,
 	}, nil
 }
 

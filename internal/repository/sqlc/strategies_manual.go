@@ -256,6 +256,23 @@ func (q *Queries) ListStrategyBindings(ctx context.Context, strategyID pgtype.UU
 	return items, rows.Err()
 }
 
+func (q *Queries) ListActiveStrategyBindingsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]StrategyBinding, error) {
+	rows, err := q.db.Query(ctx, `SELECT b.id, b.strategy_id, b.campaign_id, b.product_id, b.created_at FROM strategy_bindings b JOIN strategies s ON s.id = b.strategy_id WHERE s.workspace_id = $1 AND s.is_active = true`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StrategyBinding
+	for rows.Next() {
+		var i StrategyBinding
+		if err := rows.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
 func (q *Queries) DeleteStrategyBinding(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, `DELETE FROM strategy_bindings WHERE id = $1`, id)
 	return err
@@ -327,10 +344,69 @@ func (q *Queries) ListBidChangesByCampaign(ctx context.Context, arg ListBidChang
 	return items, rows.Err()
 }
 
+type ListBidChangesByWorkspaceParams struct {
+	WorkspaceID pgtype.UUID
+	Limit       int32
+	Offset      int32
+}
+
+func (q *Queries) ListBidChangesByWorkspace(ctx context.Context, arg ListBidChangesByWorkspaceParams) ([]BidChange, error) {
+	rows, err := q.db.Query(ctx, `SELECT id, workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id, recommendation_id, placement, old_bid, new_bid, reason, source, acos, roas, wb_status, created_at FROM bid_changes WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, arg.WorkspaceID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BidChange
+	for rows.Next() {
+		var i BidChange
+		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.CampaignID, &i.ProductID, &i.PhraseID, &i.StrategyID, &i.RecommendationID, &i.Placement, &i.OldBid, &i.NewBid, &i.Reason, &i.Source, &i.Acos, &i.Roas, &i.WbStatus, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+type ListBidChangesByWorkspaceSinceParams struct {
+	WorkspaceID pgtype.UUID
+	Since       pgtype.Timestamptz
+	Limit       int32
+	Offset      int32
+}
+
+func (q *Queries) ListBidChangesByWorkspaceSince(ctx context.Context, arg ListBidChangesByWorkspaceSinceParams) ([]BidChange, error) {
+	rows, err := q.db.Query(ctx, `SELECT id, workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id, recommendation_id, placement, old_bid, new_bid, reason, source, acos, roas, wb_status, created_at FROM bid_changes WHERE workspace_id = $1 AND created_at >= $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4`, arg.WorkspaceID, arg.Since, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BidChange
+	for rows.Next() {
+		var i BidChange
+		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.CampaignID, &i.ProductID, &i.PhraseID, &i.StrategyID, &i.RecommendationID, &i.Placement, &i.OldBid, &i.NewBid, &i.Reason, &i.Source, &i.Acos, &i.Roas, &i.WbStatus, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+type GetBidChangeByIDAndWorkspaceParams struct {
+	ID          pgtype.UUID
+	WorkspaceID pgtype.UUID
+}
+
+func (q *Queries) GetBidChangeByIDAndWorkspace(ctx context.Context, arg GetBidChangeByIDAndWorkspaceParams) (BidChange, error) {
+	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id, recommendation_id, placement, old_bid, new_bid, reason, source, acos, roas, wb_status, created_at FROM bid_changes WHERE id = $1 AND workspace_id = $2`, arg.ID, arg.WorkspaceID)
+	var i BidChange
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.CampaignID, &i.ProductID, &i.PhraseID, &i.StrategyID, &i.RecommendationID, &i.Placement, &i.OldBid, &i.NewBid, &i.Reason, &i.Source, &i.Acos, &i.Roas, &i.WbStatus, &i.CreatedAt)
+	return i, err
+}
+
 // --- Phrases ---
 
 func (q *Queries) CreateMinusPhrase(ctx context.Context, campaignID pgtype.UUID, phrase string) (CampaignMinusPhrase, error) {
-	row := q.db.QueryRow(ctx, `INSERT INTO campaign_minus_phrases (campaign_id, phrase) VALUES ($1,$2) ON CONFLICT (campaign_id, phrase) DO NOTHING RETURNING id, campaign_id, phrase, created_at`, campaignID, phrase)
+	row := q.db.QueryRow(ctx, `INSERT INTO campaign_minus_phrases (campaign_id, phrase) VALUES ($1,$2) ON CONFLICT (campaign_id, phrase) DO UPDATE SET phrase = EXCLUDED.phrase RETURNING id, campaign_id, phrase, created_at`, campaignID, phrase)
 	var i CampaignMinusPhrase
 	err := row.Scan(&i.ID, &i.CampaignID, &i.Phrase, &i.CreatedAt)
 	return i, err

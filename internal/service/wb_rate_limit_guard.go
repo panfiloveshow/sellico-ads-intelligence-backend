@@ -22,6 +22,7 @@ const (
 	wbEndpointBudget          = "adv_budget"
 	wbEndpointAdFinance       = "adv_finance"
 	wbEndpointAnalyticsFunnel = "analytics_sales_funnel"
+	wbEndpointTariffs         = "wb_tariffs"
 	wbEndpointCampaignActions = "adv_campaign_actions"
 )
 
@@ -100,4 +101,26 @@ func wbRateLimitWindow(endpoint string) (time.Time, int) {
 
 func blockedByWBRateLimitMessage(endpoint string, next time.Time) string {
 	return fmt.Sprintf("WB endpoint %s is rate limited until %s", endpoint, next.UTC().Format(time.RFC3339))
+}
+
+func wbEndpointRateLimitBlockReason(endpoint string, limit sqlcgen.WBAPIRateLimit, now time.Time) string {
+	if !limit.NextAllowedAt.Valid {
+		return ""
+	}
+	next := limit.NextAllowedAt.Time.UTC()
+	if !next.After(now.UTC()) {
+		return ""
+	}
+	retryAfter := int(math.Ceil(next.Sub(now.UTC()).Seconds()))
+	if retryAfter < 1 && limit.RetryAfterSeconds > 0 {
+		retryAfter = int(limit.RetryAfterSeconds)
+	}
+	message := blockedByWBRateLimitMessage(endpoint, next)
+	if retryAfter > 0 {
+		message = fmt.Sprintf("%s (retry_after_seconds=%d)", message, retryAfter)
+	}
+	if limit.LastStatus > 0 {
+		message = fmt.Sprintf("%s, last_status=%d", message, limit.LastStatus)
+	}
+	return message
 }

@@ -112,6 +112,23 @@ func SharedTenantScope(resolver WorkspaceResolver) func(http.Handler) http.Handl
 				return
 			}
 
+			if claims, ok := TokenClaimsFromContext(r.Context()); ok && claims.TokenType == "extension" {
+				if claims.WorkspaceID == nil {
+					writeForbidden(w, "access denied")
+					return
+				}
+				requestedWorkspaceID, err := uuid.Parse(raw)
+				if err != nil || requestedWorkspaceID != *claims.WorkspaceID {
+					writeForbidden(w, "access denied")
+					return
+				}
+				ctx := context.WithValue(r.Context(), WorkspaceIDKey, *claims.WorkspaceID)
+				ctx = context.WithValue(ctx, MemberRoleKey, domain.RoleViewer)
+				ctx = context.WithValue(ctx, WorkspaceRefKey, raw)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			principal, ok := PrincipalFromContext(r.Context())
 			if !ok {
 				writeUnauthorized(w, "authentication required")

@@ -57,9 +57,10 @@ type AdsReadService struct {
 	encryptionKey []byte
 	logger        zerolog.Logger
 
-	entityLimit    int32
-	statsLimit     int32
-	backendVersion string
+	entityLimit             int32
+	statsLimit              int32
+	backendVersion          string
+	unitEconomicsConfigured bool
 
 	cacheMu   sync.RWMutex
 	dataCache map[string]cachedWorkspaceData
@@ -91,6 +92,12 @@ func WithAdsReadBackendVersion(version string) AdsReadOption {
 	}
 }
 
+func WithAdsReadUnitEconomicsConfigured(configured bool) AdsReadOption {
+	return func(s *AdsReadService) {
+		s.unitEconomicsConfigured = configured
+	}
+}
+
 func NewAdsReadService(queries *sqlcgen.Queries, wbClient WBSyncClient, encryptionKey []byte, logger zerolog.Logger, opts ...AdsReadOption) *AdsReadService {
 	s := &AdsReadService{
 		queries:        queries,
@@ -109,22 +116,44 @@ func NewAdsReadService(queries *sqlcgen.Queries, wbClient WBSyncClient, encrypti
 }
 
 type adsWorkspaceData struct {
-	cabinets            map[uuid.UUID]domain.SellerCabinet
-	campaigns           []domain.Campaign
-	products            []domain.Product
-	phrases             []domain.Phrase
-	campaignStatsByID   map[uuid.UUID][]domain.CampaignStat
-	productStatsByID    map[uuid.UUID][]domain.ProductStat
-	productStatsByLink  map[productCampaignKey][]domain.ProductStat
-	productBusinessByID map[uuid.UUID][]domain.ProductBusinessSummary
-	phraseStatsByID     map[uuid.UUID][]domain.PhraseStat
-	campaignProductIDs  map[uuid.UUID][]uuid.UUID
-	productCampaignIDs  map[uuid.UUID][]uuid.UUID
-	campaignProductMeta map[productCampaignKey]domain.CampaignProductLinkMeta
-	campaignPhrases     map[uuid.UUID][]domain.Phrase
-	campaignBudgets     map[uuid.UUID]domain.CampaignBudgetSummary
-	lastAutoSync        *domain.SellerCabinetAutoSyncSummary
-	extensionEvidence   *workspaceExtensionEvidence
+	cabinets                   map[uuid.UUID]domain.SellerCabinet
+	campaigns                  []domain.Campaign
+	products                   []domain.Product
+	phrases                    []domain.Phrase
+	campaignStatsByID          map[uuid.UUID][]domain.CampaignStat
+	productStatsByID           map[uuid.UUID][]domain.ProductStat
+	productStatsByLink         map[productCampaignKey][]domain.ProductStat
+	productBusinessByID        map[uuid.UUID][]domain.ProductBusinessSummary
+	productEconomicsByWBID     map[int64]domain.ProductEconomics
+	productFunnelByID          map[uuid.UUID][]sqlcgen.ProductSalesFunnelPeriod
+	commissionTariffsBySubject map[string]sqlcgen.WBCommissionTariff
+	financeDocsByWBCampaignID  map[int64][]sqlcgen.WBAdFinanceDocument
+	phraseStatsByID            map[uuid.UUID][]domain.PhraseStat
+	campaignProductIDs         map[uuid.UUID][]uuid.UUID
+	productCampaignIDs         map[uuid.UUID][]uuid.UUID
+	campaignProductMeta        map[productCampaignKey]domain.CampaignProductLinkMeta
+	campaignPhrases            map[uuid.UUID][]domain.Phrase
+	campaignDRRLimits          map[uuid.UUID]campaignDRRLimit
+	campaignBudgets            map[uuid.UUID]domain.CampaignBudgetSummary
+	bidChanges                 []sqlcgen.BidChange
+	bidSnapshotsByPhrase       map[uuid.UUID]sqlcgen.BidSnapshot
+	productStockEvidence       map[uuid.UUID]productStockEvidence
+	activeRecommendations      []sqlcgen.Recommendation
+	lastAutoSync               *domain.SellerCabinetAutoSyncSummary
+	extensionEvidence          *workspaceExtensionEvidence
+}
+
+type productStockEvidence struct {
+	StockTotal int32
+	Source     string
+	CapturedAt time.Time
+}
+
+type campaignDRRLimit struct {
+	StrategyID   uuid.UUID
+	StrategyName string
+	Limit        float64
+	Source       string
 }
 
 type productCampaignKey struct {
@@ -155,7 +184,7 @@ func (s *AdsReadService) Overview(ctx context.Context, workspaceID uuid.UUID, da
 	products := s.buildProductSummaries(data, dateFrom, dateTo, ProductSummaryFilter{SellerCabinetID: cabinetFilter})
 	campaigns := s.buildCampaignSummaries(data, dateFrom, dateTo, CampaignSummaryFilter{SellerCabinetID: cabinetFilter})
 	queries := s.buildQuerySummaries(data, dateFrom, dateTo, QuerySummaryFilter{SellerCabinetID: cabinetFilter})
-	attention := s.buildAttentionItems(data, products, campaigns, queries)
+	attention := s.buildAttentionItems(data, products, campaigns, queries, attentionPeriod{dateFrom: dateFrom, dateTo: dateTo})
 
 	// Filter campaign stats to selected cabinet if specified
 	filteredStats := data.campaignStatsByID
@@ -171,6 +200,7 @@ func (s *AdsReadService) Overview(ctx context.Context, workspaceID uuid.UUID, da
 
 	dataStatus := buildAdsDataStatus(data, dateFrom, dateTo, cabinetFilter)
 	s.enrichAdsDataStatus(&dataStatus, dateFrom, dateTo, data.lastAutoSync)
+	activeRecommendations, overdueRecommendations := recommendationTaskCounts(data.activeRecommendations, time.Now())
 
 	return &domain.AdsOverview{
 		LastAutoSync:       data.lastAutoSync,
@@ -183,12 +213,17 @@ func (s *AdsReadService) Overview(ctx context.Context, workspaceID uuid.UUID, da
 		TopCampaigns:       trimCampaignSummaries(campaigns, 6),
 		TopQueries:         trimQuerySummaries(queries, 8),
 		Totals: domain.AdsOverviewTotals{
-			Cabinets:        len(cabinets),
-			Products:        len(products),
-			Campaigns:       len(campaigns),
-			Queries:         len(queries),
-			ActiveCampaigns: countActiveCampaigns(campaigns),
-			AttentionItems:  len(attention),
+			Cabinets:               len(cabinets),
+			Products:               len(products),
+			Campaigns:              len(campaigns),
+			Queries:                len(queries),
+			ActiveCampaigns:        countActiveCampaigns(campaigns),
+			AttentionItems:         len(attention),
+			ActiveRecommendations:  activeRecommendations,
+			OverdueRecommendations: overdueRecommendations,
+			DecisionQueueBuckets:   countDecisionQueueBuckets(attention, data.activeRecommendations),
+			TaskOwnerBuckets:       countRecommendationTaskOwnerBuckets(data.activeRecommendations),
+			ProductDecisions:       countProductDecisions(products),
 		},
 	}, nil
 }

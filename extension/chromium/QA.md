@@ -20,6 +20,14 @@ Consider the extension “QA-ready” when all items below are green on at least
   - `POST /api/v1/extension/bid-snapshots`
   - `POST /api/v1/extension/position-snapshots`
   - `POST /api/v1/extension/network-captures/batch`
+  - `POST /api/v1/extension/dom-row-snapshots`
+- **First-run guide**: panel shows the ordered evidence flow and advances only when real context/evidence is captured:
+  - Campaign
+  - Queries
+  - Bids
+  - Product card / position
+  - Sellico decision
+- **Support evidence debug**: Options can load `GET /api/v1/extension/evidence-debug/report` for a real campaign/product/query and render readiness, sections, checklist, issues, and next actions without synthetic metrics.
 
 ## Preconditions
 
@@ -51,8 +59,26 @@ Consider the extension “QA-ready” when all items below are green on at least
 
 1. Stay on a supported page for ~30–60 seconds.
 2. Confirm at least one batch succeeded:
-   - `ui-signals` and/or `network-captures/batch`
+   - `ui-signals`, `network-captures/batch`, and/or `dom-row-snapshots`
    - optionally bid/position snapshots (depends on what WB renders)
+
+### Scenario D — first-run evidence guide
+
+1. Open the Sellico panel on a WB promotion/campaign page.
+2. Confirm “Первый сбор evidence” is visible.
+3. Open a campaign, then query/cluster table, then bids/auction, then product/search position pages as available.
+4. Confirm each step changes from pending to done only after the corresponding real context or evidence count is present.
+
+### Scenario E — support evidence debug screen
+
+1. Open Options and confirm backend/workspace/auth are configured.
+2. Fill `Support evidence debug` with a real campaign, product, or query scope:
+   - campaign: `scope=campaign` + Campaign ID
+   - product: `scope=product` + Product ID
+   - query: `scope=query` + Query or Phrase ID
+3. Click `Загрузить evidence report`.
+4. Confirm the screen shows readiness, evidence sections, checklist, issues, and next actions from `GET /api/v1/extension/evidence-debug/report`.
+5. Confirm missing evidence is shown as missing/todo rather than fabricated business metrics.
 
 ## Диагностика: Нет данных в панели
 
@@ -62,8 +88,8 @@ Consider the extension “QA-ready” when all items below are green on at least
 
 - Открой Options (`chrome://extensions` → Sellico → Details → Extension options).
 - Убедись, что `Workspace ID` заполнен (UUID формата `xxxxxxxx-xxxx-...`).
-- Если `Access token` пуст — расширение попытается взять токен из cookies `sellico.ru`. Для этого нужно быть залогиненным на `https://sellico.ru`.
-- Если токен не подхватился автоматически — вставь его вручную (без `Bearer`).
+- Если `Access token` пуст — нажми «Подключить через Sellico» в Options или на странице Sellico. Расширение не читает cookies автоматически.
+- Для ручной диагностики можно вставить extension JWT вручную (без `Bearer`).
 
 ### 2. Проверь ответы API в DevTools
 
@@ -125,4 +151,3 @@ docker compose ps
 - Backend URL (Options).
 - HTTP status + response body for failing requests.
 - Screenshot of panel state + console errors (if any).
-

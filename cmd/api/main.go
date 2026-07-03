@@ -57,6 +57,12 @@ func main() {
 	// (handler not removed) but now serve no purpose for production users; any
 	// request that arrives without a valid Sellico bearer hits 401.
 	sellicoClient := sellico.NewClient(cfg.SellicoAPIBaseURL, cfg.SellicoAPITimeout)
+	sellicoTokenManager := sellico.NewServiceTokenManager(sellicoClient, sellico.ServiceTokenConfig{
+		StaticToken: cfg.SellicoServiceToken,
+		Email:       cfg.SellicoServiceEmail,
+		Password:    cfg.SellicoServicePassword,
+	})
+	unitEconomicsReadinessConfigured := sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != ""
 	authService := service.NewAuthService(deps.Queries, cfg.JWTSecret, cfg.JWTAccessTokenTTL, cfg.JWTRefreshTokenTTL)
 	workspaceService := service.NewWorkspaceService(deps.Queries)
 	sellicoBridgeService := service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
@@ -64,6 +70,7 @@ func main() {
 	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
 		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
 		service.WithAdsReadBackendVersion(cfg.AppVersion),
+		service.WithAdsReadUnitEconomicsConfigured(unitEconomicsReadinessConfigured),
 	)
 	syncJobService := service.NewSyncJobService(deps.Queries, workspaceSyncEnqueuerFunc(func(workspaceID uuid.UUID, jobRunID *uuid.UUID, metadata map[string]any) (string, error) {
 		task, taskErr := worker.NewWorkspaceTaskWithMetadata(worker.TaskSyncWorkspace, workspaceID, jobRunID, metadata)
@@ -100,6 +107,7 @@ func main() {
 	positionService := service.NewPositionService(deps.Queries, recommendationEnqueuer, deps.Logger)
 	serpService := service.NewSERPService(deps.Queries, deps.DB, recommendationEnqueuer, deps.Logger)
 	recommendationService := service.NewRecommendationService(deps.Queries)
+	notificationService := service.NewNotificationService(deps.Queries, nil, deps.Logger)
 	recommendationJobService := service.NewRecommendationJobService(deps.Queries, recommendationEnqueuer)
 	exportService := service.NewExportService(deps.Queries, cfg.ExportStoragePath, exportEnqueuerFunc(func(workspaceID, exportID uuid.UUID) error {
 		task, taskErr := worker.NewExportTask(workspaceID, exportID)
@@ -111,13 +119,21 @@ func main() {
 	}))
 	countService := service.NewCountService(deps.Queries)
 	strategyService := service.NewStrategyService(deps.Queries)
-	campaignActionService := service.NewCampaignActionService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger)
+	campaignActionOpts := []service.CampaignActionOption{}
+	if unitEconomicsReadinessConfigured {
+		campaignActionOpts = append(campaignActionOpts, service.WithCampaignActionUnitEconomicsReadinessProvider(
+			service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger),
+		))
+		deps.Logger.Info().Str("path", cfg.SellicoUnitEconomicsReadinessPath).Msg("sellico unit-economics readiness enabled for campaign actions")
+	}
+	campaignActionService := service.NewCampaignActionService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger, campaignActionOpts...)
 	campaignPhraseService := service.NewCampaignPhraseService(deps.Queries)
 	semanticsService := service.NewSemanticsService(deps.Queries, deps.Logger)
 	competitorService := service.NewCompetitorService(deps.Queries, deps.Logger)
 	seoAnalyzerService := service.NewSEOAnalyzerService(deps.Queries, semanticsService, deps.Logger)
 	deliveryService := service.NewDeliveryService(deps.Queries, wbClient, deps.Logger)
 	productEventService := service.NewProductEventService(deps.Queries, deps.Logger)
+	productEconomicsService := service.NewProductEconomicsService(deps.Queries)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)
@@ -198,7 +214,7 @@ func main() {
 		AuthHandler:              handler.NewAuthHandler(authService),
 		WorkspaceHandler:         handler.NewWorkspaceHandler(workspaceService),
 		SellerCabinetHandler:     handler.NewSellerCabinetHandler(sellerCabinetSyncFacade{sellerCabinetService, syncJobService}),
-		AdsReadHandler:           handler.NewAdsReadHandler(adsReadService),
+		AdsReadHandler:           handler.NewAdsReadHandler(adsReadService).WithClientReports(notificationService, recommendationService),
 		CampaignHandler:          handler.NewCampaignHandler(campaignService).WithCounter(countService),
 		PhraseHandler:            handler.NewPhraseHandler(phraseService),
 		BidHandler:               handler.NewBidHandler(bidService),
@@ -207,7 +223,7 @@ func main() {
 		SERPHandler:              handler.NewSERPHandler(serpService),
 		RecommendationHandler:    handler.NewRecommendationHandler(recommendationTriggerFacade{recommendationService, recommendationJobService}).WithCounter(countService),
 		ExportHandler:            handler.NewExportHandler(exportService).WithCounter(countService),
-		ExtensionHandler:         handler.NewExtensionHandler(extensionService),
+		ExtensionHandler:         handler.NewExtensionHandler(extensionService, cfg.JWTSecret),
 		AuditLogHandler:          handler.NewAuditLogHandler(auditLogService),
 		JobRunHandler:            handler.NewJobRunHandler(jobRunService),
 		EventsHandler:            handler.NewEventsHandler(eventBroker),
@@ -219,6 +235,7 @@ func main() {
 		DeliveryHandler:          handler.NewDeliveryHandler(deliveryService),
 		SEOHandler:               handler.NewSEOHandler(seoAnalyzerService),
 		ProductEventHandler:      handler.NewProductEventHandler(productEventService),
+		ProductEconomicsHandler:  handler.NewProductEconomicsHandler(productEconomicsService),
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)

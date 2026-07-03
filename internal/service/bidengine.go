@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
 // BidExecutor sends bid changes to Wildberries API.
@@ -44,13 +46,35 @@ type BidDecision struct {
 
 // BidContext contains the data needed to calculate a bid.
 type BidContext struct {
-	CurrentBid  int
-	Impressions int64
-	Clicks      int64
-	Spend       float64
-	Revenue     float64
-	Orders      int64
-	Placement   string
+	CurrentBid        int
+	Impressions       int64
+	Clicks            int64
+	Spend             float64
+	Revenue           float64
+	Orders            int64
+	Placement         string
+	IncreaseGuardrail *BidIncreaseGuardrail
+}
+
+// BidIncreaseGuardrail blocks scale-up decisions when real readiness data is missing.
+type BidIncreaseGuardrail struct {
+	Allowed bool
+	Reason  string
+}
+
+const (
+	bidIncreaseMinRating       = 4.2
+	bidIncreaseMinReviewsCount = 10
+)
+
+func productReputationBidIncreaseBlockReason(product sqlcgen.Product) string {
+	if product.Rating.Valid && product.Rating.Float64 > 0 && product.Rating.Float64 < bidIncreaseMinRating {
+		return fmt.Sprintf("real product rating %.1f is below %.1f; increase is blocked", product.Rating.Float64, bidIncreaseMinRating)
+	}
+	if product.ReviewsCount.Valid && product.ReviewsCount.Int32 >= 0 && product.ReviewsCount.Int32 < bidIncreaseMinReviewsCount {
+		return fmt.Sprintf("real product reviews count %d is below %d; increase is blocked", product.ReviewsCount.Int32, bidIncreaseMinReviewsCount)
+	}
+	return ""
 }
 
 // CalculateBid computes a new bid based on strategy type and current performance.
@@ -82,11 +106,44 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 		return nil
 	}
 
-	// Apply limits
-	newBid = clampBid(newBid, params.MinBid, params.MaxBid)
-	newBid = limitChange(ctx.CurrentBid, newBid, params.MaxChangePercent)
+	// Apply limits and keep the reason auditable.
+	newBid, reason = applyBidDecisionLimits(ctx.CurrentBid, newBid, reason, params)
 
 	if newBid == ctx.CurrentBid {
+		return nil
+	}
+
+	if newBid > ctx.CurrentBid {
+		if guardrailReason := maxACoSIncreaseGuardrailReason(params, ctx); guardrailReason != "" {
+			e.logger.Info().
+				Str("placement", ctx.Placement).
+				Int("current_bid", ctx.CurrentBid).
+				Int("calculated_bid", newBid).
+				Str("reason", guardrailReason).
+				Msg("bid increase blocked by max_acos guardrail")
+			return nil
+		}
+	}
+
+	if newBid > ctx.CurrentBid {
+		if guardrailReason := maxCostIncreaseGuardrailReason(params, ctx); guardrailReason != "" {
+			e.logger.Info().
+				Str("placement", ctx.Placement).
+				Int("current_bid", ctx.CurrentBid).
+				Int("calculated_bid", newBid).
+				Str("reason", guardrailReason).
+				Msg("bid increase blocked by max cost guardrail")
+			return nil
+		}
+	}
+
+	if newBid > ctx.CurrentBid && ctx.IncreaseGuardrail != nil && !ctx.IncreaseGuardrail.Allowed {
+		e.logger.Info().
+			Str("placement", ctx.Placement).
+			Int("current_bid", ctx.CurrentBid).
+			Int("calculated_bid", newBid).
+			Str("reason", ctx.IncreaseGuardrail.Reason).
+			Msg("bid increase blocked by guardrail")
 		return nil
 	}
 
@@ -233,14 +290,36 @@ func (e *BidEngine) calculateDaypartingBid(params domain.StrategyParams, ctx Bid
 	return newBid, reason
 }
 
-func clampBid(bid, min, max int) int {
-	if bid < min {
-		return min
+func applyBidDecisionLimits(oldBid, calculatedBid int, reason string, params domain.StrategyParams) (int, string) {
+	limitedBid := calculatedBid
+	notes := make([]string, 0, 2)
+
+	// Smooth the per-step change first, then enforce the absolute Min/Max bounds
+	// LAST. The configured floor/ceiling is a hard guarantee and must win even when
+	// honoring it requires a step larger than MaxChangePercent (e.g. raising a bid
+	// that currently sits far below MinBid) — otherwise the change cap could leave
+	// the bid below the configured minimum.
+	changeLimitedBid := limitChange(oldBid, limitedBid, params.MaxChangePercent)
+	if changeLimitedBid != limitedBid {
+		limitedBid = changeLimitedBid
+		notes = append(notes, fmt.Sprintf("max_change_percent %.1f applied", params.MaxChangePercent))
 	}
-	if bid > max {
-		return max
+
+	if params.MinBid > 0 && limitedBid < params.MinBid {
+		limitedBid = params.MinBid
+		notes = append(notes, fmt.Sprintf("min_bid %d applied", params.MinBid))
 	}
-	return bid
+	if params.MaxBid > 0 && limitedBid > params.MaxBid {
+		limitedBid = params.MaxBid
+		notes = append(notes, fmt.Sprintf("max_bid %d applied", params.MaxBid))
+	}
+	if len(notes) == 0 {
+		return limitedBid, reason
+	}
+	if reason == "" {
+		return limitedBid, fmt.Sprintf("Bid limits: %s", strings.Join(notes, "; "))
+	}
+	return limitedBid, fmt.Sprintf("%s; limits: %s", reason, strings.Join(notes, "; "))
 }
 
 func limitChange(oldBid, newBid int, maxChangePercent float64) int {
@@ -258,4 +337,39 @@ func limitChange(oldBid, newBid int, maxChangePercent float64) int {
 		return oldBid - maxDelta
 	}
 	return newBid
+}
+
+func maxACoSIncreaseGuardrailReason(params domain.StrategyParams, ctx BidContext) string {
+	if params.MaxACoS <= 0 || ctx.Revenue <= 0 {
+		return ""
+	}
+
+	currentACoS := ctx.Spend / ctx.Revenue * 100
+	if currentACoS < params.MaxACoS {
+		return ""
+	}
+
+	return fmt.Sprintf("current ACoS %.1f%% is at or above max_acos %.1f%%", currentACoS, params.MaxACoS)
+}
+
+func maxCostIncreaseGuardrailReason(params domain.StrategyParams, ctx BidContext) string {
+	if params.MaxCPC > 0 {
+		if ctx.Clicks <= 0 {
+			return "current CPC evidence is unavailable while max_cpc is configured"
+		}
+		cpc := ctx.Spend / float64(ctx.Clicks)
+		if cpc >= params.MaxCPC {
+			return fmt.Sprintf("current CPC %.2f is at or above max_cpc %.2f", cpc, params.MaxCPC)
+		}
+	}
+	if params.MaxCPO > 0 {
+		if ctx.Orders <= 0 {
+			return "current CPO evidence is unavailable while max_cpo is configured"
+		}
+		cpo := ctx.Spend / float64(ctx.Orders)
+		if cpo >= params.MaxCPO {
+			return fmt.Sprintf("current CPO %.2f is at or above max_cpo %.2f", cpo, params.MaxCPO)
+		}
+	}
+	return ""
 }

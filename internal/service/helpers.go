@@ -45,6 +45,14 @@ func int4ToPtr(v pgtype.Int4) *int {
 	return &value
 }
 
+func float8ToPtr(v pgtype.Float8) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	value := v.Float64
+	return &value
+}
+
 func textToPtr(v pgtype.Text) *string {
 	if !v.Valid {
 		return nil
@@ -168,6 +176,8 @@ func productFromSqlc(p sqlcgen.Product) domain.Product {
 		Category:        textToPtr(p.Category),
 		ImageURL:        textToPtr(p.ImageUrl),
 		Price:           int8ToPtr(p.Price),
+		Rating:          float8ToPtr(p.Rating),
+		ReviewsCount:    int4ToPtr(p.ReviewsCount),
 		CreatedAt:       p.CreatedAt.Time,
 		UpdatedAt:       p.UpdatedAt.Time,
 	}
@@ -435,6 +445,31 @@ func extensionNetworkCaptureFromSqlc(e sqlcgen.ExtensionNetworkCapture) domain.E
 		Query:           textToPtr(e.Query),
 		Region:          textToPtr(e.Region),
 		Payload:         json.RawMessage(e.Payload),
+		CapturedAt:      e.CapturedAt.Time,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
+func extensionDOMRowSnapshotFromSqlc(e sqlcgen.ExtensionDomRowSnapshot) domain.ExtensionDOMRowSnapshot {
+	return domain.ExtensionDOMRowSnapshot{
+		ID:              uuidFromPgtype(e.ID),
+		SessionID:       uuidFromPgtype(e.SessionID),
+		WorkspaceID:     uuidFromPgtype(e.WorkspaceID),
+		UserID:          uuidFromPgtype(e.UserID),
+		SellerCabinetID: uuidToPtr(e.SellerCabinetID),
+		CampaignID:      uuidToPtr(e.CampaignID),
+		PhraseID:        uuidToPtr(e.PhraseID),
+		ProductID:       uuidToPtr(e.ProductID),
+		PageType:        e.PageType,
+		TableRole:       e.TableRole,
+		RowKey:          e.RowKey,
+		Query:           textToPtr(e.Query),
+		Region:          textToPtr(e.Region),
+		VisibleText:     e.VisibleText,
+		Cells:           json.RawMessage(e.Cells),
+		Metadata:        json.RawMessage(e.Metadata),
+		Source:          e.Source,
+		Confidence:      numericToFloat64(e.Confidence),
 		CapturedAt:      e.CapturedAt.Time,
 		CreatedAt:       e.CreatedAt.Time,
 	}

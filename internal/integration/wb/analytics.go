@@ -58,19 +58,25 @@ type salesFunnelProductV3Item struct {
 	} `json:"product"`
 	Statistic struct {
 		Selected struct {
-			CartCount int64 `json:"cartCount"`
+			OpenCount  int64 `json:"openCount"`
+			CartCount  int64 `json:"cartCount"`
+			OrderCount int64 `json:"orderCount"`
 		} `json:"selected"`
 	} `json:"statistic"`
-	NmID      int64 `json:"nmID"`
-	NMID      int64 `json:"nmId"`
-	CartCount int64 `json:"cartCount"`
+	NmID       int64 `json:"nmID"`
+	NMID       int64 `json:"nmId"`
+	OpenCount  int64 `json:"openCount"`
+	CartCount  int64 `json:"cartCount"`
+	OrderCount int64 `json:"orderCount"`
 }
 
 type WBSalesFunnelProductDTO struct {
-	NmID      int64  `json:"nmId"`
-	DateFrom  string `json:"dateFrom"`
-	DateTo    string `json:"dateTo"`
-	CartCount int64  `json:"cartCount"`
+	NmID       int64  `json:"nmId"`
+	DateFrom   string `json:"dateFrom"`
+	DateTo     string `json:"dateTo"`
+	OpenCount  int64  `json:"openCount"`
+	CartCount  int64  `json:"cartCount"`
+	OrderCount int64  `json:"orderCount"`
 }
 
 // GetSellerAnalytics fetches Seller Analytics data from the WB Analytics API.
@@ -130,15 +136,25 @@ func (c *Client) GetSalesFunnelProductsV3(ctx context.Context, token string, par
 		if nmID == 0 {
 			continue
 		}
+		openCount := item.Statistic.Selected.OpenCount
+		if openCount == 0 {
+			openCount = item.OpenCount
+		}
 		cartCount := item.Statistic.Selected.CartCount
 		if cartCount == 0 {
 			cartCount = item.CartCount
 		}
+		orderCount := item.Statistic.Selected.OrderCount
+		if orderCount == 0 {
+			orderCount = item.OrderCount
+		}
 		result = append(result, WBSalesFunnelProductDTO{
-			NmID:      nmID,
-			DateFrom:  params.DateFrom,
-			DateTo:    params.DateTo,
-			CartCount: cartCount,
+			NmID:       nmID,
+			DateFrom:   params.DateFrom,
+			DateTo:     params.DateTo,
+			OpenCount:  openCount,
+			CartCount:  cartCount,
+			OrderCount: orderCount,
 		})
 	}
 

@@ -36,3 +36,5 @@ nginx/acme/*
 # Alertmanager bot token (live secret, never committed)
 monitoring/alertmanager-secrets/*
 !monitoring/alertmanager-secrets/.gitkeep
+.gocache/
+.claude-flow/

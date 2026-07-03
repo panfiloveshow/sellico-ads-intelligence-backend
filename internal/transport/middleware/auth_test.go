@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/envelope"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/jwt"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,15 @@ import (
 )
 
 const testSecret = "test-secret-key-for-jwt-middleware"
+
+type fakeAuthenticator struct {
+	called bool
+}
+
+func (f *fakeAuthenticator) Authenticate(context.Context, string) (*domain.AuthPrincipal, error) {
+	f.called = true
+	return nil, assert.AnError
+}
 
 // dummyHandler is a handler that records whether it was called and the user_id from context.
 func dummyHandler() (http.Handler, *bool, *uuid.UUID) {
@@ -182,6 +192,42 @@ func TestAuth_BearerCaseInsensitive(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, *called)
 	assert.Equal(t, userID, *gotUserID)
+}
+
+func TestSharedOrLocalAuth_ExtensionTokenOnlyWorksOnExtensionRoutes(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	token, err := jwt.GenerateExtensionToken(userID, workspaceID, domain.RoleOwner, testSecret, 15*time.Minute)
+	require.NoError(t, err)
+
+	handler, called, gotUserID := dummyHandler()
+	authenticator := &fakeAuthenticator{}
+	mw := SharedOrLocalAuth(authenticator, testSecret)(handler)
+
+	extensionReq := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/extension/widgets/campaign", nil)
+	extensionReq.Header.Set("Authorization", "Bearer "+token)
+	extensionRec := httptest.NewRecorder()
+
+	mw.ServeHTTP(extensionRec, extensionReq)
+
+	assert.Equal(t, http.StatusOK, extensionRec.Code)
+	assert.True(t, *called)
+	assert.Equal(t, userID, *gotUserID)
+	assert.False(t, authenticator.called)
+
+	handler, called, _ = dummyHandler()
+	authenticator = &fakeAuthenticator{}
+	mw = SharedOrLocalAuth(authenticator, testSecret)(handler)
+	nonExtensionReq := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/campaigns", nil)
+	nonExtensionReq.Header.Set("Authorization", "Bearer "+token)
+	nonExtensionRec := httptest.NewRecorder()
+
+	mw.ServeHTTP(nonExtensionRec, nonExtensionReq)
+
+	assert.Equal(t, http.StatusUnauthorized, nonExtensionRec.Code)
+	assert.False(t, *called)
+	assert.False(t, authenticator.called)
+	assertErrorResponse(t, nonExtensionRec, "UNAUTHORIZED", "invalid token type")
 }
 
 func TestUserIDFromContext_NotPresent(t *testing.T) {

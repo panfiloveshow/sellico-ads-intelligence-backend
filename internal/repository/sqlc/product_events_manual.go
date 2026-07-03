@@ -140,17 +140,71 @@ func (q *Queries) GetLatestProductSnapshot(ctx context.Context, productID pgtype
 	return i, err
 }
 
+type ProductStockEvidenceRow struct {
+	ProductID  pgtype.UUID        `json:"product_id"`
+	StockTotal int32              `json:"stock_total"`
+	Source     string             `json:"source"`
+	CapturedAt pgtype.Timestamptz `json:"captured_at"`
+}
+
+func (q *Queries) ListLatestProductStockEvidenceByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]ProductStockEvidenceRow, error) {
+	rows, err := q.db.Query(ctx, `
+		WITH latest_snapshots AS (
+			SELECT DISTINCT ON (ps.product_id)
+				ps.product_id,
+				ps.stock_total::int AS stock_total,
+				ps.captured_at
+			FROM product_snapshots ps
+			JOIN products p ON p.id = ps.product_id
+			WHERE p.workspace_id = $1
+				AND ps.stock_total IS NOT NULL
+			ORDER BY ps.product_id, ps.captured_at DESC
+		),
+		latest_delivery AS (
+			SELECT DISTINCT ON (dd.product_id)
+				dd.product_id,
+				0::int AS stock_total,
+				dd.captured_at
+			FROM delivery_data dd
+			WHERE dd.workspace_id = $1
+				AND dd.in_stock = false
+			ORDER BY dd.product_id, dd.captured_at DESC
+		)
+		SELECT product_id, stock_total, 'product_snapshot' AS source, captured_at
+		FROM latest_snapshots
+		UNION ALL
+		SELECT ld.product_id, ld.stock_total, 'delivery_data' AS source, ld.captured_at
+		FROM latest_delivery ld
+		WHERE NOT EXISTS (
+			SELECT 1 FROM latest_snapshots ls WHERE ls.product_id = ld.product_id
+		)`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []ProductStockEvidenceRow
+	for rows.Next() {
+		var i ProductStockEvidenceRow
+		if err := rows.Scan(&i.ProductID, &i.StockTotal, &i.Source, &i.CapturedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
 type CreateProductSnapshotParams struct {
-	ProductID   pgtype.UUID
-	Title       pgtype.Text
-	Brand       pgtype.Text
-	Category    pgtype.Text
-	Price       pgtype.Int8
-	Rating      pgtype.Float8
+	ProductID    pgtype.UUID
+	Title        pgtype.Text
+	Brand        pgtype.Text
+	Category     pgtype.Text
+	Price        pgtype.Int8
+	Rating       pgtype.Float8
 	ReviewsCount pgtype.Int4
-	StockTotal  pgtype.Int4
-	ImageURL    pgtype.Text
-	ContentHash pgtype.Text
+	StockTotal   pgtype.Int4
+	ImageURL     pgtype.Text
+	ContentHash  pgtype.Text
 }
 
 func (q *Queries) CreateProductSnapshot(ctx context.Context, arg CreateProductSnapshotParams) error {

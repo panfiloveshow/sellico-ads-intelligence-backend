@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -102,9 +103,5 @@ func (s *ProductService) ListRecommendations(ctx context.Context, workspaceID, p
 		return nil, apperror.New(apperror.ErrInternal, "failed to list product recommendations")
 	}
 
-	result := make([]domain.Recommendation, len(rows))
-	for i, row := range rows {
-		result[i] = recommendationFromSqlc(row)
-	}
-	return result, nil
+	return filterRecommendationsForTaskView(recommendationsFromSqlcRows(rows), filter, time.Now()), nil
 }

@@ -22,6 +22,8 @@ const (
 	UserIDKey contextKey = "user_id"
 	// PrincipalKey stores the authenticated shared-auth principal.
 	PrincipalKey contextKey = "auth_principal"
+	// TokenClaimsKey stores claims for local JWTs accepted by hybrid auth.
+	TokenClaimsKey contextKey = "token_claims"
 )
 
 // AuthPrincipal is an alias for domain.AuthPrincipal.
@@ -43,6 +45,12 @@ func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 func PrincipalFromContext(ctx context.Context) (AuthPrincipal, bool) {
 	principal, ok := ctx.Value(PrincipalKey).(AuthPrincipal)
 	return principal, ok
+}
+
+// TokenClaimsFromContext extracts local JWT claims from request context.
+func TokenClaimsFromContext(ctx context.Context) (*jwt.TokenClaims, bool) {
+	claims, ok := ctx.Value(TokenClaimsKey).(*jwt.TokenClaims)
+	return claims, ok
 }
 
 // Auth returns middleware that validates JWT Bearer tokens from the Authorization header.
@@ -107,6 +115,60 @@ func SharedAuth(authenticator Authenticator) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// SharedOrLocalAuth accepts Sellico shared tokens and Sellico Ads local JWTs.
+// Extension tokens are local JWTs scoped to one workspace and are accepted only
+// on extension routes. They must never become general Sellico user sessions.
+func SharedOrLocalAuth(authenticator Authenticator, jwtSecret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token, err := extractBearerToken(r)
+			if err != nil {
+				writeUnauthorized(w, err.Error())
+				return
+			}
+
+			if jwtSecret != "" {
+				claims, err := jwt.ValidateToken(token, jwtSecret)
+				if err == nil && claims.TokenType == "access" {
+					ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)
+					ctx = context.WithValue(ctx, TokenClaimsKey, claims)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				if err == nil && claims.TokenType == "extension" {
+					if !isExtensionRoutePath(r.URL.Path) {
+						writeUnauthorized(w, "invalid token type")
+						return
+					}
+					ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)
+					ctx = context.WithValue(ctx, TokenClaimsKey, claims)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			principal, err := authenticator.Authenticate(r.Context(), token)
+			if err != nil {
+				writeUnauthorized(w, "invalid or expired token")
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), UserIDKey, principal.UserID)
+			ctx = context.WithValue(ctx, PrincipalKey, *principal)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func isExtensionRoutePath(path string) bool {
+	for _, segment := range strings.Split(strings.Trim(path, "/"), "/") {
+		if segment == "extension" {
+			return true
+		}
+	}
+	return false
 }
 
 func extractBearerToken(r *http.Request) (string, error) {

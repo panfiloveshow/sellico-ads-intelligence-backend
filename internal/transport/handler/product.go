@@ -139,10 +139,18 @@ func (h *ProductHandler) ListRecommendations(w http.ResponseWriter, r *http.Requ
 	}
 
 	pg := pagination.Parse(r)
+	taskFilters, err := recommendationTaskFiltersFromQuery(r)
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, err.Error())
+		return
+	}
 	recommendations, err := h.svc.ListRecommendations(r.Context(), workspaceID, productID, service.RecommendationListFilter{
-		Type:     r.URL.Query().Get("type"),
-		Severity: r.URL.Query().Get("severity"),
-		Status:   r.URL.Query().Get("status"),
+		Type:          r.URL.Query().Get("type"),
+		Severity:      r.URL.Query().Get("severity"),
+		Status:        r.URL.Query().Get("status"),
+		TaskCategory:  taskFilters.TaskCategory,
+		TaskOwnerRole: taskFilters.TaskOwnerRole,
+		Overdue:       taskFilters.Overdue,
 	}, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)

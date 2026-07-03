@@ -9,6 +9,7 @@ import (
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	emailclient "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/email"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/telegram"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
@@ -30,8 +31,17 @@ func main() {
 
 	wbClient := wb.NewClient(cfg, deps.Logger)
 	tgClient := telegram.NewClient()
+	mailClient := emailclient.NewClient(emailclient.Config{
+		Host:      cfg.SMTPHost,
+		Port:      cfg.SMTPPort,
+		Username:  cfg.SMTPUsername,
+		Password:  cfg.SMTPPassword,
+		FromEmail: cfg.SMTPFromEmail,
+		FromName:  cfg.SMTPFromName,
+		Timeout:   cfg.SMTPTimeout,
+	})
 	sellicoClient := sellico.NewClient(cfg.SellicoAPIBaseURL, cfg.SellicoAPITimeout)
-	notificationService := service.NewNotificationService(deps.Queries, tgClient, deps.Logger)
+	notificationService := service.NewNotificationService(deps.Queries, tgClient, deps.Logger, service.WithNotificationEmailSender(mailClient))
 	syncService := service.NewSyncService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger)
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
 	// Service-account discovery (financial-dashboard pattern). When neither
@@ -44,6 +54,12 @@ func main() {
 		Email:       cfg.SellicoServiceEmail,
 		Password:    cfg.SellicoServicePassword,
 	})
+	unitEconomicsReadinessConfigured := sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != ""
+	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
+		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
+		service.WithAdsReadBackendVersion(cfg.AppVersion),
+		service.WithAdsReadUnitEconomicsConfigured(unitEconomicsReadinessConfigured),
+	)
 	integrationRefreshService := service.NewIntegrationRefreshService(deps.Queries, sellicoClient, sellerCabinetService, []byte(cfg.EncryptionKey), deps.Logger)
 	if sellicoTokenManager.IsConfigured() {
 		integrationRefreshService = integrationRefreshService.WithServiceAccount(sellicoTokenManager)
@@ -60,9 +76,18 @@ func main() {
 	seoAnalyzerService := service.NewSEOAnalyzerService(deps.Queries, semanticsService, deps.Logger)
 	strategyService := service.NewStrategyService(deps.Queries)
 	bidEngine := service.NewBidEngine(deps.Logger)
-	bidAutomationService := service.NewBidAutomationService(deps.Queries, strategyService, bidEngine, wbClient, []byte(cfg.EncryptionKey), deps.Logger)
+	bidAutomationOpts := []service.BidAutomationOption{}
+	if unitEconomicsReadinessConfigured {
+		bidAutomationOpts = append(bidAutomationOpts, service.WithUnitEconomicsReadinessProvider(
+			service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger),
+		))
+		deps.Logger.Info().Str("path", cfg.SellicoUnitEconomicsReadinessPath).Msg("sellico unit-economics readiness enabled for bid automation")
+	} else {
+		deps.Logger.Info().Msg("sellico unit-economics readiness NOT configured; bid automation will not increase bids")
+	}
+	bidAutomationService := service.NewBidAutomationService(deps.Queries, strategyService, bidEngine, wbClient, []byte(cfg.EncryptionKey), deps.Logger, bidAutomationOpts...)
 	exportGenerator := service.NewExportGenerator(deps.Queries, cfg.ExportStoragePath)
-	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, semanticsService, competitorService, deliveryService, seoAnalyzerService, deps.Logger)
+	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap worker runtime: %v\n", err)
 		os.Exit(1)

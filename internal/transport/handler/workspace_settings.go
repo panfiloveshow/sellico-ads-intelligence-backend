@@ -64,6 +64,10 @@ func (h *WorkspaceSettingsHandler) UpdateSettings(w http.ResponseWriter, r *http
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
 		return
 	}
+	if errs := input.Validate(); len(errs) > 0 {
+		dto.WriteValidationError(w, errs)
+		return
+	}
 
 	settings, err := h.service.UpdateSettings(r.Context(), userID, workspaceID, input)
 	if err != nil {

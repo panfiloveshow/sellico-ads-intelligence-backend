@@ -26,7 +26,7 @@ type Runtime struct {
 	mux           *asynq.ServeMux
 }
 
-func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, logger zerolog.Logger) (*Runtime, error) {
+func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
 	redisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis uri for worker: %w", err)
@@ -41,7 +41,8 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		WithCompetitorExtractor(competitors).
 		WithDeliveryCollector(delivery).
 		WithSEOAnalyzer(seo).
-		WithExtendedEngine(extendedEngine)
+		WithExtendedEngine(extendedEngine).
+		WithReportDependencies(adsRead, recommendations, notifier)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TaskSyncWorkspace, processor.HandleSyncWorkspace)
 	mux.HandleFunc(TaskSyncCampaigns, processor.HandleSyncCampaigns)
@@ -69,6 +70,8 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepSEOAnalysis, processor.HandleSweepSEOAnalysis)
 	mux.HandleFunc(TaskExtendedRecommendations, processor.HandleExtendedRecommendations)
 	mux.HandleFunc(TaskSweepExtendedRecommendations, processor.HandleSweepExtendedRecommendations)
+	mux.HandleFunc(TaskSendClientAuditReport, processor.HandleSendClientAuditReport)
+	mux.HandleFunc(TaskSweepClientAuditReports, processor.HandleSweepClientAuditReports)
 
 	queueWeights := map[string]int{
 		QueueWBSync:          1,
@@ -117,6 +120,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		{syncInterval, TaskSweepCollectDelivery, QueueDelivery},
 		{recInterval, TaskSweepSEOAnalysis, QueueSEO},
 		{recInterval, TaskSweepExtendedRecommendations, QueueRecommendations},
+		{syncInterval, TaskSweepClientAuditReports, QueueRecommendations},
 	}
 	for _, entry := range sweepEntries {
 		if _, err := scheduler.Register(entry.cron, NewSweepTask(entry.taskType), asynq.Queue(entry.queue)); err != nil {

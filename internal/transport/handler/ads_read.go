@@ -29,6 +29,14 @@ type adsReadServicer interface {
 	DebugNormQuery(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter service.QuerySummaryFilter) (*service.NormQueryDebugReport, error)
 }
 
+type adsRecommendationLister interface {
+	List(ctx context.Context, workspaceID uuid.UUID, filter service.RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error)
+}
+
+type adsClientReportBuilder interface {
+	BuildAgencyClientReport(reportDate, dateFrom, dateTo time.Time, overview domain.AdsOverview, recommendations []domain.Recommendation) string
+}
+
 func (h *AdsReadHandler) DataHealth(w http.ResponseWriter, r *http.Request) {
 	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
 	if !ok {
@@ -50,11 +58,19 @@ func (h *AdsReadHandler) DataHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 type AdsReadHandler struct {
-	svc adsReadServicer
+	svc                 adsReadServicer
+	recommendations     adsRecommendationLister
+	clientReportBuilder adsClientReportBuilder
 }
 
 func NewAdsReadHandler(svc adsReadServicer) *AdsReadHandler {
 	return &AdsReadHandler{svc: svc}
+}
+
+func (h *AdsReadHandler) WithClientReports(builder adsClientReportBuilder, recommendations adsRecommendationLister) *AdsReadHandler {
+	h.clientReportBuilder = builder
+	h.recommendations = recommendations
+	return h
 }
 
 func (h *AdsReadHandler) Overview(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +95,59 @@ func (h *AdsReadHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dto.WriteJSON(w, http.StatusOK, dto.AdsOverviewFromDomain(*overview))
+}
+
+func (h *AdsReadHandler) ClientAuditReport(w http.ResponseWriter, r *http.Request) {
+	if h.clientReportBuilder == nil || h.recommendations == nil {
+		dto.WriteError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "client audit report is not configured")
+		return
+	}
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+
+	sellerCabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid seller_cabinet_id")
+		return
+	}
+
+	dateFrom, dateTo := parseDateRange(r)
+	overview, err := h.svc.Overview(r.Context(), workspaceID, dateFrom, dateTo, service.OverviewFilter{
+		SellerCabinetID: sellerCabinetID,
+	})
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	recommendations, err := h.recommendations.List(r.Context(), workspaceID, service.RecommendationListFilter{
+		Status: domain.RecommendationStatusActive,
+	}, 1000, 0)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	recommendations = filterRecommendationsBySellerCabinet(recommendations, sellerCabinetID)
+
+	generatedAt := time.Now().UTC()
+	report := h.clientReportBuilder.BuildAgencyClientReport(generatedAt, dateFrom, dateTo, *overview, recommendations)
+	dto.WriteJSON(w, http.StatusOK, dto.AdsClientAuditReportResponse{
+		ReportType:      "client_wb_ads_audit",
+		GeneratedAt:     generatedAt,
+		DateFrom:        formatDateForResponse(dateFrom),
+		DateTo:          formatDateForResponse(dateTo),
+		Report:          report,
+		DataStatus:      dto.AdsDataStatusFromDomain(overview.DataStatus),
+		Recommendations: len(recommendations),
+		AttentionItems:  len(overview.Attention),
+		ActiveCampaigns: overview.Totals.ActiveCampaigns,
+		Campaigns:       overview.Totals.Campaigns,
+		Products:        overview.Totals.Products,
+		Queries:         overview.Totals.Queries,
+	})
 }
 
 func (h *AdsReadHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
@@ -314,4 +383,25 @@ func paginateSlice[T any](items []T, perPage, offset int) []T {
 		end = len(items)
 	}
 	return items[offset:end]
+}
+
+func formatDateForResponse(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format("2006-01-02")
+}
+
+func filterRecommendationsBySellerCabinet(items []domain.Recommendation, sellerCabinetID *uuid.UUID) []domain.Recommendation {
+	if sellerCabinetID == nil {
+		return items
+	}
+	filtered := make([]domain.Recommendation, 0, len(items))
+	for _, item := range items {
+		if item.SellerCabinetID == nil || *item.SellerCabinetID != *sellerCabinetID {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }

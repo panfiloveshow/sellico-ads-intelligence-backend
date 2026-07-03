@@ -18,6 +18,40 @@ func (q *Queries) GetCampaignByIDAndWorkspace(ctx context.Context, arg GetCampai
 	return i, err
 }
 
+type GetProductByIDAndWorkspaceParams struct {
+	ID          pgtype.UUID
+	WorkspaceID pgtype.UUID
+}
+
+func (q *Queries) GetProductByIDAndWorkspace(ctx context.Context, arg GetProductByIDAndWorkspaceParams) (Product, error) {
+	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, wb_product_id, title, brand, category, image_url, price, created_at, updated_at, current_bid_search, current_bid_recommend, min_bid_search, min_bid_recommend, competitive_bid, rating, reviews_count, stock_total, content_hash, last_event_at FROM products WHERE id = $1 AND workspace_id = $2`, arg.ID, arg.WorkspaceID)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SellerCabinetID,
+		&i.WbProductID,
+		&i.Title,
+		&i.Brand,
+		&i.Category,
+		&i.ImageUrl,
+		&i.Price,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CurrentBidSearch,
+		&i.CurrentBidRecommend,
+		&i.MinBidSearch,
+		&i.MinBidRecommend,
+		&i.CompetitiveBid,
+		&i.Rating,
+		&i.ReviewsCount,
+		&i.StockTotal,
+		&i.ContentHash,
+		&i.LastEventAt,
+	)
+	return i, err
+}
+
 type GetRecommendationByIDAndWorkspaceParams struct {
 	ID          pgtype.UUID
 	WorkspaceID pgtype.UUID

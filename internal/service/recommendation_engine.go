@@ -107,20 +107,49 @@ func (e *RecommendationEngine) GenerateForWorkspace(ctx context.Context, workspa
 		}
 
 		orders := nullableInt64(stat.Orders)
-		if stat.Clicks >= int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) {
+		if stat.Spend >= th.CampaignMaxTestSpend && stat.Clicks < int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) {
+			rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
+				WorkspaceID: workspaceID,
+				CampaignID:  campaignID,
+				Title:       "Тестовый расход кампании достиг лимита",
+				Description: fmt.Sprintf("Кампания %q потратила %d ₽ без заказов за %s, но собрала только %d кликов из %d для полноценного решения. Тестовый лимит расхода: %d ₽.", campaign.Name, stat.Spend, stat.Date.Time.Format("2006-01-02"), stat.Clicks, th.CampaignZeroOrdersClick, th.CampaignMaxTestSpend),
+				Type:        domain.RecommendationTypeCampaignTestSpend,
+				Severity:    domain.SeverityMedium,
+				Confidence:  0.73,
+				SourceMetrics: map[string]any{
+					"clicks":                      stat.Clicks,
+					"orders":                      0,
+					"spend":                       stat.Spend,
+					"campaign_zero_orders_click":  th.CampaignZeroOrdersClick,
+					"campaign_max_test_spend":     th.CampaignMaxTestSpend,
+					"campaign_max_spend_no_order": th.CampaignMaxSpendNoOrder,
+					"date":                        stat.Date.Time.Format("2006-01-02"),
+				},
+				NextAction: strPtr("Остановите расширение теста или снизьте ставку до появления конверсионных сигналов."),
+			})
+			if upsertErr != nil {
+				return nil, upsertErr
+			}
+			generated = append(generated, *rec)
+		} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeCampaignTestSpend, campaignID, nil, nil); closeErr != nil {
+			return nil, closeErr
+		}
+
+		if stat.Clicks >= int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) && stat.Spend >= th.CampaignMaxSpendNoOrder {
 			rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
 				WorkspaceID: workspaceID,
 				CampaignID:  campaignID,
 				Title:       "Клики не конвертируются в заказы",
-				Description: fmt.Sprintf("Кампания %q получила %d кликов, но 0 заказов за %s.", campaign.Name, stat.Clicks, stat.Date.Time.Format("2006-01-02")),
+				Description: fmt.Sprintf("Кампания %q получила %d кликов и потратила %d ₽, но 0 заказов за %s. Расход достиг лимита без заказа %d ₽.", campaign.Name, stat.Clicks, stat.Spend, stat.Date.Time.Format("2006-01-02"), th.CampaignMaxSpendNoOrder),
 				Type:        domain.RecommendationTypeHighSpendLowOrders,
 				Severity:    domain.SeverityHigh,
 				Confidence:  0.81,
 				SourceMetrics: map[string]any{
-					"clicks": stat.Clicks,
-					"orders": 0,
-					"spend":  stat.Spend,
-					"date":   stat.Date.Time.Format("2006-01-02"),
+					"clicks":                      stat.Clicks,
+					"orders":                      0,
+					"spend":                       stat.Spend,
+					"campaign_max_spend_no_order": th.CampaignMaxSpendNoOrder,
+					"date":                        stat.Date.Time.Format("2006-01-02"),
 				},
 				NextAction: strPtr("Проверьте поисковые запросы и качество конверсии; рассмотрите паузу слабого трафика."),
 			})

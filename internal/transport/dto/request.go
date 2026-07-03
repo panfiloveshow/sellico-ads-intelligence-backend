@@ -364,7 +364,7 @@ func (r CreateExtensionBidSnapshotsRequest) Validate() map[string]string {
 	}
 	for i, item := range r.Items {
 		prefix := "items." + validateIndex(i)
-		if item.PhraseID == nil && item.Query == nil && item.CampaignID == nil {
+		if item.PhraseID == nil && item.Query == nil && item.CampaignID == nil && !metadataHasPositiveInt64(item.Metadata, "wb_campaign_id", "wbCampaignID") {
 			v.FieldErrors()[prefix+".context"] = "requires phrase_id, query or campaign_id"
 		}
 	}
@@ -498,10 +498,18 @@ type CreateExtensionNetworkCapturesRequest struct {
 	Items []CreateExtensionNetworkCaptureItemRequest `json:"items"`
 }
 
+const (
+	maxExtensionNetworkCaptureItems        = 50
+	maxExtensionNetworkCapturePayloadBytes = 256 * 1024
+)
+
 func (r CreateExtensionNetworkCapturesRequest) Validate() map[string]string {
 	v := validate.New()
 	if len(r.Items) == 0 {
 		v.FieldErrors()["items"] = "must contain at least one item"
+	}
+	if len(r.Items) > maxExtensionNetworkCaptureItems {
+		v.FieldErrors()["items"] = "must contain at most " + strconv.Itoa(maxExtensionNetworkCaptureItems) + " items"
 	}
 	for i, item := range r.Items {
 		prefix := "items." + validateIndex(i)
@@ -513,6 +521,76 @@ func (r CreateExtensionNetworkCapturesRequest) Validate() map[string]string {
 		}
 		if len(item.Payload) == 0 {
 			v.FieldErrors()[prefix+".payload"] = "is required"
+		}
+		if len(item.Payload) > maxExtensionNetworkCapturePayloadBytes {
+			v.FieldErrors()[prefix+".payload"] = "must be at most " + strconv.Itoa(maxExtensionNetworkCapturePayloadBytes) + " bytes"
+		}
+	}
+	return v.FieldErrors()
+}
+
+type CreateExtensionDOMRowSnapshotItemRequest struct {
+	SellerCabinetID *uuid.UUID      `json:"seller_cabinet_id,omitempty"`
+	CampaignID      *uuid.UUID      `json:"campaign_id,omitempty"`
+	PhraseID        *uuid.UUID      `json:"phrase_id,omitempty"`
+	ProductID       *uuid.UUID      `json:"product_id,omitempty"`
+	PageType        string          `json:"page_type"`
+	TableRole       string          `json:"table_role"`
+	RowKey          string          `json:"row_key"`
+	Query           *string         `json:"query,omitempty"`
+	Region          *string         `json:"region,omitempty"`
+	VisibleText     string          `json:"visible_text"`
+	Cells           json.RawMessage `json:"cells,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Confidence      *float64        `json:"confidence,omitempty"`
+	CapturedAt      *time.Time      `json:"captured_at,omitempty"`
+}
+
+type CreateExtensionDOMRowSnapshotsRequest struct {
+	Items []CreateExtensionDOMRowSnapshotItemRequest `json:"items"`
+}
+
+const (
+	maxExtensionDOMRowSnapshotItems      = 100
+	maxExtensionDOMRowSnapshotCellsBytes = 32 * 1024
+	maxExtensionDOMRowSnapshotMetaBytes  = 32 * 1024
+	maxExtensionDOMRowVisibleTextLength  = 1200
+	maxExtensionDOMRowKeyLength          = 300
+)
+
+func (r CreateExtensionDOMRowSnapshotsRequest) Validate() map[string]string {
+	v := validate.New()
+	if len(r.Items) == 0 {
+		v.FieldErrors()["items"] = "must contain at least one item"
+	}
+	if len(r.Items) > maxExtensionDOMRowSnapshotItems {
+		v.FieldErrors()["items"] = "must contain at most " + strconv.Itoa(maxExtensionDOMRowSnapshotItems) + " items"
+	}
+	for i, item := range r.Items {
+		prefix := "items." + validateIndex(i)
+		if item.PageType == "" {
+			v.FieldErrors()[prefix+".page_type"] = "is required"
+		}
+		if item.TableRole == "" {
+			v.FieldErrors()[prefix+".table_role"] = "is required"
+		}
+		if item.RowKey == "" {
+			v.FieldErrors()[prefix+".row_key"] = "is required"
+		}
+		if len(item.RowKey) > maxExtensionDOMRowKeyLength {
+			v.FieldErrors()[prefix+".row_key"] = "is too long"
+		}
+		if item.VisibleText == "" {
+			v.FieldErrors()[prefix+".visible_text"] = "is required"
+		}
+		if len(item.VisibleText) > maxExtensionDOMRowVisibleTextLength {
+			v.FieldErrors()[prefix+".visible_text"] = "is too long"
+		}
+		if len(item.Cells) > maxExtensionDOMRowSnapshotCellsBytes {
+			v.FieldErrors()[prefix+".cells"] = "must be at most " + strconv.Itoa(maxExtensionDOMRowSnapshotCellsBytes) + " bytes"
+		}
+		if len(item.Metadata) > maxExtensionDOMRowSnapshotMetaBytes {
+			v.FieldErrors()[prefix+".metadata"] = "must be at most " + strconv.Itoa(maxExtensionDOMRowSnapshotMetaBytes) + " bytes"
 		}
 	}
 	return v.FieldErrors()

@@ -58,10 +58,9 @@
 
 | Permission | Justification |
 |------------|---------------|
-| `storage` | Persist user's Sellico backend URL + access token between sessions. |
-| `cookies` | Share Sellico session cookie so extension uses the same auth as the website. |
+| `storage` | Persist user's Sellico backend URL + extension access token between sessions. |
 | `host_permissions: *.wildberries.ru/*` | Inject the panel and listen for bid/position events. |
-| `host_permissions: *.sellico.ru/*` | Send captured events to user's Sellico workspace. |
+| `host_permissions: *.sellico.ru/*` | Connect explicitly from Sellico and send captured events to user's workspace. |
 | `optional_host_permissions: localhost` | Only granted if user opts in for self-hosted Sellico backend. |
 
 Remote code: NONE. All scripts are bundled in the package.

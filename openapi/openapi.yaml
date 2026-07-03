@@ -427,6 +427,47 @@ paths:
                 $ref: "#/components/schemas/ProductListEnvelope"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/seller-cabinets/{id}/communication/reputation:
+    get:
+      tags: [Seller Cabinets]
+      summary: Read WB User Communication reputation evidence for a product
+      description: Returns real questions, feedbacks, and unanswered counters from the official WB User Communication API. No sample or synthetic reputation data is generated.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - name: nm_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: take
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: is_answered
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Real WB communication evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerCabinetCommunicationReputationEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
   /api/v1/seller-cabinets/{id}/sync:
     post:
       tags: [Seller Cabinets]
@@ -478,6 +519,59 @@ paths:
                 $ref: "#/components/schemas/CampaignListEnvelope"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Campaigns]
+      summary: Create WB campaign through Promotion API
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seller_cabinet_id, name, nm_ids]
+              properties:
+                seller_cabinet_id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                  maxLength: 100
+                nm_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: integer
+                    format: int64
+                    minimum: 1
+                bid_type:
+                  type: string
+                  enum: [manual, unified]
+                  default: manual
+                payment_type:
+                  type: string
+                  enum: [cpm, cpc]
+                  default: cpm
+                placement_types:
+                  type: array
+                  items:
+                    type: string
+                    enum: [search, recommendations]
+      responses:
+        "201":
+          description: Campaign created in WB and saved locally
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignEnvelope"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
   /api/v1/campaigns/{id}:
     get:
       tags: [Campaigns]
@@ -498,6 +592,19 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "404":
           $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags: [Campaigns]
+      summary: Delete ready campaign in WB cabinet
+      description: Deletes a campaign through the official WB Promotion API. WB allows deletion only for campaigns in ready-to-launch status.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/campaigns/{id}/stats:
     get:
       tags: [Campaigns]
@@ -554,6 +661,9 @@ paths:
         - $ref: "#/components/parameters/RecommendationType"
         - $ref: "#/components/parameters/RecommendationSeverity"
         - $ref: "#/components/parameters/RecommendationStatus"
+        - $ref: "#/components/parameters/RecommendationTaskCategory"
+        - $ref: "#/components/parameters/RecommendationTaskOwnerRole"
+        - $ref: "#/components/parameters/RecommendationOverdue"
       responses:
         "200":
           description: Recommendation page
@@ -601,6 +711,30 @@ paths:
         "200": { description: Stopped, content: { application/json: { schema: { type: object } } } }
         "400": { $ref: "#/components/responses/ErrorResponse" }
 
+  /api/v1/campaigns/{id}/name:
+    patch:
+      tags: [Campaigns]
+      summary: Rename campaign in WB cabinet
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  maxLength: 100
+      responses:
+        "200": { description: Renamed, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+
   /api/v1/campaigns/{id}/bids:
     get:
       tags: [Campaigns]
@@ -611,6 +745,99 @@ paths:
         - $ref: "#/components/parameters/Id"
       responses:
         "200": { description: Bid list, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/campaigns/{id}/cluster-bids:
+    post:
+      tags: [Campaigns]
+      summary: Set search-cluster bid in WB cabinet
+      description: Applies a normquery bid through the official WB Promotion API. Available only for manual CPM campaigns.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nm_id, norm_query, new_bid]
+              properties:
+                nm_id: { type: integer, format: int64 }
+                norm_query: { type: string }
+                new_bid: { type: integer }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+    delete:
+      tags: [Campaigns]
+      summary: Delete search-cluster bid in WB cabinet
+      description: Removes an explicit normquery bid through the official WB Promotion API. Available only for manual CPM campaigns.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nm_id, norm_query, current_bid]
+              properties:
+                nm_id: { type: integer, format: int64 }
+                norm_query: { type: string }
+                current_bid: { type: integer }
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/cluster-minus:
+    get:
+      tags: [Campaigns]
+      summary: Get real WB minus phrases for a campaign product
+      description: Reads current normquery minus phrases from the official WB Promotion API for the given nmID.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - name: nm_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Current WB minus phrases
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nm_id, norm_queries]
+                properties:
+                  nm_id: { type: integer, format: int64 }
+                  norm_queries: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+    post:
+      tags: [Campaigns]
+      summary: Set search-cluster minus phrase in WB cabinet
+      description: Applies a normquery minus phrase through the official WB Promotion API. Available only for manual CPM campaigns.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nm_id, norm_query]
+              properties:
+                nm_id: { type: integer, format: int64 }
+                norm_query: { type: string }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
 
   /api/v1/campaigns/{id}/bid-history:
     get:
@@ -624,6 +851,50 @@ paths:
         - { name: date_to, in: query, schema: { type: string, format: date } }
       responses:
         "200": { description: History entries, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/campaigns/{id}/bid-history/{changeId}/rollback:
+    post:
+      tags: [Campaigns]
+      summary: Roll back an applied campaign bid change
+      description: Restores the previous bid through the official WB Promotion API only when the latest synced real bid still matches the change being rolled back.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - name: changeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Rollback bid change entry, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/campaigns/{id}/budget/deposit:
+    post:
+      tags: [Campaigns]
+      summary: Deposit campaign budget through WB API
+      description: Requires write access and a fresh WB advertising balance snapshot; the amount is in rubles and cannot exceed the latest confirmed balance.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                  description: Deposit amount in rubles.
+      responses:
+        "200": { description: Deposited, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
 
   /api/v1/campaigns/{id}/daily-stats:
     get:
@@ -727,7 +998,7 @@ paths:
       description: |
         Atomically applies the suggested change (e.g. raise/lower bid,
         add minus-phrase). On success the recommendation status flips to
-        `applied`. The actual WB API call uses the cabinet's stored token.
+        `completed`. The actual WB API call uses the cabinet's stored token.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/WorkspaceHeader"
@@ -846,6 +1117,9 @@ paths:
         - $ref: "#/components/parameters/RecommendationType"
         - $ref: "#/components/parameters/RecommendationSeverity"
         - $ref: "#/components/parameters/RecommendationStatus"
+        - $ref: "#/components/parameters/RecommendationTaskCategory"
+        - $ref: "#/components/parameters/RecommendationTaskOwnerRole"
+        - $ref: "#/components/parameters/RecommendationOverdue"
       responses:
         "200":
           description: Recommendation page
@@ -1029,6 +1303,63 @@ paths:
       responses:
         "200": { description: SEO report, content: { application/json: { schema: { type: object } } } }
 
+  /api/v1/product-economics:
+    get:
+      tags: [Products]
+      summary: List manually imported product economics
+      description: Returns seller-provided economics inputs only; missing fields are not inferred.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200": { description: Product economics page, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
+  /api/v1/product-economics/import:
+    post:
+      tags: [Products]
+      summary: Import manual product economics
+      description: |
+        Imports real seller-provided economics from JSON or CSV. JSON uses `{ "rows": [...] }`.
+        CSV must include `wb_product_id` and may include `cost_price`, `logistics_cost`,
+        `other_costs`, `tax_rate_percent`, `commission_percent`, `target_margin_percent`,
+        `max_allowed_drr`, `source`, and `effective_at`.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rows]
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    required: [wb_product_id]
+                    properties:
+                      wb_product_id: { type: integer, format: int64 }
+                      cost_price: { type: integer, format: int64, nullable: true }
+                      logistics_cost: { type: integer, format: int64, nullable: true }
+                      other_costs: { type: integer, format: int64, nullable: true }
+                      tax_rate_percent: { type: number, nullable: true }
+                      commission_percent: { type: number, nullable: true }
+                      target_margin_percent: { type: number, nullable: true }
+                      max_allowed_drr: { type: number, nullable: true }
+                      source: { type: string }
+                      effective_at: { type: string, format: date, nullable: true }
+          text/csv:
+            schema:
+              type: string
+      responses:
+        "200": { description: Import result, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
   /api/v1/products/{id}/recommendations:
     get:
       tags: [Products]
@@ -1043,6 +1374,9 @@ paths:
         - $ref: "#/components/parameters/RecommendationType"
         - $ref: "#/components/parameters/RecommendationSeverity"
         - $ref: "#/components/parameters/RecommendationStatus"
+        - $ref: "#/components/parameters/RecommendationTaskCategory"
+        - $ref: "#/components/parameters/RecommendationTaskOwnerRole"
+        - $ref: "#/components/parameters/RecommendationOverdue"
       responses:
         "200":
           description: Recommendation page
@@ -1310,6 +1644,9 @@ paths:
         - $ref: "#/components/parameters/RecommendationType"
         - $ref: "#/components/parameters/RecommendationSeverity"
         - $ref: "#/components/parameters/RecommendationStatus"
+        - $ref: "#/components/parameters/RecommendationTaskCategory"
+        - $ref: "#/components/parameters/RecommendationTaskOwnerRole"
+        - $ref: "#/components/parameters/RecommendationOverdue"
       responses:
         "200":
           description: Recommendation page
@@ -1784,6 +2121,43 @@ paths:
       responses:
         "200": { description: Batch accepted, content: { application/json: { schema: { type: object } } } }
 
+  /api/v1/extension/dom-row-snapshots:
+    post:
+      tags: [Extension]
+      summary: Bulk-upload visible WB cabinet table rows as evidence
+      description: |
+        Stores real DOM rows visible in the seller's WB cabinet as support
+        evidence. These rows are not used to backfill spend, revenue, orders,
+        or other official API metrics.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [page_type, table_role, row_key, visible_text]
+                    properties:
+                      page_type: { type: string, enum: [search, product, campaign, query, auction, cabinet] }
+                      table_role: { type: string, enum: [campaigns, products, queries, bids, stats, finance, unknown] }
+                      row_key: { type: string, maxLength: 300 }
+                      query: { type: string }
+                      region: { type: string }
+                      visible_text: { type: string, maxLength: 1200 }
+                      cells: { type: array, items: { type: object, additionalProperties: true } }
+                      metadata: { type: object, additionalProperties: true }
+                      captured_at: { type: string, format: date-time }
+      responses:
+        "201": { description: DOM row snapshots accepted, content: { application/json: { schema: { type: object } } } }
+
   /api/v1/extension/widgets/campaign:
     get:
       tags: [Extension]
@@ -1791,8 +2165,8 @@ paths:
       description: |
         Used by the extension's content script to render the floating
         Sellico widget overlaid on seller.wildberries.ru/campaigns/{id}.
-        Returns the smallest payload needed for the widget — KPI summary,
-        latest recommendations for the campaign, suggested bid changes.
+        Returns the smallest payload needed for the widget — primary insight,
+        KPI summary, latest recommendations for the campaign, suggested bid changes.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/WorkspaceHeader"
@@ -1804,6 +2178,7 @@ paths:
     get:
       tags: [Extension]
       summary: Compact widget data for a WB product page
+      description: Returns product context, primary insight, real cabinet evidence, and truthful missing-data state for the extension panel.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/WorkspaceHeader"
@@ -1815,12 +2190,72 @@ paths:
     get:
       tags: [Extension]
       summary: Compact widget data for a WB search results page
+      description: Returns query context, primary insight, real cabinet bid/position evidence, and truthful missing-data state for the extension panel.
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/WorkspaceHeader"
         - { name: phrase, in: query, required: true, schema: { type: string } }
       responses:
         "200": { description: Widget payload, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/evidence-summary:
+    get:
+      tags: [Extension]
+      summary: Workspace extension evidence health summary
+      description: Returns real captured cabinet evidence counts, freshness, issues, and next actions for the current workspace. It does not synthesize missing metrics. Ads read-model evidence uses explicit source labels such as API WB, Кабинет WB, API WB + кабинет WB, and surfaces API-vs-cabinet mismatch issues.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      responses:
+        "200": { description: Evidence summary, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/evidence-debug:
+    get:
+      tags: [Extension]
+      summary: Scoped extension evidence debug payload
+      description: |
+        Returns the latest real page contexts, allowlisted network captures,
+        typed bid snapshots, position snapshots, DOM row snapshots, and UI
+        signals for a campaign, product, or query. Use this for extension QA and seller support; the
+        response never backfills missing spend, revenue, orders, or recommendations.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: scope, in: query, required: true, schema: { type: string, enum: [campaign, product, query] } }
+        - { name: campaign_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: product_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: phrase_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: query, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200": { description: Evidence debug payload, content: { application/json: { schema: { type: object } } } }
+
+  /api/v1/extension/evidence-debug/report:
+    get:
+      tags: [Extension]
+      summary: Support-ready scoped evidence report
+      description: |
+        Returns a support-screen view model derived from the scoped real
+        extension evidence debug payload: source label, readiness, evidence
+        sections, checklist, issues, and next actions. The response is
+        computed only from stored real cabinet evidence and never invents
+        missing business metrics.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: scope, in: query, required: true, schema: { type: string, enum: [campaign, product, query] } }
+        - { name: campaign_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: product_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: phrase_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: query, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200":
+          description: Evidence support report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionEvidenceSupportReportEnvelope"
 
   # --- Workspace Settings ---
   /api/v1/settings:
@@ -1905,6 +2340,47 @@ paths:
                   data:
                     type: object
                     description: AdsOverview — see internal/domain.AdsOverview
+
+  /api/v1/ads/reports/client-audit:
+    get:
+      tags: [Ads]
+      summary: Client-ready WB ads audit report
+      description: |
+        Builds a client/agency report from the real AdsOverview and active
+        recommendations for the selected period. The response never fabricates
+        rows or estimated business results; unavailable evidence is shown as a
+        truthful data status in the report.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - { name: date_from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: date_to, in: query, required: true, schema: { type: string, format: date } }
+        - { name: seller_cabinet_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Client audit report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    required: [report_type, generated_at, report, data_status, recommendations]
+                    properties:
+                      report_type: { type: string, example: client_wb_ads_audit }
+                      generated_at: { type: string, format: date-time }
+                      date_from: { type: string, format: date }
+                      date_to: { type: string, format: date }
+                      report: { type: string }
+                      data_status: { type: object }
+                      recommendations: { type: integer }
+                      attention_items: { type: integer }
+                      active_campaigns: { type: integer }
+                      campaigns: { type: integer }
+                      products: { type: integer }
+                      queries: { type: integer }
 
   /api/v1/ads/products:
     get:
@@ -2510,6 +2986,23 @@ components:
       schema:
         type: string
         enum: [active, completed, dismissed]
+    RecommendationTaskCategory:
+      name: task_category
+      in: query
+      schema:
+        type: string
+        enum: [losses, growth, card_tasks, api_risks]
+    RecommendationTaskOwnerRole:
+      name: task_owner_role
+      in: query
+      schema:
+        type: string
+        enum: [marketer, marketplace_manager, content, seo, technical_specialist]
+    RecommendationOverdue:
+      name: overdue
+      in: query
+      schema:
+        type: boolean
   responses:
     ErrorResponse:
       description: API error envelope
@@ -2675,6 +3168,139 @@ components:
         updated_at:
           type: string
           format: date-time
+    SellerCabinetCommunicationReputation:
+      type: object
+      required: [seller_cabinet_id, wb_product_id, source, generated_at, is_answered, new_items, counts, questions, feedbacks]
+      properties:
+        seller_cabinet_id:
+          type: string
+          format: uuid
+        wb_product_id:
+          type: integer
+          format: int64
+        source:
+          type: string
+          enum: [wb_user_communication_api]
+        generated_at:
+          type: string
+          format: date-time
+        is_answered:
+          type: boolean
+        new_items:
+          $ref: "#/components/schemas/SellerCabinetCommunicationNewItems"
+        counts:
+          $ref: "#/components/schemas/SellerCabinetCommunicationCounts"
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerCabinetQuestionEvidence"
+        feedbacks:
+          type: array
+          items:
+            $ref: "#/components/schemas/SellerCabinetFeedbackEvidence"
+    SellerCabinetCommunicationNewItems:
+      type: object
+      required: [has_new_questions, has_new_feedbacks]
+      properties:
+        has_new_questions:
+          type: boolean
+        has_new_feedbacks:
+          type: boolean
+    SellerCabinetCommunicationCounts:
+      type: object
+      required: [unanswered_questions, unanswered_questions_today, unanswered_feedbacks, unanswered_feedbacks_today]
+      properties:
+        unanswered_questions:
+          type: integer
+        unanswered_questions_today:
+          type: integer
+        unanswered_feedbacks:
+          type: integer
+        unanswered_feedbacks_today:
+          type: integer
+    SellerCabinetCommunicationProductDetails:
+      type: object
+      required: [nm_id]
+      properties:
+        imt_id:
+          type: integer
+          format: int64
+        nm_id:
+          type: integer
+          format: int64
+        product_name:
+          type: string
+        supplier_article:
+          type: string
+        supplier_name:
+          type: string
+        brand_name:
+          type: string
+        size:
+          type: string
+    SellerCabinetCommunicationAnswer:
+      type: object
+      required: [editable]
+      properties:
+        text:
+          type: string
+        state:
+          type: string
+        editable:
+          type: boolean
+        create_date:
+          type: string
+    SellerCabinetQuestionEvidence:
+      type: object
+      required: [id, product_details, was_viewed, is_warned]
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        created_date:
+          type: string
+        state:
+          type: string
+        answer:
+          $ref: "#/components/schemas/SellerCabinetCommunicationAnswer"
+        product_details:
+          $ref: "#/components/schemas/SellerCabinetCommunicationProductDetails"
+        was_viewed:
+          type: boolean
+        is_warned:
+          type: boolean
+    SellerCabinetFeedbackEvidence:
+      type: object
+      required: [id, product_details, was_viewed]
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        pros:
+          type: string
+        cons:
+          type: string
+        product_valuation:
+          type: integer
+        created_date:
+          type: string
+        answer:
+          $ref: "#/components/schemas/SellerCabinetCommunicationAnswer"
+        state:
+          type: string
+        product_details:
+          $ref: "#/components/schemas/SellerCabinetCommunicationProductDetails"
+        was_viewed:
+          type: boolean
+        order_status:
+          type: string
+        subject_id:
+          type: integer
+          format: int64
+        subject_name:
+          type: string
     Campaign:
       type: object
       required:
@@ -3054,6 +3680,28 @@ components:
         status:
           type: string
           enum: [active, completed, dismissed]
+        task_category:
+          type: string
+          enum: [losses, growth, card_tasks, api_risks]
+          description: Queue category for task-oriented recommendation views.
+        task_owner_role:
+          type: string
+          enum: [marketer, marketplace_manager, content, seo, technical_specialist]
+          description: Default team role responsible for the recommendation task.
+        task_sla_hours:
+          type: integer
+          description: SLA window in hours before an active recommendation is overdue.
+        task_due_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Deadline calculated from stored created_at and the recommendation task SLA.
+        task_age_hours:
+          type: integer
+          description: Age of the recommendation task calculated from stored created_at.
+        is_overdue:
+          type: boolean
+          description: True for active recommendations older than the task overdue threshold.
         created_at:
           type: string
           format: date-time
@@ -3123,6 +3771,131 @@ components:
       properties:
         version:
           type: string
+    ExtensionEvidenceSupportSummary:
+      type: object
+      required: [source_label, readiness, captured_signals, missing_signals, confirmed_in_cabinet, freshness_state, coverage]
+      properties:
+        source_label:
+          type: string
+        readiness:
+          type: string
+          enum: [ready, partial, missing]
+        captured_signals:
+          type: integer
+        missing_signals:
+          type: integer
+        confirmed_in_cabinet:
+          type: boolean
+        freshness_state:
+          type: string
+        coverage:
+          type: string
+    ExtensionEvidenceSupportSection:
+      type: object
+      required: [id, title, status, detail, evidence_count]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [ready, partial, missing]
+        detail:
+          type: string
+        evidence_count:
+          type: integer
+        latest_captured_at:
+          type: string
+          format: date-time
+          nullable: true
+    ExtensionEvidenceSupportChecklistItem:
+      type: object
+      required: [id, label, done, detail, action_path]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        done:
+          type: boolean
+        detail:
+          type: string
+        action_path:
+          type: string
+    ExtensionWidgetIssue:
+      type: object
+      required: [stage, severity, message]
+      properties:
+        stage:
+          type: string
+        severity:
+          type: string
+        message:
+          type: string
+        action_path:
+          type: string
+    ExtensionWidgetAction:
+      type: object
+      required: [id, label, action_path]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        action_path:
+          type: string
+        tone:
+          type: string
+    ExtensionEvidenceSupportReport:
+      type: object
+      required: [workspace_id, scope, generated_at, summary, sections, checklist]
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        scope:
+          type: string
+          enum: [campaign, product, query]
+        campaign_id:
+          type: string
+          format: uuid
+          nullable: true
+        product_id:
+          type: string
+          format: uuid
+          nullable: true
+        phrase_id:
+          type: string
+          format: uuid
+          nullable: true
+        query:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        latest_captured_at:
+          type: string
+          format: date-time
+          nullable: true
+        summary:
+          $ref: "#/components/schemas/ExtensionEvidenceSupportSummary"
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtensionEvidenceSupportSection"
+        checklist:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtensionEvidenceSupportChecklistItem"
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtensionWidgetIssue"
+        next_actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtensionWidgetAction"
     AuditLog:
       type: object
       required: [id, workspace_id, action, entity_type, created_at]
@@ -3457,6 +4230,11 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/SellerCabinet"
+    SellerCabinetCommunicationReputationEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/SellerCabinetCommunicationReputation"
     SellerCabinetListEnvelope:
       type: object
       properties:
@@ -3616,6 +4394,11 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/ExtensionVersion"
+    ExtensionEvidenceSupportReportEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/ExtensionEvidenceSupportReport"
     AuditLogListEnvelope:
       type: object
       properties:
@@ -3706,11 +4489,35 @@ components:
         enabled:
           type: boolean
 
+    EmailNotificationSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Enables email report delivery when an email sender is configured.
+        recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: Real report recipients for owner, agency, or client email reports.
+        weekly_digest:
+          type: boolean
+          description: Send weekly WB ads digest to the configured recipients.
+        daily_owner_digest:
+          type: boolean
+          description: Send daily owner report to the configured recipients.
+        client_reports:
+          type: boolean
+          description: Send client-ready WB ads audit reports to the configured recipients.
+
     NotificationSettings:
       type: object
       properties:
         telegram:
           $ref: "#/components/schemas/TelegramSettings"
+        email:
+          $ref: "#/components/schemas/EmailNotificationSettings"
 
     WorkspaceSettings:
       type: object
@@ -3757,9 +4564,39 @@ components:
           additionalProperties: { type: number, format: double }
         min_bid: { type: integer }
         max_bid: { type: integer }
-        max_change_percent: { type: number, format: double }
+        max_cpc:
+          type: number
+          format: double
+          description: Optional maximum real CPC before autopilot bid increases are blocked.
+        max_cpo:
+          type: number
+          format: double
+          description: Optional maximum real CPO before autopilot bid increases are blocked. Requires real order evidence.
+        automation_level:
+          type: integer
+          enum: [1, 2, 3, 4]
+          description: Trust level for strategy execution. Levels 1-2 are analytics/semi-auto and never auto-apply actions; levels 3-4 can auto-apply within guardrails. Defaults to 3.
+        max_change_percent:
+          type: number
+          format: double
+          description: Maximum bid change per autopilot action. Defaults to 15.
         min_clicks: { type: integer }
         lookback_days: { type: integer }
+        min_stock_for_increase:
+          type: integer
+          description: Minimum real product stock required before bid automation can increase a bid. Defaults to 1.
+        cooldown_minutes:
+          type: integer
+          description: Minimum minutes between automated bid changes for the same campaign/product. Defaults to 120.
+        max_changes_per_day:
+          type: integer
+          description: Maximum automated bid changes per campaign/product in 24 hours. Defaults to 3.
+        max_data_age_hours:
+          type: integer
+          description: Maximum age of synced campaign stats before autopilot skips bid changes. Defaults to 36.
+        allow_increase_without_stock:
+          type: boolean
+          description: Explicit override for increasing bids when stock data is unavailable. Defaults to false.
 
     Strategy:
       type: object

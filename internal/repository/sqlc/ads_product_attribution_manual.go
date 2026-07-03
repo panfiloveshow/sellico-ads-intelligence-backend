@@ -112,6 +112,42 @@ func (q *Queries) ListCampaignProductsByWorkspace(ctx context.Context, workspace
 	return items, rows.Err()
 }
 
+const listCampaignProductsByCampaign = `
+SELECT campaign_id, product_id, workspace_id, seller_cabinet_id, wb_campaign_id, wb_product_id, subject_name, bid_search, bid_recommendations, created_at, updated_at
+FROM campaign_products
+WHERE campaign_id = $1
+`
+
+func (q *Queries) ListCampaignProductsByCampaign(ctx context.Context, campaignID pgtype.UUID) ([]CampaignProduct, error) {
+	rows, err := q.db.Query(ctx, listCampaignProductsByCampaign, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []CampaignProduct
+	for rows.Next() {
+		var item CampaignProduct
+		if err := rows.Scan(
+			&item.CampaignID,
+			&item.ProductID,
+			&item.WorkspaceID,
+			&item.SellerCabinetID,
+			&item.WbCampaignID,
+			&item.WbProductID,
+			&item.SubjectName,
+			&item.BidSearch,
+			&item.BidRecommendations,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 type ProductStat struct {
 	ID          pgtype.UUID
 	ProductID   pgtype.UUID

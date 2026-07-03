@@ -117,9 +117,15 @@ func scoreQueryPriority(signalCategory string, metrics domain.AdsMetricsSummary,
 	score := 0
 
 	switch signalCategory {
-	case "waste":
+	case "trash":
+		score += 90
+	case "loser", "waste":
 		score += 80
-	case "promising":
+	case "seo_idea":
+		score += 75
+	case "winner":
+		score += 70
+	case "watch", "promising":
 		score += 65
 	case "high_volume":
 		score += 50
@@ -166,11 +172,11 @@ func matchesProductView(view, healthStatus string, compare *domain.AdsPeriodComp
 	case "", "all":
 		return true
 	case "scale":
-		return healthStatus == "growing" || (compare != nil && (compare.Trend == "improving" || compare.Trend == "new"))
+		return healthStatus == "growing" || healthStatus == "growth_candidate" || (compare != nil && (compare.Trend == "improving" || compare.Trend == "new"))
 	case "save":
-		return healthStatus == "waste" || healthStatus == "low_ctr" || (compare != nil && compare.Trend == "declining")
+		return healthStatus == "waste" || healthStatus == "stop" || healthStatus == "reduce_bid" || healthStatus == "card_issue" || healthStatus == "offer_issue" || healthStatus == "low_stock" || healthStatus == "no_stock" || healthStatus == "low_ctr" || (compare != nil && compare.Trend == "declining")
 	case "watch":
-		return healthStatus == "monitor" || healthStatus == "partial" || healthStatus == "insufficient_data"
+		return healthStatus == "monitor" || healthStatus == "hold" || healthStatus == "partial" || healthStatus == "insufficient_data"
 	default:
 		return true
 	}
@@ -187,7 +193,7 @@ func matchesCampaignView(view, status, healthStatus string, compare *domain.AdsP
 	case "stale":
 		return healthStatus == "stale" || status == "paused" || (compare != nil && compare.Trend == "declining")
 	case "watch":
-		return healthStatus == "monitor" || healthStatus == "partial"
+		return healthStatus == "monitor" || healthStatus == "partial" || healthStatus == "no_stats"
 	default:
 		return true
 	}
@@ -200,13 +206,33 @@ func matchesQueryView(view string, summary domain.QueryPerformanceSummary) bool 
 	case "priority":
 		return summary.PriorityScore >= 40
 	case "waste":
-		return summary.SignalCategory == "waste"
+		return summary.SignalCategory == "waste" || summary.SignalCategory == "loser" || summary.SignalCategory == "trash"
 	case "promising":
-		return summary.SignalCategory == "promising"
+		return summary.SignalCategory == "promising" || summary.SignalCategory == "winner" || summary.SignalCategory == "seo_idea"
 	case "high_volume":
 		return summary.SignalCategory == "high_volume"
 	case "watch":
-		return summary.SignalCategory == "monitor"
+		return summary.SignalCategory == "monitor" || summary.SignalCategory == "watch"
+	case "with_orders":
+		return summary.Performance.Orders > 0
+	case "no_orders", "without_orders":
+		return summary.Performance.DataMode != "unavailable" && summary.Performance.Orders == 0
+	case "with_spend":
+		return summary.Performance.Spend > 0
+	case "high_ctr":
+		return summary.Performance.Clicks > 0 && summary.Performance.CTR >= 0.03
+	case "low_ctr":
+		return summary.HealthStatus == "low_ctr" || (summary.Performance.Impressions > 0 && summary.Performance.CTR > 0 && summary.Performance.CTR < 0.01)
+	case "high_drr":
+		return summary.Performance.DataMode != "unavailable" && summary.Performance.Orders > 0 && summary.Performance.Revenue > 0 && summary.Performance.DRR > 35
+	case "carts_without_orders":
+		return summary.Performance.DataMode != "unavailable" && summary.Performance.Atbs > 0 && summary.Performance.Orders == 0
+	case "minus_candidates":
+		return summary.SignalCategory == "trash" || (summary.Performance.DataMode != "unavailable" && summary.Performance.Spend > 0 && summary.Performance.Clicks >= 5 && summary.Performance.Atbs == 0 && summary.Performance.Orders == 0)
+	case "seo_candidates":
+		return summary.SignalCategory == "seo_idea"
+	case "insufficient_data", "new_clusters":
+		return summary.HealthStatus == "insufficient_data"
 	default:
 		return true
 	}
@@ -243,7 +269,7 @@ func trimQuerySummaries(items []domain.QueryPerformanceSummary, limit int) []dom
 func selectQuerySummariesBySignal(items []domain.QueryPerformanceSummary, signal string, limit int) []domain.QueryPerformanceSummary {
 	filtered := make([]domain.QueryPerformanceSummary, 0, len(items))
 	for _, item := range items {
-		if item.SignalCategory == signal {
+		if querySignalMatches(item.SignalCategory, signal) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -253,16 +279,38 @@ func selectQuerySummariesBySignal(items []domain.QueryPerformanceSummary, signal
 	return filtered[:limit]
 }
 
+func querySignalMatches(value, filter string) bool {
+	if value == filter {
+		return true
+	}
+	switch filter {
+	case "waste":
+		return value == "loser" || value == "trash"
+	case "promising":
+		return value == "winner" || value == "seo_idea"
+	case "monitor":
+		return value == "watch"
+	default:
+		return false
+	}
+}
+
 func querySignalRank(value string) int {
 	switch value {
-	case "waste":
+	case "trash":
+		return 6
+	case "loser", "waste":
+		return 5
+	case "seo_idea":
 		return 4
-	case "promising":
+	case "winner", "promising":
 		return 3
-	case "high_volume":
+	case "watch":
 		return 2
-	case "monitor":
+	case "high_volume":
 		return 1
+	case "monitor":
+		return 0
 	default:
 		return 0
 	}

@@ -218,6 +218,13 @@ func buildAdsDataStatus(data *adsWorkspaceData, dateFrom, dateTo time.Time, cabi
 			status.HasCurrentStats = true
 		}
 	}
+	if mismatches := data.extensionEvidence.bidMismatchCount(data.phrases, campaignIDs); mismatches > 0 {
+		status.Issues = append(status.Issues, domain.AdsDataStatusIssue{
+			Stage:      "api_extension_mismatch",
+			Message:    fmt.Sprintf("Найдено %d live-расхождений между ставками из официальной синхронизации WB и видимыми ставками в кабинете. Перед автодействиями обновите sync или повторите capture.", mismatches),
+			ActionPath: "/ads-intelligence/evidence-debug",
+		})
+	}
 
 	status.ProductsTotal = 0
 	for _, product := range data.products {
@@ -252,6 +259,13 @@ func (s *AdsReadService) enrichAdsDataStatus(status *domain.AdsDataStatus, dateF
 	status.BackendVersion = s.backendVersion
 	status.DateFrom = dateFrom.Format(exportDateLayout)
 	status.DateTo = dateTo.Format(exportDateLayout)
+	if s.unitEconomicsConfigured {
+		status.UnitEconomicsState = "configured"
+		status.UnitEconomicsReason = "Unit economics readiness checks are configured for bid scale-up decisions."
+	} else {
+		status.UnitEconomicsState = "not_configured"
+		status.UnitEconomicsReason = "Unit economics is not connected; profitability and margin-aware scale-up are unavailable."
+	}
 	if lastSync == nil {
 		return
 	}

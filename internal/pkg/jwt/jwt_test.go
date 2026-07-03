@@ -53,6 +53,58 @@ func TestGenerateRefreshToken_RoundTrip(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(ttl), claims.ExpiresAt, 2*time.Second)
 }
 
+func TestGenerateExtensionToken_RoundTrip(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	secret := "test-secret-key-for-jwt"
+	ttl := 12 * time.Hour
+
+	token, err := GenerateExtensionToken(userID, workspaceID, "analyst", secret, ttl)
+	require.NoError(t, err)
+	assert.NotEmpty(t, token)
+
+	claims, err := ValidateToken(token, secret)
+	require.NoError(t, err)
+	assert.Equal(t, userID, claims.UserID)
+	require.NotNil(t, claims.WorkspaceID)
+	assert.Equal(t, workspaceID, *claims.WorkspaceID)
+	assert.Equal(t, "extension", claims.TokenType)
+	assert.Equal(t, "analyst", claims.Role)
+	assert.Equal(t, ExtensionTokenAudience, claims.Audience)
+	assert.Empty(t, claims.JTI)
+	assert.WithinDuration(t, time.Now().Add(ttl), claims.ExpiresAt, 2*time.Second)
+}
+
+func TestValidateToken_ExtensionRequiresAudienceAndWorkspace(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	secret := "test-secret-key-for-jwt"
+	now := time.Now()
+
+	wrongAudienceToken, err := generateToken(payload{
+		Sub:         userID.String(),
+		WorkspaceID: workspaceID.String(),
+		Exp:         now.Add(time.Hour).Unix(),
+		Iat:         now.Unix(),
+		Type:        "extension",
+		Audience:    "wrong-audience",
+	}, secret)
+	require.NoError(t, err)
+	_, err = ValidateToken(wrongAudienceToken, secret)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+
+	missingWorkspaceToken, err := generateToken(payload{
+		Sub:      userID.String(),
+		Exp:      now.Add(time.Hour).Unix(),
+		Iat:      now.Unix(),
+		Type:     "extension",
+		Audience: ExtensionTokenAudience,
+	}, secret)
+	require.NoError(t, err)
+	_, err = ValidateToken(missingWorkspaceToken, secret)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+}
+
 func TestValidateToken_Expired(t *testing.T) {
 	userID := uuid.New()
 	secret := "test-secret-key-for-jwt"

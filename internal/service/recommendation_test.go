@@ -20,6 +20,7 @@ import (
 
 type recommendationInMemDB struct {
 	recommendations map[uuid.UUID]sqlcgen.Recommendation
+	settings        map[uuid.UUID][]byte
 	campaigns       []sqlcgen.Campaign
 	campaignStats   map[uuid.UUID]sqlcgen.CampaignStat
 	phrases         []sqlcgen.Phrase
@@ -35,6 +36,7 @@ type recommendationInMemDB struct {
 func newRecommendationInMemDB() *recommendationInMemDB {
 	return &recommendationInMemDB{
 		recommendations: make(map[uuid.UUID]sqlcgen.Recommendation),
+		settings:        make(map[uuid.UUID][]byte),
 		campaignStats:   make(map[uuid.UUID]sqlcgen.CampaignStat),
 		phraseStats:     make(map[uuid.UUID]sqlcgen.PhraseStat),
 		bidSnapshots:    make(map[uuid.UUID]sqlcgen.BidSnapshot),
@@ -313,6 +315,16 @@ func (db *recommendationInMemDB) QueryRow(_ context.Context, sql string, args ..
 			return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
 		}
 		return bidSnapshotToRow(bid)
+	case containsSQL(sql, "SELECT settings FROM workspaces"):
+		workspaceID := uuidFromPgtype(args[0].(pgtype.UUID))
+		settings, ok := db.settings[workspaceID]
+		if !ok {
+			return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
+		}
+		return &fakeRow{scanFunc: func(dest ...any) error {
+			*dest[0].(*[]byte) = settings
+			return nil
+		}}
 	}
 
 	return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
@@ -349,8 +361,14 @@ func (r *campaignRows) Scan(dest ...any) error {
 	*dest[7].(*string) = item.BidType
 	*dest[8].(*string) = item.PaymentType
 	*dest[9].(*pgtype.Int8) = item.DailyBudget
-	*dest[10].(*pgtype.Timestamptz) = item.CreatedAt
-	*dest[11].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[10].(*pgtype.Bool) = item.PlacementSearch
+	*dest[11].(*pgtype.Bool) = item.PlacementRecommendations
+	*dest[12].(*pgtype.Timestamptz) = item.WbCreatedAt
+	*dest[13].(*pgtype.Timestamptz) = item.WbStartedAt
+	*dest[14].(*pgtype.Timestamptz) = item.WbUpdatedAt
+	*dest[15].(*pgtype.Timestamptz) = item.WbDeletedAt
+	*dest[16].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[17].(*pgtype.Timestamptz) = item.UpdatedAt
 	return nil
 }
 
@@ -1049,10 +1067,264 @@ func TestRecommendationEngineCreatesCampaignHighSpendLowOrdersRecommendation(t *
 		if recommendation.Type == domain.RecommendationTypeHighSpendLowOrders {
 			require.NotNil(t, recommendation.CampaignID)
 			assert.Equal(t, campaignID, *recommendation.CampaignID)
-			assert.Contains(t, recommendation.Description, "65 кликов, но 0 заказов")
+			assert.Contains(t, recommendation.Description, "65 кликов")
+			assert.Contains(t, recommendation.Description, "0 заказов")
+			assert.Contains(t, recommendation.Description, "лимита без заказа")
+			var sourceMetrics map[string]any
+			require.NoError(t, json.Unmarshal(recommendation.SourceMetrics, &sourceMetrics))
+			assert.Equal(t, float64(11000), sourceMetrics["spend"])
+			assert.Equal(t, float64(domain.DefaultCampaignMaxSpendNoOrder), sourceMetrics["campaign_max_spend_no_order"])
 		}
 	}
 	assert.Contains(t, types, domain.RecommendationTypeHighSpendLowOrders)
+}
+
+func TestRecommendationEngineSkipsCampaignHighSpendLowOrdersBelowSpendLimit(t *testing.T) {
+	db := newRecommendationInMemDB()
+	queries := sqlcgen.New(db)
+	recommendationService := NewRecommendationService(queries)
+	engine := NewRecommendationEngine(queries, recommendationService, nil, zerolog.Nop())
+
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	db.campaigns = []sqlcgen.Campaign{{
+		ID:          uuidToPgtype(campaignID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Name:        "Campaign Test Budget",
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}}
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 1200,
+		Clicks:      65,
+		Spend:       domain.DefaultCampaignMaxSpendNoOrder - 1,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err := engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	for _, recommendation := range result {
+		assert.NotEqual(t, domain.RecommendationTypeHighSpendLowOrders, recommendation.Type)
+	}
+}
+
+func TestRecommendationEngineUsesWorkspaceSpendWithoutOrderLimit(t *testing.T) {
+	db := newRecommendationInMemDB()
+	queries := sqlcgen.New(db)
+	recommendationService := NewRecommendationService(queries)
+	engine := NewRecommendationEngine(queries, recommendationService, nil, zerolog.Nop())
+
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	settings, err := json.Marshal(domain.WorkspaceSettings{
+		RecommendationThresholds: &domain.RecommendationThresholds{
+			CampaignMaxSpendNoOrder: 7000,
+		},
+	})
+	require.NoError(t, err)
+	db.settings[workspaceID] = settings
+	db.campaigns = []sqlcgen.Campaign{{
+		ID:          uuidToPgtype(campaignID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Name:        "Campaign Custom Budget",
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}}
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 1200,
+		Clicks:      65,
+		Spend:       6500,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err := engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	for _, recommendation := range result {
+		assert.NotEqual(t, domain.RecommendationTypeHighSpendLowOrders, recommendation.Type)
+	}
+
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 1200,
+		Clicks:      65,
+		Spend:       7000,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err = engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	types := make([]string, 0, len(result))
+	for _, recommendation := range result {
+		types = append(types, recommendation.Type)
+	}
+	assert.Contains(t, types, domain.RecommendationTypeHighSpendLowOrders)
+}
+
+func TestRecommendationEngineCreatesCampaignTestSpendLimitRecommendation(t *testing.T) {
+	db := newRecommendationInMemDB()
+	queries := sqlcgen.New(db)
+	recommendationService := NewRecommendationService(queries)
+	engine := NewRecommendationEngine(queries, recommendationService, nil, zerolog.Nop())
+
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	db.campaigns = []sqlcgen.Campaign{{
+		ID:          uuidToPgtype(campaignID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Name:        "Campaign Test Spend",
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}}
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 900,
+		Clicks:      int64(domain.DefaultCampaignZeroOrdersClick - 1),
+		Spend:       domain.DefaultCampaignMaxTestSpend,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err := engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	types := make([]string, 0, len(result))
+	for _, recommendation := range result {
+		types = append(types, recommendation.Type)
+		if recommendation.Type == domain.RecommendationTypeCampaignTestSpend {
+			require.NotNil(t, recommendation.CampaignID)
+			assert.Equal(t, campaignID, *recommendation.CampaignID)
+			assert.Contains(t, recommendation.Description, "Тестовый лимит расхода")
+			var sourceMetrics map[string]any
+			require.NoError(t, json.Unmarshal(recommendation.SourceMetrics, &sourceMetrics))
+			assert.Equal(t, float64(domain.DefaultCampaignMaxTestSpend), sourceMetrics["campaign_max_test_spend"])
+			assert.Equal(t, float64(domain.DefaultCampaignZeroOrdersClick), sourceMetrics["campaign_zero_orders_click"])
+		}
+	}
+	assert.Contains(t, types, domain.RecommendationTypeCampaignTestSpend)
+	assert.NotContains(t, types, domain.RecommendationTypeHighSpendLowOrders)
+}
+
+func TestRecommendationEngineSkipsCampaignTestSpendLimitBeforeLimit(t *testing.T) {
+	db := newRecommendationInMemDB()
+	queries := sqlcgen.New(db)
+	recommendationService := NewRecommendationService(queries)
+	engine := NewRecommendationEngine(queries, recommendationService, nil, zerolog.Nop())
+
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	db.campaigns = []sqlcgen.Campaign{{
+		ID:          uuidToPgtype(campaignID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Name:        "Campaign Early Test",
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}}
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 900,
+		Clicks:      int64(domain.DefaultCampaignZeroOrdersClick - 1),
+		Spend:       domain.DefaultCampaignMaxTestSpend - 1,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err := engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	for _, recommendation := range result {
+		assert.NotEqual(t, domain.RecommendationTypeCampaignTestSpend, recommendation.Type)
+	}
+}
+
+func TestRecommendationEngineUsesWorkspaceCampaignMaxTestSpend(t *testing.T) {
+	db := newRecommendationInMemDB()
+	queries := sqlcgen.New(db)
+	recommendationService := NewRecommendationService(queries)
+	engine := NewRecommendationEngine(queries, recommendationService, nil, zerolog.Nop())
+
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	settings, err := json.Marshal(domain.WorkspaceSettings{
+		RecommendationThresholds: &domain.RecommendationThresholds{
+			CampaignMaxTestSpend: 5000,
+		},
+	})
+	require.NoError(t, err)
+	db.settings[workspaceID] = settings
+	db.campaigns = []sqlcgen.Campaign{{
+		ID:          uuidToPgtype(campaignID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Name:        "Campaign Custom Test Spend",
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}}
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 900,
+		Clicks:      12,
+		Spend:       4999,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err := engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	for _, recommendation := range result {
+		assert.NotEqual(t, domain.RecommendationTypeCampaignTestSpend, recommendation.Type)
+	}
+
+	db.campaignStats[campaignID] = sqlcgen.CampaignStat{
+		ID:          uuidToPgtype(uuid.New()),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: now, Valid: true},
+		Impressions: 900,
+		Clicks:      12,
+		Spend:       5000,
+		Orders:      pgtype.Int8{Int64: 0, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	result, err = engine.GenerateForWorkspace(context.Background(), workspaceID)
+
+	require.NoError(t, err)
+	types := make([]string, 0, len(result))
+	for _, recommendation := range result {
+		types = append(types, recommendation.Type)
+	}
+	assert.Contains(t, types, domain.RecommendationTypeCampaignTestSpend)
 }
 
 func TestRecommendationEngineClosesResolvedCampaignHighSpendLowOrdersRecommendation(t *testing.T) {

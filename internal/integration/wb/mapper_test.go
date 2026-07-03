@@ -124,6 +124,12 @@ func TestMapCampaignDTO_ZeroAdvertID(t *testing.T) {
 	assert.Equal(t, int64(0), c.WBCampaignID)
 }
 
+func TestParseOptionalWBTimeTreatsSentinelFutureAsMissing(t *testing.T) {
+	assert.Nil(t, parseOptionalWBTime("2100-01-01T00:00:00"))
+	assert.Nil(t, parseOptionalWBTime("2100-01-01 00:00:00"))
+	assert.Nil(t, parseOptionalWBTime("2100-01-01"))
+}
+
 // ---------------------------------------------------------------------------
 // MapCampaignStatDTO
 // ---------------------------------------------------------------------------
@@ -151,7 +157,9 @@ func TestMapCampaignStatDTO_Success(t *testing.T) {
 	assert.Equal(t, int64(120), stat.Clicks)
 	assert.Equal(t, int64(346), stat.Spend)
 	require.NotNil(t, stat.Orders)
-	assert.Equal(t, int64(18), *stat.Orders)
+	assert.Equal(t, int64(12), *stat.Orders)
+	require.NotNil(t, stat.Shks)
+	assert.Equal(t, int64(18), *stat.Shks)
 	require.NotNil(t, stat.Revenue)
 	assert.Equal(t, int64(4568), *stat.Revenue)
 }

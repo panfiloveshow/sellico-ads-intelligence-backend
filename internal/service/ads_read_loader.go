@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
@@ -52,9 +53,19 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	var campaignStatRows []sqlcgen.CampaignStat
 	var productStatRows []sqlcgen.ProductStat
 	var productBusinessRows []sqlcgen.ProductSalesDaily
+	var productEconomicsRows []sqlcgen.ProductEconomics
+	var productFunnelRows []sqlcgen.ProductSalesFunnelPeriod
+	var commissionTariffRows []sqlcgen.WBCommissionTariff
+	var financeDocRows []sqlcgen.WBAdFinanceDocument
 	var phraseStatRows []sqlcgen.PhraseStat
 	var campaignProductRows []sqlcgen.CampaignProduct
+	var activeStrategyRows []sqlcgen.Strategy
+	var activeStrategyBindingRows []sqlcgen.StrategyBinding
 	var campaignBudgetRows []sqlcgen.CampaignBudget
+	var bidChangeRows []sqlcgen.BidChange
+	var bidSnapshotRows []sqlcgen.BidSnapshot
+	var productStockEvidenceRows []sqlcgen.ProductStockEvidenceRow
+	var activeRecommendationRows []sqlcgen.Recommendation
 	var extensionEvidence *workspaceExtensionEvidence
 	var lastAutoSync *domain.SellerCabinetAutoSyncSummary
 
@@ -109,6 +120,33 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	})
 	g.Go(func() error {
 		var err error
+		productEconomicsRows, err = s.queries.ListProductEconomicsByWorkspace(gctx, uuidToPgtype(workspaceID), s.entityLimit, 0)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		productFunnelRows, err = s.queries.ListProductSalesFunnelPeriodsByWorkspaceDateRange(gctx, uuidToPgtype(workspaceID), pgDate(dateFrom), pgDate(dateTo), s.entityLimit, 0)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		commissionTariffRows, err = s.queries.ListWBCommissionTariffsByWorkspace(gctx, uuidToPgtype(workspaceID), s.entityLimit, 0)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		financeDocRows, err = s.queries.ListWBAdFinanceDocumentsByWorkspaceDateRange(
+			gctx,
+			uuidToPgtype(workspaceID),
+			pgtype.Timestamptz{Time: normalizeStatDate(dateFrom), Valid: true},
+			pgtype.Timestamptz{Time: normalizeStatDate(dateTo).AddDate(0, 0, 1), Valid: true},
+			s.entityLimit,
+			0,
+		)
+		return err
+	})
+	g.Go(func() error {
+		var err error
 		phraseStatRows, err = s.queries.ListPhraseStatsByWorkspaceDateRange(gctx, sqlcgen.ListPhraseStatsByWorkspaceDateRangeParams{
 			WorkspaceID: workspaceUUID(workspaceID), DateFrom: dateFrom, DateTo: dateTo,
 		})
@@ -121,7 +159,46 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	})
 	g.Go(func() error {
 		var err error
+		activeStrategyRows, err = s.queries.ListActiveStrategiesByWorkspace(gctx, uuidToPgtype(workspaceID))
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		activeStrategyBindingRows, err = s.queries.ListActiveStrategyBindingsByWorkspace(gctx, uuidToPgtype(workspaceID))
+		return err
+	})
+	g.Go(func() error {
+		var err error
 		campaignBudgetRows, err = s.queries.ListLatestCampaignBudgetsByWorkspace(gctx, uuidToPgtype(workspaceID))
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		bidChangeRows, err = s.queries.ListBidChangesByWorkspace(gctx, sqlcgen.ListBidChangesByWorkspaceParams{
+			WorkspaceID: uuidToPgtype(workspaceID),
+			Limit:       s.entityLimit,
+			Offset:      0,
+		})
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		bidSnapshotRows, err = s.queries.GetLatestBidSnapshotsBatch(gctx, uuidToPgtype(workspaceID))
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		productStockEvidenceRows, err = s.queries.ListLatestProductStockEvidenceByWorkspace(gctx, uuidToPgtype(workspaceID))
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		activeRecommendationRows, err = s.queries.ListRecommendationsByWorkspace(gctx, sqlcgen.ListRecommendationsByWorkspaceParams{
+			WorkspaceID:  uuidToPgtype(workspaceID),
+			Limit:        s.entityLimit,
+			Offset:       0,
+			StatusFilter: textToPgtype(domain.RecommendationStatusActive),
+		})
 		return err
 	})
 	g.Go(func() error {
@@ -144,22 +221,31 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 
 	// Assemble data structure
 	data := &adsWorkspaceData{
-		cabinets:            make(map[uuid.UUID]domain.SellerCabinet, len(cabinetRows)),
-		campaigns:           make([]domain.Campaign, 0, len(campaignRows)),
-		products:            make([]domain.Product, 0, len(productRows)),
-		phrases:             make([]domain.Phrase, 0, len(phraseRows)),
-		campaignStatsByID:   make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
-		productStatsByID:    make(map[uuid.UUID][]domain.ProductStat, len(productRows)),
-		productStatsByLink:  make(map[productCampaignKey][]domain.ProductStat, len(productStatRows)),
-		productBusinessByID: make(map[uuid.UUID][]domain.ProductBusinessSummary, len(productRows)),
-		phraseStatsByID:     make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
-		campaignProductIDs:  make(map[uuid.UUID][]uuid.UUID),
-		productCampaignIDs:  make(map[uuid.UUID][]uuid.UUID),
-		campaignProductMeta: make(map[productCampaignKey]domain.CampaignProductLinkMeta, len(campaignProductRows)),
-		campaignPhrases:     make(map[uuid.UUID][]domain.Phrase),
-		campaignBudgets:     make(map[uuid.UUID]domain.CampaignBudgetSummary),
-		lastAutoSync:        lastAutoSync,
-		extensionEvidence:   &workspaceExtensionEvidence{},
+		cabinets:                   make(map[uuid.UUID]domain.SellerCabinet, len(cabinetRows)),
+		campaigns:                  make([]domain.Campaign, 0, len(campaignRows)),
+		products:                   make([]domain.Product, 0, len(productRows)),
+		phrases:                    make([]domain.Phrase, 0, len(phraseRows)),
+		campaignStatsByID:          make(map[uuid.UUID][]domain.CampaignStat, len(campaignRows)),
+		productStatsByID:           make(map[uuid.UUID][]domain.ProductStat, len(productRows)),
+		productStatsByLink:         make(map[productCampaignKey][]domain.ProductStat, len(productStatRows)),
+		productBusinessByID:        make(map[uuid.UUID][]domain.ProductBusinessSummary, len(productRows)),
+		productEconomicsByWBID:     make(map[int64]domain.ProductEconomics, len(productEconomicsRows)),
+		productFunnelByID:          make(map[uuid.UUID][]sqlcgen.ProductSalesFunnelPeriod, len(productFunnelRows)),
+		commissionTariffsBySubject: make(map[string]sqlcgen.WBCommissionTariff, len(commissionTariffRows)),
+		financeDocsByWBCampaignID:  make(map[int64][]sqlcgen.WBAdFinanceDocument, len(financeDocRows)),
+		phraseStatsByID:            make(map[uuid.UUID][]domain.PhraseStat, len(phraseRows)),
+		campaignProductIDs:         make(map[uuid.UUID][]uuid.UUID),
+		productCampaignIDs:         make(map[uuid.UUID][]uuid.UUID),
+		campaignProductMeta:        make(map[productCampaignKey]domain.CampaignProductLinkMeta, len(campaignProductRows)),
+		campaignPhrases:            make(map[uuid.UUID][]domain.Phrase),
+		campaignDRRLimits:          campaignDRRLimitsFromStrategies(activeStrategyRows, activeStrategyBindingRows),
+		campaignBudgets:            make(map[uuid.UUID]domain.CampaignBudgetSummary),
+		bidChanges:                 bidChangeRows,
+		bidSnapshotsByPhrase:       make(map[uuid.UUID]sqlcgen.BidSnapshot, len(bidSnapshotRows)),
+		productStockEvidence:       make(map[uuid.UUID]productStockEvidence, len(productStockEvidenceRows)),
+		activeRecommendations:      activeRecommendationRows,
+		lastAutoSync:               lastAutoSync,
+		extensionEvidence:          &workspaceExtensionEvidence{},
 	}
 	if extensionEvidence != nil {
 		data.extensionEvidence = extensionEvidence
@@ -175,6 +261,30 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 	}
 	for _, row := range productRows {
 		data.products = append(data.products, productFromSqlc(row))
+	}
+	for _, row := range productEconomicsRows {
+		economics := productEconomicsFromSqlc(row)
+		if economics.WBProductID > 0 {
+			data.productEconomicsByWBID[economics.WBProductID] = economics
+		}
+	}
+	for _, row := range productFunnelRows {
+		productID := uuidFromPgtype(row.ProductID)
+		if productID != uuid.Nil {
+			data.productFunnelByID[productID] = append(data.productFunnelByID[productID], row)
+		}
+	}
+	for _, row := range commissionTariffRows {
+		key := commissionTariffSubjectKey(row.SubjectName)
+		if key != "" {
+			data.commissionTariffsBySubject[key] = row
+		}
+	}
+	for _, row := range financeDocRows {
+		if row.WBCampaignID <= 0 {
+			continue
+		}
+		data.financeDocsByWBCampaignID[row.WBCampaignID] = append(data.financeDocsByWBCampaignID[row.WBCampaignID], row)
 	}
 	for _, row := range phraseRows {
 		phrase := phraseFromSqlc(row)
@@ -214,6 +324,24 @@ func (s *AdsReadService) doLoadWorkspaceData(ctx context.Context, workspaceID uu
 			Cash:       row.Cash,
 			Netting:    row.Netting,
 			Total:      row.Total,
+			CapturedAt: row.CapturedAt.Time,
+		}
+	}
+	for _, row := range bidSnapshotRows {
+		phraseID := uuidFromPgtype(row.PhraseID)
+		if phraseID == uuid.Nil {
+			continue
+		}
+		data.bidSnapshotsByPhrase[phraseID] = row
+	}
+	for _, row := range productStockEvidenceRows {
+		productID := uuidFromPgtype(row.ProductID)
+		if productID == uuid.Nil {
+			continue
+		}
+		data.productStockEvidence[productID] = productStockEvidence{
+			StockTotal: row.StockTotal,
+			Source:     row.Source,
 			CapturedAt: row.CapturedAt.Time,
 		}
 	}

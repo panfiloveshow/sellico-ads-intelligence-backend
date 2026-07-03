@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -24,6 +26,9 @@ func NewStrategyService(queries *sqlcgen.Queries) *StrategyService {
 }
 
 func (s *StrategyService) Create(ctx context.Context, workspaceID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+	if err := validateStrategyForSave(input); err != nil {
+		return nil, err
+	}
 	if input.SellerCabinetID == uuid.Nil {
 		return nil, apperror.New(apperror.ErrValidation, "seller_cabinet_id is required")
 	}
@@ -94,6 +99,9 @@ func (s *StrategyService) List(ctx context.Context, workspaceID uuid.UUID, selle
 }
 
 func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+	if err := validateStrategyForSave(input); err != nil {
+		return nil, err
+	}
 	paramsJSON, err := json.Marshal(input.Params)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrValidation, "invalid strategy params")
@@ -116,6 +124,51 @@ func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uu
 
 	result := strategyFromSqlc(row)
 	return &result, nil
+}
+
+func validateStrategyForSave(input domain.Strategy) error {
+	if strings.TrimSpace(input.Name) == "" {
+		return apperror.New(apperror.ErrValidation, "strategy name is required")
+	}
+	switch input.Type {
+	case domain.StrategyTypeACoS,
+		domain.StrategyTypeROAS,
+		domain.StrategyTypeAntiSliv,
+		domain.StrategyTypeDayparting,
+		domain.StrategyTypeRecommendation:
+	default:
+		return apperror.New(apperror.ErrValidation, "invalid strategy type")
+	}
+	params := input.Params
+	switch {
+	case params.MinBid < 0:
+		return apperror.New(apperror.ErrValidation, "min_bid must be non-negative")
+	case params.MaxBid < 0:
+		return apperror.New(apperror.ErrValidation, "max_bid must be non-negative")
+	case params.MinBid > 0 && params.MaxBid > 0 && params.MinBid > params.MaxBid:
+		return apperror.New(apperror.ErrValidation, "min_bid must be less than or equal to max_bid")
+	case params.MaxCPC < 0:
+		return apperror.New(apperror.ErrValidation, "max_cpc must be non-negative")
+	case params.MaxCPO < 0:
+		return apperror.New(apperror.ErrValidation, "max_cpo must be non-negative")
+	case params.AutomationLevel < 0 || params.AutomationLevel > 4:
+		return apperror.New(apperror.ErrValidation, fmt.Sprintf("automation_level %d is invalid; use 1..4", params.AutomationLevel))
+	case params.MaxChangePercent < 0 || params.MaxChangePercent > 100:
+		return apperror.New(apperror.ErrValidation, "max_change_percent must be between 0 and 100")
+	case params.LookbackDays < 0:
+		return apperror.New(apperror.ErrValidation, "lookback_days must be non-negative")
+	case params.MinClicks < 0:
+		return apperror.New(apperror.ErrValidation, "min_clicks must be non-negative")
+	case params.MinStockForIncrease < 0:
+		return apperror.New(apperror.ErrValidation, "min_stock_for_increase must be non-negative")
+	case params.CooldownMinutes < 0:
+		return apperror.New(apperror.ErrValidation, "cooldown_minutes must be non-negative")
+	case params.MaxChangesPerDay < 0:
+		return apperror.New(apperror.ErrValidation, "max_changes_per_day must be non-negative")
+	case params.MaxDataAgeHours < 0:
+		return apperror.New(apperror.ErrValidation, "max_data_age_hours must be non-negative")
+	}
+	return nil
 }
 
 func (s *StrategyService) Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error {

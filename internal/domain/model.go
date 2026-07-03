@@ -52,22 +52,44 @@ const (
 // --- Recommendation type constants ---
 
 const (
-	RecommendationTypeBidAdjustment      = "bid_adjustment"
-	RecommendationTypeRaiseBid           = "raise_bid"
-	RecommendationTypeLowerBid           = "lower_bid"
-	RecommendationTypePositionDrop       = "position_drop"
-	RecommendationTypeLowCTR             = "low_ctr"
-	RecommendationTypeHighSpendLowOrders = "high_spend_low_orders"
-	RecommendationTypeNewCompetitor      = "new_competitor"
-	RecommendationTypeDisablePhrase      = "disable_phrase"
-	RecommendationTypeAddMinusPhrase     = "add_minus_phrase"
-	RecommendationTypeImproveTitle       = "improve_title"
-	RecommendationTypeImproveDescription = "improve_description"
-	RecommendationTypeOptimizeSEO        = "optimize_seo"
-	RecommendationTypePriceOptimization  = "price_optimization"
-	RecommendationTypePhotoImprovement   = "photo_improvement"
-	RecommendationTypeDeliveryIssue      = "delivery_issue"
-	RecommendationTypeStockAlert         = "stock_alert"
+	RecommendationTypeBidAdjustment        = "bid_adjustment"
+	RecommendationTypeRaiseBid             = "raise_bid"
+	RecommendationTypeLowerBid             = "lower_bid"
+	RecommendationTypePositionDrop         = "position_drop"
+	RecommendationTypeLowCTR               = "low_ctr"
+	RecommendationTypeHighSpendLowOrders   = "high_spend_low_orders"
+	RecommendationTypeCampaignTestSpend    = "campaign_test_spend_limit"
+	RecommendationTypeNewCompetitor        = "new_competitor"
+	RecommendationTypeDisablePhrase        = "disable_phrase"
+	RecommendationTypeAddMinusPhrase       = "add_minus_phrase"
+	RecommendationTypeImproveTitle         = "improve_title"
+	RecommendationTypeImproveDescription   = "improve_description"
+	RecommendationTypeOptimizeSEO          = "optimize_seo"
+	RecommendationTypeCardConversionIssue  = "card_conversion_issue"
+	RecommendationTypeOfferConversionIssue = "offer_conversion_issue"
+	RecommendationTypePriceOptimization    = "price_optimization"
+	RecommendationTypePhotoImprovement     = "photo_improvement"
+	RecommendationTypeDeliveryIssue        = "delivery_issue"
+	RecommendationTypeStockAlert           = "stock_alert"
+)
+
+// --- Recommendation task category constants ---
+
+const (
+	RecommendationTaskCategoryLosses    = "losses"
+	RecommendationTaskCategoryGrowth    = "growth"
+	RecommendationTaskCategoryCardTasks = "card_tasks"
+	RecommendationTaskCategoryAPIRisks  = "api_risks"
+)
+
+// --- Recommendation task owner role constants ---
+
+const (
+	RecommendationTaskOwnerMarketer            = "marketer"
+	RecommendationTaskOwnerMarketplaceManager  = "marketplace_manager"
+	RecommendationTaskOwnerContent             = "content"
+	RecommendationTaskOwnerSEO                 = "seo"
+	RecommendationTaskOwnerTechnicalSpecialist = "technical_specialist"
 )
 
 // --- Recommendation severity constants ---
@@ -86,6 +108,42 @@ const (
 	RecommendationStatusCompleted = "completed"
 	RecommendationStatusDismissed = "dismissed"
 )
+
+const RecommendationOverdueAfter = 48 * time.Hour
+
+// RecommendationTaskCategory returns the queue bucket for task-oriented recommendation views.
+func RecommendationTaskCategory(recType string) string {
+	switch recType {
+	case RecommendationTypeHighSpendLowOrders, RecommendationTypeCampaignTestSpend, RecommendationTypeLowerBid, RecommendationTypeAddMinusPhrase, RecommendationTypeDisablePhrase:
+		return RecommendationTaskCategoryLosses
+	case RecommendationTypeRaiseBid, RecommendationTypeOptimizeSEO:
+		return RecommendationTaskCategoryGrowth
+	case RecommendationTypeLowCTR, RecommendationTypeCardConversionIssue, RecommendationTypeOfferConversionIssue, RecommendationTypeImproveTitle, RecommendationTypeImproveDescription, RecommendationTypePhotoImprovement, RecommendationTypePriceOptimization, RecommendationTypeDeliveryIssue, RecommendationTypeStockAlert:
+		return RecommendationTaskCategoryCardTasks
+	case "wb_api_errors", "wb_api_rate_limited":
+		return RecommendationTaskCategoryAPIRisks
+	default:
+		return ""
+	}
+}
+
+// RecommendationTaskOwnerRole returns the default team role responsible for a recommendation task.
+func RecommendationTaskOwnerRole(recType string) string {
+	switch recType {
+	case RecommendationTypeHighSpendLowOrders, RecommendationTypeCampaignTestSpend, RecommendationTypeLowerBid, RecommendationTypeRaiseBid, RecommendationTypeAddMinusPhrase, RecommendationTypeDisablePhrase, RecommendationTypeLowCTR:
+		return RecommendationTaskOwnerMarketer
+	case RecommendationTypeOptimizeSEO:
+		return RecommendationTaskOwnerSEO
+	case RecommendationTypeImproveTitle, RecommendationTypeImproveDescription, RecommendationTypePhotoImprovement, RecommendationTypeCardConversionIssue:
+		return RecommendationTaskOwnerContent
+	case RecommendationTypeOfferConversionIssue, RecommendationTypePriceOptimization, RecommendationTypeDeliveryIssue, RecommendationTypeStockAlert:
+		return RecommendationTaskOwnerMarketplaceManager
+	case "wb_api_errors", "wb_api_rate_limited":
+		return RecommendationTaskOwnerTechnicalSpecialist
+	default:
+		return ""
+	}
+}
 
 // --- Export format constants ---
 
@@ -177,6 +235,7 @@ type SellerCabinetAutoSyncSummary struct {
 	Phrases           int                 `json:"phrases"`
 	PhraseStats       int                 `json:"phrase_stats"`
 	Products          int                 `json:"products"`
+	WBErrors          int                 `json:"wb_errors"`
 	SyncIssues        int                 `json:"sync_issues"`
 }
 
@@ -287,6 +346,8 @@ type Product struct {
 	Category        *string   `json:"category,omitempty"`
 	ImageURL        *string   `json:"image_url,omitempty"`
 	Price           *int64    `json:"price,omitempty"`
+	Rating          *float64  `json:"rating,omitempty"`
+	ReviewsCount    *int      `json:"reviews_count,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -438,12 +499,23 @@ type Recommendation struct {
 }
 
 type SourceEvidence struct {
-	Source             string     `json:"source"`
-	CapturedAt         *time.Time `json:"captured_at,omitempty"`
-	FreshnessState     string     `json:"freshness_state"`
-	Confidence         float64    `json:"confidence"`
-	Coverage           string     `json:"coverage"`
-	ConfirmedInCabinet bool       `json:"confirmed_in_cabinet"`
+	Source             string                `json:"source"`
+	SourceLabel        string                `json:"source_label,omitempty"`
+	SourcePriority     []string              `json:"source_priority,omitempty"`
+	CapturedAt         *time.Time            `json:"captured_at,omitempty"`
+	FreshnessState     string                `json:"freshness_state"`
+	Confidence         float64               `json:"confidence"`
+	Coverage           string                `json:"coverage"`
+	ConfirmedInCabinet bool                  `json:"confirmed_in_cabinet"`
+	Issues             []SourceEvidenceIssue `json:"issues,omitempty"`
+}
+
+type SourceEvidenceIssue struct {
+	Type           string `json:"type"`
+	Severity       string `json:"severity"`
+	Message        string `json:"message"`
+	APIValue       string `json:"api_value,omitempty"`
+	ExtensionValue string `json:"extension_value,omitempty"`
 }
 
 // Export represents a data export task.
@@ -584,6 +656,29 @@ type ExtensionNetworkCapture struct {
 	CreatedAt       time.Time       `json:"created_at"`
 }
 
+type ExtensionDOMRowSnapshot struct {
+	ID              uuid.UUID       `json:"id"`
+	SessionID       uuid.UUID       `json:"session_id"`
+	WorkspaceID     uuid.UUID       `json:"workspace_id"`
+	UserID          uuid.UUID       `json:"user_id"`
+	SellerCabinetID *uuid.UUID      `json:"seller_cabinet_id,omitempty"`
+	CampaignID      *uuid.UUID      `json:"campaign_id,omitempty"`
+	PhraseID        *uuid.UUID      `json:"phrase_id,omitempty"`
+	ProductID       *uuid.UUID      `json:"product_id,omitempty"`
+	PageType        string          `json:"page_type"`
+	TableRole       string          `json:"table_role"`
+	RowKey          string          `json:"row_key"`
+	Query           *string         `json:"query,omitempty"`
+	Region          *string         `json:"region,omitempty"`
+	VisibleText     string          `json:"visible_text"`
+	Cells           json.RawMessage `json:"cells,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Source          string          `json:"source"`
+	Confidence      float64         `json:"confidence"`
+	CapturedAt      time.Time       `json:"captured_at"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
 // AuditLog represents an audit trail entry for user or system actions.
 type AuditLog struct {
 	ID          uuid.UUID       `json:"id"`
@@ -632,19 +727,123 @@ type AdsMetricsSummary struct {
 }
 
 type ProductBusinessSummary struct {
-	Date            time.Time `json:"-"`
-	Orders          int64     `json:"orders"`
-	CanceledOrders  int64     `json:"canceled_orders"`
-	Sales           int64     `json:"sales"`
-	Returns         int64     `json:"returns"`
-	OrderedRevenue  int64     `json:"ordered_revenue"`
-	SoldRevenue     int64     `json:"sold_revenue"`
-	ReturnedRevenue int64     `json:"returned_revenue"`
-	BuyoutRate      float64   `json:"buyout_rate"`
-	ReturnRate      float64   `json:"return_rate"`
-	AdSpend         int64     `json:"ad_spend"`
-	AdToSoldRevenue float64   `json:"ad_to_sold_revenue"`
-	DataMode        string    `json:"data_mode"`
+	Date                               time.Time  `json:"-"`
+	Orders                             int64      `json:"orders"`
+	CanceledOrders                     int64      `json:"canceled_orders"`
+	Sales                              int64      `json:"sales"`
+	Returns                            int64      `json:"returns"`
+	OrderedRevenue                     int64      `json:"ordered_revenue"`
+	SoldRevenue                        int64      `json:"sold_revenue"`
+	ReturnedRevenue                    int64      `json:"returned_revenue"`
+	BuyoutRate                         float64    `json:"buyout_rate"`
+	ReturnRate                         float64    `json:"return_rate"`
+	AdSpend                            int64      `json:"ad_spend"`
+	AdToSoldRevenue                    float64    `json:"ad_to_sold_revenue"`
+	DataMode                           string     `json:"data_mode"`
+	SalesFunnelOpenCount               int64      `json:"sales_funnel_open_count"`
+	SalesFunnelCartCount               int64      `json:"sales_funnel_cart_count"`
+	SalesFunnelOrderCount              int64      `json:"sales_funnel_order_count"`
+	SalesFunnelOpenToCartConversion    *float64   `json:"sales_funnel_open_to_cart_conversion,omitempty"`
+	SalesFunnelCartToOrderConversion   *float64   `json:"sales_funnel_cart_to_order_conversion,omitempty"`
+	SalesFunnelSource                  string     `json:"sales_funnel_source,omitempty"`
+	SalesFunnelDataMode                string     `json:"sales_funnel_data_mode,omitempty"`
+	SalesFunnelCapturedAt              *time.Time `json:"sales_funnel_captured_at,omitempty"`
+	CostPrice                          *int64     `json:"cost_price,omitempty"`
+	LogisticsCost                      *int64     `json:"logistics_cost,omitempty"`
+	OtherCosts                         *int64     `json:"other_costs,omitempty"`
+	TaxRatePercent                     *float64   `json:"tax_rate_percent,omitempty"`
+	CommissionPercent                  *float64   `json:"commission_percent,omitempty"`
+	TargetMarginPercent                *float64   `json:"target_margin_percent,omitempty"`
+	MaxAllowedDRR                      *float64   `json:"max_allowed_drr,omitempty"`
+	MarginBeforeAds                    *int64     `json:"margin_before_ads,omitempty"`
+	MarginBeforeAdsTotal               *int64     `json:"margin_before_ads_total,omitempty"`
+	MarginBeforeAdsPercent             *float64   `json:"margin_before_ads_percent,omitempty"`
+	ProfitAfterAds                     *int64     `json:"profit_after_ads,omitempty"`
+	MarginalDRR                        *float64   `json:"marginal_drr,omitempty"`
+	EconomicsSource                    string     `json:"economics_source,omitempty"`
+	EconomicsDataMode                  string     `json:"economics_data_mode,omitempty"`
+	WBCommissionSubjectName            string     `json:"wb_commission_subject_name,omitempty"`
+	WBCommissionMarketplacePercent     *float64   `json:"wb_commission_marketplace_percent,omitempty"`
+	WBCommissionSupplierPercent        *float64   `json:"wb_commission_supplier_percent,omitempty"`
+	WBCommissionPickupPercent          *float64   `json:"wb_commission_pickup_percent,omitempty"`
+	WBCommissionBookingPercent         *float64   `json:"wb_commission_booking_percent,omitempty"`
+	WBCommissionSupplierExpressPercent *float64   `json:"wb_commission_supplier_express_percent,omitempty"`
+	WBCommissionDataMode               string     `json:"wb_commission_data_mode,omitempty"`
+}
+
+type ProductEconomicsInput struct {
+	WBProductID         int64      `json:"wb_product_id"`
+	CostPrice           *int64     `json:"cost_price,omitempty"`
+	LogisticsCost       *int64     `json:"logistics_cost,omitempty"`
+	OtherCosts          *int64     `json:"other_costs,omitempty"`
+	TaxRatePercent      *float64   `json:"tax_rate_percent,omitempty"`
+	CommissionPercent   *float64   `json:"commission_percent,omitempty"`
+	TargetMarginPercent *float64   `json:"target_margin_percent,omitempty"`
+	MaxAllowedDRR       *float64   `json:"max_allowed_drr,omitempty"`
+	Source              string     `json:"source,omitempty"`
+	EffectiveAt         *time.Time `json:"effective_at,omitempty"`
+}
+
+type ProductEconomics struct {
+	ID                  uuid.UUID  `json:"id"`
+	WorkspaceID         uuid.UUID  `json:"workspace_id"`
+	WBProductID         int64      `json:"wb_product_id"`
+	CostPrice           *int64     `json:"cost_price,omitempty"`
+	LogisticsCost       *int64     `json:"logistics_cost,omitempty"`
+	OtherCosts          *int64     `json:"other_costs,omitempty"`
+	TaxRatePercent      *float64   `json:"tax_rate_percent,omitempty"`
+	CommissionPercent   *float64   `json:"commission_percent,omitempty"`
+	TargetMarginPercent *float64   `json:"target_margin_percent,omitempty"`
+	MaxAllowedDRR       *float64   `json:"max_allowed_drr,omitempty"`
+	Source              string     `json:"source"`
+	EffectiveAt         *time.Time `json:"effective_at,omitempty"`
+	UpdatedBy           *uuid.UUID `json:"updated_by,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type ProductEconomicsImportResult struct {
+	Imported int                `json:"imported"`
+	Skipped  int                `json:"skipped"`
+	Errors   []string           `json:"errors,omitempty"`
+	Items    []ProductEconomics `json:"items"`
+}
+
+type ProductStockEvidence struct {
+	StockTotal int32     `json:"stock_total"`
+	Source     string    `json:"source"`
+	CapturedAt time.Time `json:"captured_at"`
+}
+
+type ProductStockRunoutForecast struct {
+	State             string    `json:"state"`
+	StockTotal        int32     `json:"stock_total"`
+	AverageDailySales float64   `json:"average_daily_sales"`
+	DaysToEmpty       *float64  `json:"days_to_empty,omitempty"`
+	PeriodDays        int       `json:"period_days"`
+	Source            string    `json:"source"`
+	CapturedAt        time.Time `json:"captured_at"`
+	Reason            string    `json:"reason,omitempty"`
+}
+
+type DecisionScoreSummary struct {
+	Value           *int     `json:"value,omitempty"`
+	DataMode        string   `json:"data_mode"`
+	Evidence        []string `json:"evidence,omitempty"`
+	MissingEvidence []string `json:"missing_evidence,omitempty"`
+}
+
+type ProductDecisionScores struct {
+	Advertising DecisionScoreSummary `json:"advertising"`
+	Readiness   DecisionScoreSummary `json:"readiness"`
+	Growth      DecisionScoreSummary `json:"growth"`
+}
+
+type ProductDecisionSummary struct {
+	Decision        string   `json:"decision"`
+	DataMode        string   `json:"data_mode"`
+	Reason          string   `json:"reason"`
+	MissingEvidence []string `json:"missing_evidence,omitempty"`
 }
 
 type AdsMetricsDelta struct {
@@ -682,6 +881,38 @@ type CampaignBudgetSummary struct {
 	CapturedAt time.Time `json:"captured_at"`
 }
 
+type CampaignBudgetPaceSummary struct {
+	State                            string   `json:"state"`
+	PeriodDays                       int      `json:"period_days"`
+	DailyBudget                      int64    `json:"daily_budget"`
+	WeeklyBudget                     int64    `json:"weekly_budget"`
+	MonthlyBudget                    int64    `json:"monthly_budget"`
+	PlannedSpend                     int64    `json:"planned_spend"`
+	ActualSpend                      int64    `json:"actual_spend"`
+	UtilizationPercent               float64  `json:"utilization_percent"`
+	ProjectedTodaySpend              *int64   `json:"projected_today_spend,omitempty"`
+	ProjectedTodayUtilizationPercent *float64 `json:"projected_today_utilization_percent,omitempty"`
+	Reason                           string   `json:"reason,omitempty"`
+}
+
+type CampaignBudgetRunoutSummary struct {
+	State           string    `json:"state"`
+	RemainingBudget int64     `json:"remaining_budget"`
+	SpendToday      int64     `json:"spend_today"`
+	HoursElapsed    float64   `json:"hours_elapsed"`
+	HoursToEmpty    float64   `json:"hours_to_empty"`
+	CapturedAt      time.Time `json:"captured_at"`
+	Reason          string    `json:"reason,omitempty"`
+}
+
+type CampaignFinanceSummary struct {
+	DocumentsCount   int            `json:"documents_count"`
+	Amount           int64          `json:"amount"`
+	DocumentTypes    map[string]int `json:"document_types,omitempty"`
+	LatestDocumentAt *time.Time     `json:"latest_document_at,omitempty"`
+	DataMode         string         `json:"data_mode"`
+}
+
 type CampaignProductPerformanceSummary struct {
 	ID                 uuid.UUID         `json:"id"`
 	ProductID          uuid.UUID         `json:"product_id"`
@@ -692,6 +923,36 @@ type CampaignProductPerformanceSummary struct {
 	BidRecommendations *int64            `json:"bid_recommendations,omitempty"`
 	ProductTotalCarts  *int64            `json:"product_total_carts,omitempty"`
 	Performance        AdsMetricsSummary `json:"performance"`
+}
+
+type CampaignBidChangeSummary struct {
+	ID               uuid.UUID  `json:"id"`
+	ProductID        *uuid.UUID `json:"product_id,omitempty"`
+	PhraseID         *uuid.UUID `json:"phrase_id,omitempty"`
+	RecommendationID *uuid.UUID `json:"recommendation_id,omitempty"`
+	Placement        string     `json:"placement"`
+	OldBid           int        `json:"old_bid"`
+	NewBid           int        `json:"new_bid"`
+	Reason           string     `json:"reason"`
+	Source           string     `json:"source"`
+	WBStatus         string     `json:"wb_status"`
+	CanRollback      bool       `json:"can_rollback"`
+	RollbackBid      *int       `json:"rollback_bid,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
+type CampaignRecommendationSummary struct {
+	ID         uuid.UUID  `json:"id"`
+	PhraseID   *uuid.UUID `json:"phrase_id,omitempty"`
+	ProductID  *uuid.UUID `json:"product_id,omitempty"`
+	Scope      string     `json:"scope"`
+	Title      string     `json:"title"`
+	Type       string     `json:"type"`
+	Severity   string     `json:"severity"`
+	Confidence float64    `json:"confidence"`
+	NextAction *string    `json:"next_action,omitempty"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type CampaignProductLinkMeta struct {
@@ -728,39 +989,45 @@ type CabinetSummary struct {
 }
 
 type ProductAdsSummary struct {
-	ID               uuid.UUID              `json:"id"`
-	WorkspaceID      uuid.UUID              `json:"workspace_id"`
-	SellerCabinetID  uuid.UUID              `json:"seller_cabinet_id"`
-	IntegrationID    *string                `json:"integration_id,omitempty"`
-	IntegrationName  string                 `json:"integration_name"`
-	CabinetName      string                 `json:"cabinet_name"`
-	CampaignID       *uuid.UUID             `json:"campaign_id,omitempty"`
-	CampaignName     *string                `json:"campaign_name,omitempty"`
-	WBCampaignID     *int64                 `json:"wb_campaign_id,omitempty"`
-	RowKey           string                 `json:"row_key,omitempty"`
-	WBProductID      int64                  `json:"wb_product_id"`
-	Title            string                 `json:"title"`
-	Brand            *string                `json:"brand,omitempty"`
-	Category         *string                `json:"category,omitempty"`
-	ImageURL         *string                `json:"image_url,omitempty"`
-	Price            *int64                 `json:"price,omitempty"`
-	CampaignsCount   int                    `json:"campaigns_count"`
-	QueriesCount     int                    `json:"queries_count"`
-	HealthStatus     string                 `json:"health_status"`
-	HealthReason     *string                `json:"health_reason,omitempty"`
-	PrimaryAction    *string                `json:"primary_action,omitempty"`
-	FreshnessState   string                 `json:"freshness_state"`
-	Performance      AdsMetricsSummary      `json:"performance"`
-	Business         ProductBusinessSummary `json:"business"`
-	PeriodCompare    *AdsPeriodCompare      `json:"period_compare,omitempty"`
-	RelatedCampaigns []AdsEntityRef         `json:"related_campaigns,omitempty"`
-	TopQueries       []AdsEntityRef         `json:"top_queries,omitempty"`
-	WasteQueries     []AdsEntityRef         `json:"waste_queries,omitempty"`
-	WinningQueries   []AdsEntityRef         `json:"winning_queries,omitempty"`
-	Evidence         *SourceEvidence        `json:"evidence,omitempty"`
-	DataCoverageNote *string                `json:"data_coverage_note,omitempty"`
-	CreatedAt        time.Time              `json:"created_at"`
-	UpdatedAt        time.Time              `json:"updated_at"`
+	ID               uuid.UUID                   `json:"id"`
+	WorkspaceID      uuid.UUID                   `json:"workspace_id"`
+	SellerCabinetID  uuid.UUID                   `json:"seller_cabinet_id"`
+	IntegrationID    *string                     `json:"integration_id,omitempty"`
+	IntegrationName  string                      `json:"integration_name"`
+	CabinetName      string                      `json:"cabinet_name"`
+	CampaignID       *uuid.UUID                  `json:"campaign_id,omitempty"`
+	CampaignName     *string                     `json:"campaign_name,omitempty"`
+	WBCampaignID     *int64                      `json:"wb_campaign_id,omitempty"`
+	RowKey           string                      `json:"row_key,omitempty"`
+	WBProductID      int64                       `json:"wb_product_id"`
+	Title            string                      `json:"title"`
+	Brand            *string                     `json:"brand,omitempty"`
+	Category         *string                     `json:"category,omitempty"`
+	ImageURL         *string                     `json:"image_url,omitempty"`
+	Price            *int64                      `json:"price,omitempty"`
+	Rating           *float64                    `json:"rating,omitempty"`
+	ReviewsCount     *int                        `json:"reviews_count,omitempty"`
+	CampaignsCount   int                         `json:"campaigns_count"`
+	QueriesCount     int                         `json:"queries_count"`
+	HealthStatus     string                      `json:"health_status"`
+	HealthReason     *string                     `json:"health_reason,omitempty"`
+	PrimaryAction    *string                     `json:"primary_action,omitempty"`
+	FreshnessState   string                      `json:"freshness_state"`
+	Performance      AdsMetricsSummary           `json:"performance"`
+	Business         ProductBusinessSummary      `json:"business"`
+	Scores           ProductDecisionScores       `json:"scores"`
+	Decision         ProductDecisionSummary      `json:"decision"`
+	PeriodCompare    *AdsPeriodCompare           `json:"period_compare,omitempty"`
+	RelatedCampaigns []AdsEntityRef              `json:"related_campaigns,omitempty"`
+	TopQueries       []AdsEntityRef              `json:"top_queries,omitempty"`
+	WasteQueries     []AdsEntityRef              `json:"waste_queries,omitempty"`
+	WinningQueries   []AdsEntityRef              `json:"winning_queries,omitempty"`
+	StockEvidence    *ProductStockEvidence       `json:"stock_evidence,omitempty"`
+	StockRunout      *ProductStockRunoutForecast `json:"stock_runout,omitempty"`
+	Evidence         *SourceEvidence             `json:"evidence,omitempty"`
+	DataCoverageNote *string                     `json:"data_coverage_note,omitempty"`
+	CreatedAt        time.Time                   `json:"created_at"`
+	UpdatedAt        time.Time                   `json:"updated_at"`
 }
 
 type CampaignPerformanceSummary struct {
@@ -784,6 +1051,9 @@ type CampaignPerformanceSummary struct {
 	WBUpdatedAt              *time.Time                          `json:"wb_updated_at,omitempty"`
 	WBDeletedAt              *time.Time                          `json:"wb_deleted_at,omitempty"`
 	LatestBudget             *CampaignBudgetSummary              `json:"latest_budget,omitempty"`
+	BudgetPace               *CampaignBudgetPaceSummary          `json:"budget_pace,omitempty"`
+	BudgetRunout             *CampaignBudgetRunoutSummary        `json:"budget_runout,omitempty"`
+	AdFinance                *CampaignFinanceSummary             `json:"ad_finance,omitempty"`
 	LastSync                 *time.Time                          `json:"last_sync,omitempty"`
 	HealthStatus             string                              `json:"health_status"`
 	HealthReason             *string                             `json:"health_reason,omitempty"`
@@ -796,6 +1066,8 @@ type CampaignPerformanceSummary struct {
 	TopQueries               []AdsEntityRef                      `json:"top_queries,omitempty"`
 	WasteQueries             []AdsEntityRef                      `json:"waste_queries,omitempty"`
 	WinningQueries           []AdsEntityRef                      `json:"winning_queries,omitempty"`
+	RecentBidChanges         []CampaignBidChangeSummary          `json:"recent_bid_changes,omitempty"`
+	ActiveRecommendations    []CampaignRecommendationSummary     `json:"active_recommendations,omitempty"`
 	Evidence                 *SourceEvidence                     `json:"evidence,omitempty"`
 	CreatedAt                time.Time                           `json:"created_at"`
 	UpdatedAt                time.Time                           `json:"updated_at"`
@@ -870,6 +1142,8 @@ type AdsDataStatus struct {
 	ProductsTotal            int                  `json:"products_total"`
 	QueriesWithStats         int                  `json:"queries_with_stats"`
 	QueriesTotal             int                  `json:"queries_total"`
+	UnitEconomicsState       string               `json:"unit_economics_state"`
+	UnitEconomicsReason      string               `json:"unit_economics_reason,omitempty"`
 	Issues                   []AdsDataStatusIssue `json:"issues,omitempty"`
 }
 
@@ -880,10 +1154,15 @@ type AdsDataStatusIssue struct {
 }
 
 type AdsOverviewTotals struct {
-	Cabinets        int `json:"cabinets"`
-	Products        int `json:"products"`
-	Campaigns       int `json:"campaigns"`
-	Queries         int `json:"queries"`
-	ActiveCampaigns int `json:"active_campaigns"`
-	AttentionItems  int `json:"attention_items"`
+	Cabinets               int            `json:"cabinets"`
+	Products               int            `json:"products"`
+	Campaigns              int            `json:"campaigns"`
+	Queries                int            `json:"queries"`
+	ActiveCampaigns        int            `json:"active_campaigns"`
+	AttentionItems         int            `json:"attention_items"`
+	ActiveRecommendations  int            `json:"active_recommendations"`
+	OverdueRecommendations int            `json:"overdue_recommendations"`
+	DecisionQueueBuckets   map[string]int `json:"decision_queue_buckets,omitempty"`
+	TaskOwnerBuckets       map[string]int `json:"task_owner_buckets,omitempty"`
+	ProductDecisions       map[string]int `json:"product_decisions,omitempty"`
 }

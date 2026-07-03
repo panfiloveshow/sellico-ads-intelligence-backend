@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -63,13 +64,21 @@ func (h *RecommendationHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	taskFilters, err := recommendationTaskFiltersFromQuery(r)
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, err.Error())
+		return
+	}
 	recommendations, err := h.svc.List(r.Context(), workspaceID, service.RecommendationListFilter{
-		CampaignID: campaignID,
-		PhraseID:   phraseID,
-		ProductID:  productID,
-		Type:       r.URL.Query().Get("type"),
-		Severity:   r.URL.Query().Get("severity"),
-		Status:     r.URL.Query().Get("status"),
+		CampaignID:    campaignID,
+		PhraseID:      phraseID,
+		ProductID:     productID,
+		Type:          r.URL.Query().Get("type"),
+		Severity:      r.URL.Query().Get("severity"),
+		Status:        r.URL.Query().Get("status"),
+		TaskCategory:  taskFilters.TaskCategory,
+		TaskOwnerRole: taskFilters.TaskOwnerRole,
+		Overdue:       taskFilters.Overdue,
 	}, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
@@ -89,6 +98,45 @@ func (h *RecommendationHandler) List(w http.ResponseWriter, r *http.Request) {
 		PerPage: pg.PerPage,
 		Total:   total,
 	})
+}
+
+func recommendationTaskFiltersFromQuery(r *http.Request) (service.RecommendationListFilter, error) {
+	filter := service.RecommendationListFilter{
+		TaskCategory:  r.URL.Query().Get("task_category"),
+		TaskOwnerRole: r.URL.Query().Get("task_owner_role"),
+	}
+	if filter.TaskCategory != "" && !validRecommendationTaskCategoryFilter(filter.TaskCategory) {
+		return filter, apperror.New(apperror.ErrValidation, "invalid task_category")
+	}
+	if filter.TaskOwnerRole != "" && !validRecommendationTaskOwnerRoleFilter(filter.TaskOwnerRole) {
+		return filter, apperror.New(apperror.ErrValidation, "invalid task_owner_role")
+	}
+	if raw := r.URL.Query().Get("overdue"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, apperror.New(apperror.ErrValidation, "invalid overdue")
+		}
+		filter.Overdue = &value
+	}
+	return filter, nil
+}
+
+func validRecommendationTaskCategoryFilter(value string) bool {
+	switch value {
+	case domain.RecommendationTaskCategoryLosses, domain.RecommendationTaskCategoryGrowth, domain.RecommendationTaskCategoryCardTasks, domain.RecommendationTaskCategoryAPIRisks:
+		return true
+	default:
+		return false
+	}
+}
+
+func validRecommendationTaskOwnerRoleFilter(value string) bool {
+	switch value {
+	case domain.RecommendationTaskOwnerMarketer, domain.RecommendationTaskOwnerMarketplaceManager, domain.RecommendationTaskOwnerContent, domain.RecommendationTaskOwnerSEO, domain.RecommendationTaskOwnerTechnicalSpecialist:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *RecommendationHandler) Get(w http.ResponseWriter, r *http.Request) {

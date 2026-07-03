@@ -62,6 +62,10 @@ func TestRecommendationList_Success(t *testing.T) {
 		listFn: func(_ context.Context, wsID uuid.UUID, filter service.RecommendationListFilter, _, _ int32) ([]domain.Recommendation, error) {
 			assert.Equal(t, workspaceID, wsID)
 			assert.Equal(t, "active", filter.Status)
+			assert.Equal(t, domain.RecommendationTaskCategoryCardTasks, filter.TaskCategory)
+			assert.Equal(t, domain.RecommendationTaskOwnerMarketer, filter.TaskOwnerRole)
+			require.NotNil(t, filter.Overdue)
+			assert.True(t, *filter.Overdue)
 			require.NotNil(t, filter.CampaignID)
 			assert.Equal(t, campaignID, *filter.CampaignID)
 			return []domain.Recommendation{{
@@ -87,7 +91,7 @@ func TestRecommendationList_Success(t *testing.T) {
 	}
 	h := NewRecommendationHandler(mock)
 
-	req := httptest.NewRequest(http.MethodGet, "/recommendations?status=active&campaign_id="+campaignID.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/recommendations?status=active&task_category=card_tasks&task_owner_role=marketer&overdue=true&campaign_id="+campaignID.String(), nil)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID))
 	rec := httptest.NewRecorder()
 
@@ -118,6 +122,30 @@ func TestRecommendationList_InvalidCampaignFilter(t *testing.T) {
 	h := NewRecommendationHandler(mock)
 
 	req := httptest.NewRequest(http.MethodGet, "/recommendations?campaign_id=bad-uuid", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+
+	h.List(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestRecommendationList_InvalidTaskFilter(t *testing.T) {
+	mock := &mockRecommendationService{
+		listFn: func(_ context.Context, _ uuid.UUID, _ service.RecommendationListFilter, _, _ int32) ([]domain.Recommendation, error) {
+			t.Fatal("list should not be called")
+			return nil, nil
+		},
+		updateStatusFn: func(context.Context, uuid.UUID, uuid.UUID, string) (*domain.Recommendation, error) {
+			return nil, nil
+		},
+		triggerGenerateFn: func(context.Context, uuid.UUID, uuid.UUID) (*service.WorkspaceTaskTriggerResult, error) {
+			return nil, nil
+		},
+	}
+	h := NewRecommendationHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/recommendations?task_category=made_up", nil)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, uuid.New()))
 	rec := httptest.NewRecorder()
 

@@ -33,6 +33,13 @@ func TestLoad_Defaults(t *testing.T) {
 	os.Unsetenv("WB_PARSER_MIN_DELAY")
 	os.Unsetenv("WB_PARSER_PROXIES")
 	os.Unsetenv("EXPORT_STORAGE_PATH")
+	os.Unsetenv("SMTP_HOST")
+	os.Unsetenv("SMTP_PORT")
+	os.Unsetenv("SMTP_USERNAME")
+	os.Unsetenv("SMTP_PASSWORD")
+	os.Unsetenv("SMTP_FROM_EMAIL")
+	os.Unsetenv("SMTP_FROM_NAME")
+	os.Unsetenv("SMTP_TIMEOUT")
 	os.Unsetenv("LOG_LEVEL")
 
 	cfg := Load()
@@ -52,6 +59,11 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 2*time.Second, cfg.WBParserMinDelay)
 	assert.Nil(t, cfg.WBParserProxies)
 	assert.Equal(t, "./exports", cfg.ExportStoragePath)
+	assert.Equal(t, "", cfg.SMTPHost)
+	assert.Equal(t, 587, cfg.SMTPPort)
+	assert.Equal(t, "", cfg.SMTPFromEmail)
+	assert.Equal(t, "Sellico Ads Intelligence", cfg.SMTPFromName)
+	assert.Equal(t, 10*time.Second, cfg.SMTPTimeout)
 	assert.Equal(t, "info", cfg.LogLevel)
 }
 
@@ -68,6 +80,13 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("WB_PARSER_MIN_DELAY", "5s")
 	t.Setenv("WB_PARSER_PROXIES", "http://proxy1:8080, http://proxy2:8080, http://proxy3:8080")
 	t.Setenv("EXPORT_STORAGE_PATH", "/tmp/exports")
+	t.Setenv("SMTP_HOST", "smtp.example.com")
+	t.Setenv("SMTP_PORT", "2525")
+	t.Setenv("SMTP_USERNAME", "mailer")
+	t.Setenv("SMTP_PASSWORD", "secret")
+	t.Setenv("SMTP_FROM_EMAIL", "reports@example.com")
+	t.Setenv("SMTP_FROM_NAME", "Sellico Reports")
+	t.Setenv("SMTP_TIMEOUT", "7s")
 	t.Setenv("LOG_LEVEL", "debug")
 
 	cfg := Load()
@@ -83,6 +102,13 @@ func TestLoad_CustomValues(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.WBParserMinDelay)
 	assert.Equal(t, []string{"http://proxy1:8080", "http://proxy2:8080", "http://proxy3:8080"}, cfg.WBParserProxies)
 	assert.Equal(t, "/tmp/exports", cfg.ExportStoragePath)
+	assert.Equal(t, "smtp.example.com", cfg.SMTPHost)
+	assert.Equal(t, 2525, cfg.SMTPPort)
+	assert.Equal(t, "mailer", cfg.SMTPUsername)
+	assert.Equal(t, "secret", cfg.SMTPPassword)
+	assert.Equal(t, "reports@example.com", cfg.SMTPFromEmail)
+	assert.Equal(t, "Sellico Reports", cfg.SMTPFromName)
+	assert.Equal(t, 7*time.Second, cfg.SMTPTimeout)
 	assert.Equal(t, "debug", cfg.LogLevel)
 }
 
@@ -132,6 +158,20 @@ func TestValidateConfig_RejectsNegativeRateLimit(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "RATE_LIMIT_RPS")
+}
+
+func TestValidateConfig_RejectsSMTPHostWithoutFromEmail(t *testing.T) {
+	err := validateConfig(&Config{
+		JWTSecret:      "test-jwt-secret-min-32-chars-long!!",
+		EncryptionKey:  "0123456789abcdef0123456789abcdef",
+		RateLimitRPS:   20,
+		RateLimitBurst: 40,
+		SMTPHost:       "smtp.example.com",
+		SMTPPort:       587,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SMTP_FROM_EMAIL")
 }
 
 func TestGetEnvOrDefault_Set(t *testing.T) {

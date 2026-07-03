@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 )
@@ -106,6 +107,42 @@ func (f *fakeTaskEnqueuer) Enqueue(task *asynq.Task, _ ...asynq.Option) (*asynq.
 		return nil, f.err
 	}
 	return &asynq.TaskInfo{}, nil
+}
+
+type fakeAdsReportReader struct {
+	overviewFn func(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter ...service.OverviewFilter) (*domain.AdsOverview, error)
+}
+
+func (f *fakeAdsReportReader) Overview(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter ...service.OverviewFilter) (*domain.AdsOverview, error) {
+	return f.overviewFn(ctx, workspaceID, dateFrom, dateTo, filter...)
+}
+
+type fakeReportRecommendationLister struct {
+	listFn func(ctx context.Context, workspaceID uuid.UUID, filter service.RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error)
+}
+
+func (f *fakeReportRecommendationLister) List(ctx context.Context, workspaceID uuid.UUID, filter service.RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error) {
+	return f.listFn(ctx, workspaceID, filter, limit, offset)
+}
+
+type fakeReportNotifier struct {
+	called          bool
+	delivery        service.NotificationDeliveryResult
+	workspaceID     uuid.UUID
+	dateFrom        time.Time
+	dateTo          time.Time
+	overview        *domain.AdsOverview
+	recommendations []domain.Recommendation
+}
+
+func (f *fakeReportNotifier) NotifyAgencyClientReport(_ context.Context, workspaceID uuid.UUID, _ time.Time, dateFrom, dateTo time.Time, overview *domain.AdsOverview, recommendations []domain.Recommendation) service.NotificationDeliveryResult {
+	f.called = true
+	f.workspaceID = workspaceID
+	f.dateFrom = dateFrom
+	f.dateTo = dateTo
+	f.overview = overview
+	f.recommendations = append([]domain.Recommendation(nil), recommendations...)
+	return f.delivery
 }
 
 type fakeJobRunRow struct {
@@ -349,4 +386,86 @@ func TestHandleSyncWorkspace_EnqueuesRecommendationAfterFullRun(t *testing.T) {
 		assert.Equal(t, float64(3), metadata["skipped"])
 		assert.Equal(t, "enqueued", metadata["recommendation_generation"])
 	}
+}
+
+func TestHandleSendClientAuditReportUsesRealOverviewAndFiltersCabinetRecommendations(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	otherCabinetID := uuid.New()
+	db := newFakeJobRunDB()
+	queries := sqlcgen.New(db)
+	overview := &domain.AdsOverview{
+		Attention: []domain.AttentionItem{{Title: "Бюджет скоро закончится"}},
+		Totals: domain.AdsOverviewTotals{
+			Campaigns: 3,
+			Products:  8,
+			Queries:   21,
+		},
+	}
+	notifier := &fakeReportNotifier{delivery: service.NotificationDeliveryResult{EmailSent: true}}
+	processor := NewProcessor(nil, queries, nil, nil, nil, zerolog.Nop()).
+		WithReportDependencies(
+			&fakeAdsReportReader{overviewFn: func(_ context.Context, actualWorkspaceID uuid.UUID, dateFrom, dateTo time.Time, filter ...service.OverviewFilter) (*domain.AdsOverview, error) {
+				assert.Equal(t, workspaceID, actualWorkspaceID)
+				assert.Equal(t, "2026-04-29", dateFrom.Format("2006-01-02"))
+				assert.Equal(t, "2026-05-28", dateTo.Format("2006-01-02"))
+				require.Len(t, filter, 1)
+				require.NotNil(t, filter[0].SellerCabinetID)
+				assert.Equal(t, cabinetID, *filter[0].SellerCabinetID)
+				return overview, nil
+			}},
+			&fakeReportRecommendationLister{listFn: func(_ context.Context, actualWorkspaceID uuid.UUID, filter service.RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error) {
+				assert.Equal(t, workspaceID, actualWorkspaceID)
+				assert.Equal(t, domain.RecommendationStatusActive, filter.Status)
+				assert.Equal(t, int32(1000), limit)
+				assert.Equal(t, int32(0), offset)
+				return []domain.Recommendation{
+					{Title: "Client task", SellerCabinetID: &cabinetID},
+					{Title: "Other client task", SellerCabinetID: &otherCabinetID},
+					{Title: "Workspace task"},
+				}, nil
+			}},
+			notifier,
+		)
+
+	task, err := NewWorkspaceTaskWithMetadata(TaskSendClientAuditReport, workspaceID, nil, map[string]any{
+		"date_from":         "2026-04-29",
+		"date_to":           "2026-05-28",
+		"seller_cabinet_id": cabinetID.String(),
+	})
+	require.NoError(t, err)
+
+	err = processor.HandleSendClientAuditReport(context.Background(), task)
+
+	require.NoError(t, err)
+	require.True(t, notifier.called)
+	assert.Equal(t, workspaceID, notifier.workspaceID)
+	assert.Equal(t, "2026-04-29", notifier.dateFrom.Format("2006-01-02"))
+	assert.Equal(t, "2026-05-28", notifier.dateTo.Format("2006-01-02"))
+	require.Len(t, notifier.recommendations, 1)
+	assert.Equal(t, "Client task", notifier.recommendations[0].Title)
+	require.Len(t, db.jobRuns, 1)
+	for _, jobRun := range db.jobRuns {
+		assert.Equal(t, TaskSendClientAuditReport, jobRun.TaskType)
+		assert.Equal(t, "completed", jobRun.Status)
+		var metadata map[string]any
+		require.NoError(t, json.Unmarshal(jobRun.Metadata, &metadata))
+		assert.Equal(t, "2026-04-29", metadata["date_from"])
+		assert.Equal(t, "2026-05-28", metadata["date_to"])
+		assert.Equal(t, cabinetID.String(), metadata["seller_cabinet_id"])
+		assert.Equal(t, float64(1), metadata["report_generated"])
+		assert.Equal(t, false, metadata["telegram_sent"])
+		assert.Equal(t, true, metadata["email_sent"])
+		assert.Equal(t, float64(1), metadata["recommendations"])
+		assert.Equal(t, float64(1), metadata["attention_items"])
+	}
+}
+
+func TestClientAuditReportParamsDefaultToLast30Days(t *testing.T) {
+	dateFrom, dateTo, cabinetID, err := clientAuditReportParams(nil, time.Date(2026, 5, 28, 17, 15, 0, 0, time.UTC))
+
+	require.NoError(t, err)
+	assert.Equal(t, "2026-04-29", dateFrom.Format("2006-01-02"))
+	assert.Equal(t, "2026-05-28", dateTo.Format("2006-01-02"))
+	assert.Nil(t, cabinetID)
 }

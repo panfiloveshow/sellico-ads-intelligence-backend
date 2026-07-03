@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/envelope"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -277,6 +278,60 @@ func TestTenantScope_AllRoles(t *testing.T) {
 			assert.Equal(t, role, *gotRole)
 		})
 	}
+}
+
+func TestSharedTenantScope_ExtensionTokenIsWorkspaceScopedViewer(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	handler, called, gotWsID, gotRole := tenantDummyHandler()
+	mw := SharedTenantScope(nil)(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/extension/widgets/campaign", nil)
+	req.Header.Set("X-Workspace-ID", workspaceID.String())
+	ctx := context.WithValue(req.Context(), UserIDKey, userID)
+	ctx = context.WithValue(ctx, TokenClaimsKey, &jwt.TokenClaims{
+		UserID:      userID,
+		WorkspaceID: &workspaceID,
+		TokenType:   "extension",
+		Role:        domain.RoleOwner,
+		Audience:    jwt.ExtensionTokenAudience,
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	mw.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, *called)
+	assert.Equal(t, workspaceID, *gotWsID)
+	assert.Equal(t, domain.RoleViewer, *gotRole)
+}
+
+func TestSharedTenantScope_ExtensionTokenRejectsDifferentWorkspace(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	otherWorkspaceID := uuid.New()
+	handler, called, _, _ := tenantDummyHandler()
+	mw := SharedTenantScope(nil)(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+otherWorkspaceID.String()+"/extension/widgets/campaign", nil)
+	req.Header.Set("X-Workspace-ID", otherWorkspaceID.String())
+	ctx := context.WithValue(req.Context(), UserIDKey, userID)
+	ctx = context.WithValue(ctx, TokenClaimsKey, &jwt.TokenClaims{
+		UserID:      userID,
+		WorkspaceID: &workspaceID,
+		TokenType:   "extension",
+		Role:        domain.RoleOwner,
+		Audience:    jwt.ExtensionTokenAudience,
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	mw.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.False(t, *called)
+	assertTenantErrorResponse(t, rec, "FORBIDDEN", "access denied")
 }
 
 func TestTenantScope_ResponseContentType(t *testing.T) {

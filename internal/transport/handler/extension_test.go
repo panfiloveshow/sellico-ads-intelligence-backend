@@ -26,11 +26,15 @@ type mockExtensionService struct {
 	createPositionSnapshotsFn func(ctx context.Context, userID, workspaceID uuid.UUID, inputs []service.CreateExtensionPositionSnapshotInput) (int, error)
 	createUISignalsFn         func(ctx context.Context, userID, workspaceID uuid.UUID, inputs []service.CreateExtensionUISignalInput) (int, error)
 	createNetworkCapturesFn   func(ctx context.Context, userID, workspaceID uuid.UUID, inputs []service.CreateExtensionNetworkCaptureInput) (int, error)
+	createDOMRowSnapshotsFn   func(ctx context.Context, userID, workspaceID uuid.UUID, inputs []service.CreateExtensionDOMRowSnapshotInput) (int, error)
 	searchWidgetFn            func(ctx context.Context, workspaceID uuid.UUID, query string) (*service.ExtensionSearchWidget, error)
 	productWidgetFn           func(ctx context.Context, workspaceID, productID uuid.UUID) (*service.ExtensionProductWidget, error)
 	productWidgetByWBIDFn     func(ctx context.Context, workspaceID uuid.UUID, wbProductID int64) (*service.ExtensionProductWidget, error)
 	campaignWidgetFn          func(ctx context.Context, workspaceID, campaignID uuid.UUID) (*service.ExtensionCampaignWidget, error)
 	campaignWidgetByWBIDFn    func(ctx context.Context, workspaceID uuid.UUID, wbCampaignID int64) (*service.ExtensionCampaignWidget, error)
+	evidenceSummaryFn         func(ctx context.Context, workspaceID uuid.UUID) (*service.ExtensionEvidenceSummary, error)
+	evidenceDebugFn           func(ctx context.Context, workspaceID uuid.UUID, input service.ExtensionEvidenceDebugInput) (*service.ExtensionEvidenceDebug, error)
+	evidenceSupportReportFn   func(ctx context.Context, workspaceID uuid.UUID, input service.ExtensionEvidenceDebugInput) (*service.ExtensionEvidenceSupportReport, error)
 	versionFn                 func() string
 }
 
@@ -62,6 +66,13 @@ func (m *mockExtensionService) CreateNetworkCaptures(ctx context.Context, userID
 	return m.createNetworkCapturesFn(ctx, userID, workspaceID, inputs)
 }
 
+func (m *mockExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, workspaceID uuid.UUID, inputs []service.CreateExtensionDOMRowSnapshotInput) (int, error) {
+	if m.createDOMRowSnapshotsFn == nil {
+		return len(inputs), nil
+	}
+	return m.createDOMRowSnapshotsFn(ctx, userID, workspaceID, inputs)
+}
+
 func (m *mockExtensionService) GetSearchWidget(ctx context.Context, workspaceID uuid.UUID, query string) (*service.ExtensionSearchWidget, error) {
 	return m.searchWidgetFn(ctx, workspaceID, query)
 }
@@ -80,6 +91,27 @@ func (m *mockExtensionService) GetCampaignWidget(ctx context.Context, workspaceI
 
 func (m *mockExtensionService) GetCampaignWidgetByWBCampaignID(ctx context.Context, workspaceID uuid.UUID, wbCampaignID int64) (*service.ExtensionCampaignWidget, error) {
 	return m.campaignWidgetByWBIDFn(ctx, workspaceID, wbCampaignID)
+}
+
+func (m *mockExtensionService) GetEvidenceSummary(ctx context.Context, workspaceID uuid.UUID) (*service.ExtensionEvidenceSummary, error) {
+	if m.evidenceSummaryFn == nil {
+		return &service.ExtensionEvidenceSummary{WorkspaceID: workspaceID, GeneratedAt: time.Now().UTC()}, nil
+	}
+	return m.evidenceSummaryFn(ctx, workspaceID)
+}
+
+func (m *mockExtensionService) GetEvidenceDebug(ctx context.Context, workspaceID uuid.UUID, input service.ExtensionEvidenceDebugInput) (*service.ExtensionEvidenceDebug, error) {
+	if m.evidenceDebugFn == nil {
+		return &service.ExtensionEvidenceDebug{WorkspaceID: workspaceID, Scope: input.Scope, GeneratedAt: time.Now().UTC()}, nil
+	}
+	return m.evidenceDebugFn(ctx, workspaceID, input)
+}
+
+func (m *mockExtensionService) GetEvidenceSupportReport(ctx context.Context, workspaceID uuid.UUID, input service.ExtensionEvidenceDebugInput) (*service.ExtensionEvidenceSupportReport, error) {
+	if m.evidenceSupportReportFn == nil {
+		return &service.ExtensionEvidenceSupportReport{WorkspaceID: workspaceID, Scope: input.Scope, GeneratedAt: time.Now().UTC()}, nil
+	}
+	return m.evidenceSupportReportFn(ctx, workspaceID, input)
 }
 
 func (m *mockExtensionService) Version() string {
@@ -267,4 +299,221 @@ func TestExtensionCreatePageContext_Success(t *testing.T) {
 	h.CreatePageContext(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestExtensionCreateDOMRowSnapshots_Success(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	mock := &mockExtensionService{
+		createDOMRowSnapshotsFn: func(_ context.Context, gotUserID, gotWorkspaceID uuid.UUID, inputs []service.CreateExtensionDOMRowSnapshotInput) (int, error) {
+			assert.Equal(t, userID, gotUserID)
+			assert.Equal(t, workspaceID, gotWorkspaceID)
+			require.Len(t, inputs, 1)
+			assert.Equal(t, "campaign", inputs[0].PageType)
+			assert.Equal(t, "campaigns", inputs[0].TableRole)
+			assert.Equal(t, "campaign-123", inputs[0].RowKey)
+			assert.Contains(t, inputs[0].VisibleText, "Кампания")
+			return len(inputs), nil
+		},
+		versionFn: func() string { return "1.0.0" },
+	}
+	h := NewExtensionHandler(mock)
+
+	body := jsonBody(t, dto.CreateExtensionDOMRowSnapshotsRequest{
+		Items: []dto.CreateExtensionDOMRowSnapshotItemRequest{
+			{
+				PageType:    "campaign",
+				TableRole:   "campaigns",
+				RowKey:      "campaign-123",
+				VisibleText: "Кампания 123 Расход 450",
+				Cells:       json.RawMessage(`[{"index":0,"text":"Кампания 123"}]`),
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/extension/dom-row-snapshots", body)
+	ctx := context.WithValue(req.Context(), middleware.UserIDKey, userID)
+	ctx = context.WithValue(ctx, middleware.WorkspaceIDKey, workspaceID)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.CreateDOMRowSnapshots(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	raw, err := json.Marshal(resp.Data)
+	require.NoError(t, err)
+	var accepted dto.ExtensionIngestAcceptedResponse
+	require.NoError(t, json.Unmarshal(raw, &accepted))
+	assert.Equal(t, 1, accepted.Accepted)
+}
+
+func TestExtensionEvidenceDebug_CampaignScope(t *testing.T) {
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	mock := &mockExtensionService{
+		evidenceDebugFn: func(_ context.Context, gotWorkspaceID uuid.UUID, input service.ExtensionEvidenceDebugInput) (*service.ExtensionEvidenceDebug, error) {
+			assert.Equal(t, workspaceID, gotWorkspaceID)
+			require.NotNil(t, input.CampaignID)
+			assert.Equal(t, campaignID, *input.CampaignID)
+			assert.Equal(t, "campaign", input.Scope)
+			assert.Equal(t, int32(5), input.Limit)
+			return &service.ExtensionEvidenceDebug{
+				WorkspaceID:      gotWorkspaceID,
+				Scope:            "campaign",
+				CampaignID:       input.CampaignID,
+				GeneratedAt:      now,
+				LatestCapturedAt: &now,
+				Counts: service.ExtensionEvidenceDebugCounts{
+					NetworkCaptures: 1,
+					BidSnapshots:    1,
+				},
+				DataStatus: service.ExtensionWidgetDataStatus{
+					Source:             domain.SourceExtension,
+					FreshnessState:     "fresh",
+					Confidence:         0.8,
+					Coverage:           "partial",
+					ConfirmedInCabinet: true,
+				},
+				NetworkCaptures: []domain.ExtensionNetworkCapture{
+					{
+						ID:          uuid.New(),
+						WorkspaceID: gotWorkspaceID,
+						PageType:    "campaign",
+						EndpointKey: "wb.query.bids",
+						Payload:     json.RawMessage(`{"url":"https://cmp.wildberries.ru/adv/v0/normquery/get-bids"}`),
+						CapturedAt:  now,
+						CreatedAt:   now,
+					},
+				},
+			}, nil
+		},
+		versionFn: func() string { return "1.0.0" },
+	}
+	h := NewExtensionHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/extension/evidence-debug?scope=campaign&campaign_id="+campaignID.String()+"&limit=5", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID))
+	rec := httptest.NewRecorder()
+
+	h.EvidenceDebug(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	raw, err := json.Marshal(resp.Data)
+	require.NoError(t, err)
+	var got dto.ExtensionEvidenceDebugResponse
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, "campaign", got.Scope)
+	require.NotNil(t, got.CampaignID)
+	assert.Equal(t, campaignID, *got.CampaignID)
+	assert.Equal(t, 1, got.Counts.NetworkCaptures)
+	require.Len(t, got.NetworkCaptures, 1)
+	assert.Equal(t, "wb.query.bids", got.NetworkCaptures[0].EndpointKey)
+}
+
+func TestExtensionEvidenceSupportReport_CampaignScope(t *testing.T) {
+	workspaceID := uuid.New()
+	campaignID := uuid.New()
+	now := time.Now().UTC()
+	mock := &mockExtensionService{
+		evidenceSupportReportFn: func(_ context.Context, gotWorkspaceID uuid.UUID, input service.ExtensionEvidenceDebugInput) (*service.ExtensionEvidenceSupportReport, error) {
+			assert.Equal(t, workspaceID, gotWorkspaceID)
+			require.NotNil(t, input.CampaignID)
+			assert.Equal(t, campaignID, *input.CampaignID)
+			assert.Equal(t, "campaign", input.Scope)
+			return &service.ExtensionEvidenceSupportReport{
+				WorkspaceID:      gotWorkspaceID,
+				Scope:            "campaign",
+				CampaignID:       input.CampaignID,
+				GeneratedAt:      now,
+				LatestCapturedAt: &now,
+				Summary: service.ExtensionEvidenceSupportSummary{
+					SourceLabel:        "Данные кабинета WB",
+					Readiness:          "partial",
+					CapturedSignals:    2,
+					MissingSignals:     4,
+					ConfirmedInCabinet: true,
+					FreshnessState:     "fresh",
+					Coverage:           "partial",
+				},
+				Sections: []service.ExtensionEvidenceSupportSection{
+					{
+						ID:               "network_captures",
+						Title:            "Разрешенные ответы WB",
+						Status:           "ready",
+						Detail:           "Есть сохраненные реальные данные кабинета для проверки.",
+						EvidenceCount:    1,
+						LatestCapturedAt: &now,
+					},
+				},
+				Checklist: []service.ExtensionEvidenceSupportChecklistItem{
+					{
+						ID:         "network_capture",
+						Label:      "Сохранены разрешенные ответы WB",
+						Done:       true,
+						Detail:     "Ответы WB сохранены.",
+						ActionPath: "refresh",
+					},
+				},
+				Issues: []service.ExtensionWidgetIssue{
+					{
+						Stage:      "freshness",
+						Severity:   "warning",
+							Message:    "Нужно обновить сохраненные данные",
+						ActionPath: "refresh",
+					},
+				},
+				NextActions: []service.ExtensionWidgetAction{
+					{
+						ID:         "open_campaign",
+						Label:      "Открыть кампанию WB",
+						ActionPath: "wb://campaign/123",
+						Tone:       "primary",
+					},
+				},
+			}, nil
+		},
+		versionFn: func() string { return "1.0.0" },
+	}
+	h := NewExtensionHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/extension/evidence-debug/report?scope=campaign&campaign_id="+campaignID.String(), nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID))
+	rec := httptest.NewRecorder()
+
+	h.EvidenceSupportReport(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	raw, err := json.Marshal(resp.Data)
+	require.NoError(t, err)
+	var got dto.ExtensionEvidenceSupportReportResponse
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, "campaign", got.Scope)
+	require.NotNil(t, got.CampaignID)
+	assert.Equal(t, campaignID, *got.CampaignID)
+	assert.Equal(t, "partial", got.Summary.Readiness)
+	require.Len(t, got.Sections, 1)
+	assert.Equal(t, "network_captures", got.Sections[0].ID)
+	require.Len(t, got.Checklist, 1)
+	assert.True(t, got.Checklist[0].Done)
+	require.Len(t, got.Issues, 1)
+	assert.Equal(t, "Нужно обновить сохраненные данные", got.Issues[0].Message)
+	assert.Equal(t, "refresh", got.Issues[0].ActionPath)
+	require.Len(t, got.NextActions, 1)
+	assert.Equal(t, "open_campaign", got.NextActions[0].ID)
+	assert.Equal(t, "wb://campaign/123", got.NextActions[0].ActionPath)
+	assert.Equal(t, "primary", got.NextActions[0].Tone)
+}
+
+func TestExtensionEvidenceDebug_InvalidProductID(t *testing.T) {
+	h := NewExtensionHandler(&mockExtensionService{versionFn: func() string { return "1.0.0" }})
+	req := httptest.NewRequest(http.MethodGet, "/extension/evidence-debug?scope=product&product_id=bad", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+
+	h.EvidenceDebug(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

@@ -296,6 +296,7 @@ func sellerCabinetAutoSyncSummaryFromJobRun(jobRun sqlcgen.JobRun) *domain.Selle
 		Phrases:           metadataInt(metadata, "phrases"),
 		PhraseStats:       metadataInt(metadata, "phrase_stats"),
 		Products:          metadataInt(metadata, "products"),
+		WBErrors:          metadataInt(metadata, "wb_errors"),
 		SyncIssues:        metadataArrayLen(metadata, "sync_issues"),
 	}
 }

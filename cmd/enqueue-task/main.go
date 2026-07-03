@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: enqueue-task refresh-integrations|sync-sweep|sync-workspace <workspace-id>")
+		fmt.Fprintln(os.Stderr, "usage: enqueue-task refresh-integrations|sync-sweep|sync-workspace <workspace-id>|client-audit-report <workspace-id> [date_from=YYYY-MM-DD] [date_to=YYYY-MM-DD] [seller_cabinet_id=uuid]")
 		os.Exit(2)
 	}
 
@@ -49,6 +50,33 @@ func main() {
 		task, err = worker.NewWorkspaceTask(worker.TaskSyncWorkspace, workspaceID)
 		timeout = 60 * time.Minute
 		opts = append(opts, asynq.Unique(55*time.Minute))
+	case "client-audit-report":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "client-audit-report requires workspace id")
+			os.Exit(2)
+		}
+		workspaceID, parseErr := uuid.Parse(os.Args[2])
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "parse workspace id: %v\n", parseErr)
+			os.Exit(2)
+		}
+		metadata := map[string]any{}
+		for _, arg := range os.Args[3:] {
+			key, value, ok := strings.Cut(arg, "=")
+			if !ok || value == "" {
+				fmt.Fprintf(os.Stderr, "invalid metadata argument %q\n", arg)
+				os.Exit(2)
+			}
+			switch key {
+			case "date_from", "date_to", "seller_cabinet_id":
+				metadata[key] = value
+			default:
+				fmt.Fprintf(os.Stderr, "unsupported metadata key %q\n", key)
+				os.Exit(2)
+			}
+		}
+		task, err = worker.NewWorkspaceTaskWithMetadata(worker.TaskSendClientAuditReport, workspaceID, nil, metadata)
+		opts = []asynq.Option{asynq.Queue(worker.QueueRecommendations), asynq.MaxRetry(3)}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown task %q\n", os.Args[1])
 		os.Exit(2)

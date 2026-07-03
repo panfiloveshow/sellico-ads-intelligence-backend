@@ -1,0 +1,3 @@
+ALTER TABLE product_sales_funnel_periods
+    ADD COLUMN IF NOT EXISTS open_count BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS order_count BIGINT NOT NULL DEFAULT 0;

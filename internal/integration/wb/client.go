@@ -45,6 +45,8 @@ type Client struct {
 	contentURL               string
 	statisticsURL            string
 	analyticsURL             string
+	commonURL                string
+	feedbacksURL             string
 	rateLimit                int
 	fullStatsInterBatchDelay time.Duration
 	normQueryInterBatchDelay time.Duration
@@ -59,10 +61,14 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 	contentURL := "https://content-api.wildberries.ru"
 	statisticsURL := "https://statistics-api.wildberries.ru"
 	analyticsURL := "https://seller-analytics-api.wildberries.ru"
+	commonURL := "https://common-api.wildberries.ru"
+	feedbacksURL := "https://feedbacks-api.wildberries.ru"
 	if strings.Contains(cfg.WBAPIBaseURL, "localhost") || strings.Contains(cfg.WBAPIBaseURL, "127.0.0.1") {
 		contentURL = cfg.WBAPIBaseURL
 		statisticsURL = cfg.WBAPIBaseURL
 		analyticsURL = cfg.WBAPIBaseURL
+		commonURL = cfg.WBAPIBaseURL
+		feedbacksURL = cfg.WBAPIBaseURL
 	}
 
 	return &Client{
@@ -71,6 +77,8 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		contentURL:               contentURL,
 		statisticsURL:            statisticsURL,
 		analyticsURL:             analyticsURL,
+		commonURL:                commonURL,
+		feedbacksURL:             feedbacksURL,
 		rateLimit:                cfg.WBAPIRateLimit,
 		fullStatsInterBatchDelay: 20 * time.Second,
 		normQueryInterBatchDelay: 7 * time.Second,
@@ -78,6 +86,70 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		limiters:                 newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		breakers:                 newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
+}
+
+// doCommonRequest executes requests against common-api.wildberries.ru.
+func (c *Client) doCommonRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInnerURL(ctx, method, c.commonURL+path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
+}
+
+// doFeedbacksRequest executes requests against feedbacks-api.wildberries.ru.
+func (c *Client) doFeedbacksRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInnerURL(ctx, method, c.feedbacksURL+path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
 }
 
 // ValidateToken performs a lightweight authenticated request to verify the token.
@@ -264,6 +336,13 @@ func (c *Client) doRequestInner(ctx context.Context, method, path, token string,
 func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token string, body io.Reader) (*http.Response, []byte, error) {
 	lim := c.limiterForToken(token)
 
+	// Non-idempotent writes (POST/PATCH/DELETE) must not be auto-retried on transport
+	// errors or 5xx: the request may already have reached WB and been applied, so a
+	// blind retry risks a duplicate effect (e.g. double budget deposit, duplicate
+	// campaign). 429 is still safe to retry for any method — it means the request was
+	// rejected before processing.
+	idempotent := method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+
 	// Buffer body so it can be re-read on retry (fix: audit MEDIUM #15)
 	var bodyBytes []byte
 	if body != nil {
@@ -309,6 +388,9 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 				Int("attempt", attempt).
 				Msg("request error")
 
+			if !idempotent {
+				return nil, nil, lastErr
+			}
 			if attempt < maxRetries {
 				sleepDuration := backoffDuration(attempt)
 				if err := sleepWithContext(ctx, sleepDuration); err != nil {
@@ -358,6 +440,11 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 				Int("attempt", attempt).
 				Msg("server error, retrying with backoff")
 
+			if !idempotent {
+				// A write may have been applied before WB returned 5xx; surface the
+				// error to the caller instead of risking a duplicate retry.
+				return resp, respBody, lastErr
+			}
 			if attempt < maxRetries {
 				sleepDuration := backoffDuration(attempt)
 				if err := sleepWithContext(ctx, sleepDuration); err != nil {

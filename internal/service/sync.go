@@ -37,6 +37,7 @@ const (
 	SyncPhaseFinance         = "finance"
 	SyncPhaseSalesFunnel     = "sales_funnel"
 	SyncPhaseBusinessReports = "business_reports"
+	SyncPhaseTariffs         = "tariffs"
 )
 
 type WBSyncClient interface {
@@ -57,6 +58,7 @@ type WBSyncClient interface {
 	DebugNormQueryStats(ctx context.Context, token string, campaignID int, nmIDs []int64, dateFrom, dateTo string) (wb.WBNormQueryStatsDebug, error)
 	ListProducts(ctx context.Context, token string) ([]wb.WBProductDTO, error)
 	GetSalesFunnelProductsV3(ctx context.Context, token string, params wb.SalesFunnelParams) ([]wb.WBSalesFunnelProductDTO, error)
+	GetCommissionTariffs(ctx context.Context, token string, locale string) ([]wb.WBCommissionTariffDTO, error)
 }
 
 type SyncSummary struct {
@@ -73,6 +75,7 @@ type SyncSummary struct {
 	SalesFunnel       int         `json:"sales_funnel"`
 	BusinessOrders    int         `json:"business_orders"`
 	BusinessSales     int         `json:"business_sales"`
+	CommissionTariffs int         `json:"commission_tariffs"`
 	SkippedCampaign   int         `json:"skipped_campaigns"`
 	WBErrors          int         `json:"wb_errors"`
 	RateLimited       int         `json:"rate_limited"`
@@ -127,6 +130,7 @@ func (s *SyncSummary) merge(other SyncSummary) {
 	s.SalesFunnel += other.SalesFunnel
 	s.BusinessOrders += other.BusinessOrders
 	s.BusinessSales += other.BusinessSales
+	s.CommissionTariffs += other.CommissionTariffs
 	s.SkippedCampaign += other.SkippedCampaign
 	s.WBErrors += other.WBErrors
 	s.RateLimited += other.RateLimited
@@ -289,6 +293,8 @@ func (s *SyncService) SyncSingleCabinetPhase(ctx context.Context, workspaceID, c
 		return s.syncSalesFunnelProductsForCabinet(ctx, workspaceID, cabinetID, cabinet.token, snapshot)
 	case SyncPhaseBusinessReports:
 		return s.syncBusinessReportsForCabinet(ctx, workspaceID, cabinetID, cabinet.token)
+	case SyncPhaseTariffs:
+		return s.syncCommissionTariffsForCabinet(ctx, workspaceID, cabinetID, cabinet.token)
 	default:
 		return SyncSummary{}, apperror.New(apperror.ErrValidation, fmt.Sprintf("unknown sync phase %q", phase))
 	}
@@ -472,6 +478,16 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 	}
 	summary.BusinessOrders = reportsSummary.BusinessOrders
 	summary.BusinessSales = reportsSummary.BusinessSales
+	summary.mergeRateLimitFields(reportsSummary)
+
+	s.logger.Info().Msg("[sync] phase 9: syncing WB commission tariffs")
+	tariffsSummary, tariffsErr := s.syncCommissionTariffsForCabinet(ctx, workspaceID, cabinetID, cabinets[0].token)
+	if tariffsErr != nil {
+		s.logger.Error().Err(tariffsErr).Msg("[sync] commission tariffs failed")
+		summary.addIssue("commission_tariffs", cabinetID.String(), "sync commission tariffs: %v", tariffsErr)
+	}
+	summary.CommissionTariffs = tariffsSummary.CommissionTariffs
+	summary.mergeRateLimitFields(tariffsSummary)
 
 	s.logger.Info().
 		Str("workspace_id", workspaceID.String()).
@@ -483,6 +499,7 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		Int("products", summary.Products).
 		Int("business_orders", summary.BusinessOrders).
 		Int("business_sales", summary.BusinessSales).
+		Int("commission_tariffs", summary.CommissionTariffs).
 		Msg("single cabinet sync completed")
 
 	return summary, summary.Error()
@@ -848,7 +865,11 @@ func (s *SyncService) syncCampaignBudgetsForCabinet(ctx context.Context, cabinet
 			s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointBudget, err)
 			s.markSummaryRateLimitFromError(&summary, wbEndpointBudget, err)
 			summary.addIssue("campaign_budgets.fetch", fmt.Sprintf("%d", campaign.WbCampaignID), "budget: %v", err)
-			consecutiveFailures++
+			if campaignBudgetFailureShouldStop(err) {
+				consecutiveFailures++
+			} else {
+				consecutiveFailures = 0
+			}
 			if consecutiveFailures >= maxCampaignBudgetFailures {
 				summary.addIssue("campaign_budgets.skipped", cabinetID.String(), "stop budget sync after %d consecutive failures", consecutiveFailures)
 				break
@@ -859,6 +880,22 @@ func (s *SyncService) syncCampaignBudgetsForCabinet(ctx context.Context, cabinet
 		summary.CampaignBudgets++
 	}
 	return summary, summary.Error()
+}
+
+func campaignBudgetFailureShouldStop(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return isRateLimitIssue(lower) ||
+		strings.Contains(lower, "401") ||
+		strings.Contains(lower, "403") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "server error") ||
+		strings.Contains(lower, "circuit breaker")
 }
 
 func (s *SyncService) syncCampaignBudget(ctx context.Context, token string, campaign sqlcgen.Campaign) error {
@@ -944,6 +981,50 @@ func (s *SyncService) syncAdFinanceForCabinet(ctx context.Context, cabinetID uui
 	return summary, summary.Error()
 }
 
+func (s *SyncService) syncCommissionTariffsForCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) (SyncSummary, error) {
+	summary := SyncSummary{Cabinets: 1}
+	if s.guardWBEndpoint(ctx, &summary, cabinetID, wbEndpointTariffs, "commission_tariffs.rate_limit") {
+		return summary, summary.Error()
+	}
+
+	rows, err := s.wbClient.GetCommissionTariffs(ctx, token, "ru")
+	if err != nil {
+		s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointTariffs, err)
+		s.markSummaryRateLimitFromError(&summary, wbEndpointTariffs, err)
+		summary.addIssue("commission_tariffs.fetch", cabinetID.String(), "%v", err)
+		return summary, summary.Error()
+	}
+
+	capturedAt := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	for _, row := range rows {
+		if row.SubjectID <= 0 || strings.TrimSpace(row.SubjectName) == "" {
+			continue
+		}
+		if err := s.queries.UpsertWBCommissionTariff(ctx, sqlcgen.UpsertWBCommissionTariffParams{
+			WorkspaceID:         uuidToPgtype(workspaceID),
+			SellerCabinetID:     uuidToPgtype(cabinetID),
+			ParentID:            row.ParentID,
+			ParentName:          strings.TrimSpace(row.ParentName),
+			SubjectID:           row.SubjectID,
+			SubjectName:         strings.TrimSpace(row.SubjectName),
+			KGVPBooking:         float64PtrToPgtype(&row.KGVPBooking),
+			KGVPPickup:          float64PtrToPgtype(&row.KGVPPickup),
+			KGVPSupplier:        float64PtrToPgtype(&row.KGVPSupplier),
+			KGVPSupplierExpress: float64PtrToPgtype(&row.KGVPSupplierExpress),
+			KGVPMarketplace:     float64PtrToPgtype(&row.KGVPMarketplace),
+			PaidStorageKGVP:     float64PtrToPgtype(&row.PaidStorageKGVP),
+			Source:              "wb_tariffs_commission",
+			CapturedAt:          capturedAt,
+		}); err != nil {
+			summary.addIssue("commission_tariffs.upsert", fmt.Sprintf("%d", row.SubjectID), "%v", err)
+			continue
+		}
+		summary.CommissionTariffs++
+	}
+
+	return summary, summary.Error()
+}
+
 func (s *SyncService) syncSalesFunnelProductsForCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string, snapshot cabinetSyncSnapshot) (SyncSummary, error) {
 	dateFrom, dateTo := wb.SalesFunnelDefaultDateRange(time.Now())
 	nmIDs := make([]int64, 0)
@@ -1016,7 +1097,9 @@ func (s *SyncService) syncSalesFunnelProductsForCabinet(ctx context.Context, wor
 				WBProductID:     row.NmID,
 				DateFrom:        pgDate(fromDate),
 				DateTo:          pgDate(toDate),
+				OpenCount:       row.OpenCount,
 				CartCount:       row.CartCount,
+				OrderCount:      row.OrderCount,
 				CapturedAt:      pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 			}); err != nil {
 				summary.addIssue("sales_funnel_products.upsert", fmt.Sprintf("%d", row.NmID), "%v", err)

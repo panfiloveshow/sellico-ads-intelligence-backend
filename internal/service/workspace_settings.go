@@ -39,6 +39,10 @@ func (s *WorkspaceSettingsService) GetSettings(ctx context.Context, workspaceID 
 
 // UpdateSettings merges the provided settings into the workspace's JSONB column.
 func (s *WorkspaceSettingsService) UpdateSettings(ctx context.Context, actorID, workspaceID uuid.UUID, input domain.WorkspaceSettings) (*domain.WorkspaceSettings, error) {
+	if errs := input.Validate(); len(errs) > 0 {
+		return nil, apperror.New(apperror.ErrValidation, "invalid workspace settings")
+	}
+
 	raw, err := s.queries.GetWorkspaceSettings(ctx, uuidToPgtype(workspaceID))
 	if err != nil {
 		return nil, apperror.New(apperror.ErrNotFound, "workspace not found")

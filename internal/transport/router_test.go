@@ -106,6 +106,7 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["GET /api/v1/seller-cabinets/{id}"], "missing GET /api/v1/seller-cabinets/{id}")
 	assert.True(t, set["GET /api/v1/seller-cabinets/{id}/campaigns"], "missing GET /api/v1/seller-cabinets/{id}/campaigns")
 	assert.True(t, set["GET /api/v1/seller-cabinets/{id}/products"], "missing GET /api/v1/seller-cabinets/{id}/products")
+	assert.True(t, set["GET /api/v1/seller-cabinets/{id}/communication/reputation"], "missing GET /api/v1/seller-cabinets/{id}/communication/reputation")
 	assert.True(t, set["POST /api/v1/seller-cabinets/{id}/sync"], "missing POST /api/v1/seller-cabinets/{id}/sync")
 	assert.True(t, set["DELETE /api/v1/seller-cabinets/{id}"], "missing DELETE /api/v1/seller-cabinets/{id}")
 	assert.True(t, set["POST /api/v1/cabinets/"], "missing POST /api/v1/cabinets/")
@@ -113,10 +114,12 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["GET /api/v1/cabinets/{id}"], "missing GET /api/v1/cabinets/{id}")
 	assert.True(t, set["GET /api/v1/cabinets/{id}/campaigns"], "missing GET /api/v1/cabinets/{id}/campaigns")
 	assert.True(t, set["GET /api/v1/cabinets/{id}/products"], "missing GET /api/v1/cabinets/{id}/products")
+	assert.True(t, set["GET /api/v1/cabinets/{id}/communication/reputation"], "missing GET /api/v1/cabinets/{id}/communication/reputation")
 	assert.True(t, set["POST /api/v1/cabinets/{id}/sync"], "missing POST /api/v1/cabinets/{id}/sync")
 	assert.True(t, set["DELETE /api/v1/cabinets/{id}"], "missing DELETE /api/v1/cabinets/{id}")
 
 	// Campaigns
+	assert.True(t, set["GET /api/v1/ads/reports/client-audit"], "missing GET /api/v1/ads/reports/client-audit")
 	assert.True(t, set["GET /api/v1/campaigns/"], "missing GET /api/v1/campaigns/")
 	assert.True(t, set["GET /api/v1/campaigns/{id}"], "missing GET /api/v1/campaigns/{id}")
 	assert.True(t, set["GET /api/v1/campaigns/{id}/stats"], "missing GET /api/v1/campaigns/{id}/stats")
@@ -182,13 +185,18 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	// Extension
 	assert.True(t, set["POST /api/v1/extension/sessions"], "missing POST /api/v1/extension/sessions")
 	assert.True(t, set["POST /api/v1/extension/session/start"], "missing POST /api/v1/extension/session/start")
+	assert.True(t, set["POST /api/v1/extension/token/exchange"], "missing POST /api/v1/extension/token/exchange")
 	assert.True(t, set["POST /api/v1/extension/context"], "missing POST /api/v1/extension/context")
 	assert.True(t, set["POST /api/v1/extension/page-context"], "missing POST /api/v1/extension/page-context")
 	assert.True(t, set["POST /api/v1/extension/bid-snapshots"], "missing POST /api/v1/extension/bid-snapshots")
 	assert.True(t, set["POST /api/v1/extension/position-snapshots"], "missing POST /api/v1/extension/position-snapshots")
 	assert.True(t, set["POST /api/v1/extension/ui-signals"], "missing POST /api/v1/extension/ui-signals")
 	assert.True(t, set["POST /api/v1/extension/network-captures/batch"], "missing POST /api/v1/extension/network-captures/batch")
+	assert.True(t, set["POST /api/v1/extension/dom-row-snapshots"], "missing POST /api/v1/extension/dom-row-snapshots")
 	assert.True(t, set["GET /api/v1/extension/version"], "missing GET /api/v1/extension/version")
+	assert.True(t, set["GET /api/v1/extension/evidence-summary"], "missing GET /api/v1/extension/evidence-summary")
+	assert.True(t, set["GET /api/v1/extension/evidence-debug"], "missing GET /api/v1/extension/evidence-debug")
+	assert.True(t, set["GET /api/v1/extension/evidence-debug/report"], "missing GET /api/v1/extension/evidence-debug/report")
 }
 
 func TestPublicRoutes_NoAuth(t *testing.T) {
@@ -276,6 +284,7 @@ func TestViewerCannotAccessWorkspaceWriteRoutes(t *testing.T) {
 		{"POST", "/api/v1/campaigns/" + entityID.String() + "/pause", ""},
 		{"POST", "/api/v1/campaigns/" + entityID.String() + "/stop", ""},
 		{"POST", "/api/v1/campaigns/" + entityID.String() + "/bids", `{"placement":"search","new_bid":100}`},
+		{"DELETE", "/api/v1/campaigns/" + entityID.String() + "/cluster-bids", `{"nm_id":111,"norm_query":"test","current_bid":100}`},
 		{"POST", "/api/v1/campaigns/" + entityID.String() + "/minus-phrases", `{"phrase":"test"}`},
 		{"DELETE", "/api/v1/campaigns/" + entityID.String() + "/minus-phrases/" + phraseID.String(), ""},
 		{"POST", "/api/v1/campaigns/" + entityID.String() + "/plus-phrases", `{"phrase":"test"}`},
@@ -285,6 +294,7 @@ func TestViewerCannotAccessWorkspaceWriteRoutes(t *testing.T) {
 		{"POST", "/api/v1/keywords/cluster", ""},
 		{"POST", "/api/v1/seo/analyze", ""},
 		{"POST", "/api/v1/delivery/collect", ""},
+		{"POST", "/api/v1/product-economics/import", `{"rows":[{"wb_product_id":101,"cost_price":600}]}`},
 		{"POST", "/api/v1/competitors/extract", ""},
 		{"POST", "/api/v1/strategies/", `{"name":"test","type":"acos","params":{},"is_active":true}`},
 		{"PUT", "/api/v1/strategies/" + entityID.String(), `{"name":"test","type":"acos","params":{},"is_active":true}`},

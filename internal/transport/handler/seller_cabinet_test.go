@@ -28,6 +28,7 @@ type mockSellerCabinetService struct {
 	getFn           func(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) (*domain.SellerCabinet, error)
 	listCampaignsFn func(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, limit, offset int32) ([]domain.Campaign, error)
 	listProductsFn  func(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, limit, offset int32) ([]domain.Product, error)
+	reputationFn    func(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, nmID int64, isAnswered bool, take int) (*service.SellerCabinetCommunicationReputation, error)
 	deleteFn        func(ctx context.Context, actorID uuid.UUID, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) error
 	triggerSyncFn   func(ctx context.Context, actorID uuid.UUID, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) (*service.SyncTriggerResult, error)
 }
@@ -46,6 +47,9 @@ func (m *mockSellerCabinetService) ListCampaigns(ctx context.Context, token, wor
 }
 func (m *mockSellerCabinetService) ListProducts(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, limit, offset int32) ([]domain.Product, error) {
 	return m.listProductsFn(ctx, token, workspaceRef, workspaceID, cabinetRef, limit, offset)
+}
+func (m *mockSellerCabinetService) GetCommunicationReputation(ctx context.Context, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string, nmID int64, isAnswered bool, take int) (*service.SellerCabinetCommunicationReputation, error) {
+	return m.reputationFn(ctx, token, workspaceRef, workspaceID, cabinetRef, nmID, isAnswered, take)
 }
 func (m *mockSellerCabinetService) Delete(ctx context.Context, actorID uuid.UUID, token, workspaceRef string, workspaceID uuid.UUID, cabinetRef string) error {
 	return m.deleteFn(ctx, actorID, token, workspaceRef, workspaceID, cabinetRef)
@@ -79,6 +83,15 @@ func decodeSellerCabinetProduct(t *testing.T, data interface{}) dto.ProductRespo
 	b, err := json.Marshal(data)
 	require.NoError(t, err)
 	var result dto.ProductResponse
+	require.NoError(t, json.Unmarshal(b, &result))
+	return result
+}
+
+func decodeSellerCabinetCommunicationReputation(t *testing.T, data interface{}) dto.SellerCabinetCommunicationReputationResponse {
+	t.Helper()
+	b, err := json.Marshal(data)
+	require.NoError(t, err)
+	var result dto.SellerCabinetCommunicationReputationResponse
 	require.NoError(t, json.Unmarshal(b, &result))
 	return result
 }
@@ -515,6 +528,102 @@ func TestListSellerCabinetProducts_ExternalIntegrationID(t *testing.T) {
 	h.ListProducts(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestSellerCabinetCommunicationReputation_Success(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	generatedAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+
+	mock := &mockSellerCabinetService{
+		reputationFn: func(_ context.Context, token, workspaceRef string, wsID uuid.UUID, cabinetRef string, nmID int64, isAnswered bool, take int) (*service.SellerCabinetCommunicationReputation, error) {
+			assert.Equal(t, "sellico-user-token", token)
+			assert.Equal(t, "workspace-ref", workspaceRef)
+			assert.Equal(t, workspaceID, wsID)
+			assert.Equal(t, cabinetID.String(), cabinetRef)
+			assert.Equal(t, int64(5870243), nmID)
+			assert.True(t, isAnswered)
+			assert.Equal(t, 5, take)
+			return &service.SellerCabinetCommunicationReputation{
+				SellerCabinetID: cabinetID,
+				WBProductID:     nmID,
+				Source:          "wb_user_communication_api",
+				GeneratedAt:     generatedAt,
+				IsAnswered:      isAnswered,
+				NewItems: service.SellerCabinetCommunicationNewItems{
+					HasNewQuestions: true,
+					HasNewFeedbacks: false,
+				},
+				Counts: service.SellerCabinetCommunicationCounts{
+					UnansweredQuestions:      3,
+					UnansweredQuestionsToday: 1,
+					UnansweredFeedbacks:      2,
+					UnansweredFeedbacksToday: 1,
+				},
+				Questions: []service.SellerCabinetQuestionEvidence{{
+					ID:          "question-1",
+					Text:        "Когда поставка?",
+					CreatedDate: "2026-05-10T10:20:48Z",
+					ProductDetails: service.SellerCabinetCommunicationProductDetails{
+						NMID:        nmID,
+						ProductName: "Карандаш",
+					},
+				}},
+				Feedbacks: []service.SellerCabinetFeedbackEvidence{{
+					ID:               "feedback-1",
+					Text:             "Все подошло",
+					ProductValuation: 5,
+					ProductDetails: service.SellerCabinetCommunicationProductDetails{
+						NMID:        nmID,
+						ProductName: "Карандаш",
+					},
+				}},
+			}, nil
+		},
+	}
+	h := NewSellerCabinetHandler(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/seller-cabinets/"+cabinetID.String()+"/communication/reputation?nm_id=5870243&take=5&is_answered=true", nil)
+	ctx := context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID)
+	ctx = context.WithValue(ctx, middleware.PrincipalKey, domain.AuthPrincipal{Token: "sellico-user-token"})
+	ctx = context.WithValue(ctx, middleware.WorkspaceRefKey, "workspace-ref")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", cabinetID.String())
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, rctx)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.CommunicationReputation(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	report := decodeSellerCabinetCommunicationReputation(t, resp.Data)
+	assert.Equal(t, cabinetID, report.SellerCabinetID)
+	assert.Equal(t, int64(5870243), report.WBProductID)
+	assert.Equal(t, "wb_user_communication_api", report.Source)
+	assert.True(t, report.IsAnswered)
+	assert.True(t, report.NewItems.HasNewQuestions)
+	assert.Equal(t, 3, report.Counts.UnansweredQuestions)
+	require.Len(t, report.Questions, 1)
+	assert.Equal(t, "question-1", report.Questions[0].ID)
+	require.Len(t, report.Feedbacks, 1)
+	assert.Equal(t, "feedback-1", report.Feedbacks[0].ID)
+}
+
+func TestSellerCabinetCommunicationReputation_InvalidNMID(t *testing.T) {
+	h := NewSellerCabinetHandler(&mockSellerCabinetService{})
+
+	req := httptest.NewRequest(http.MethodGet, "/seller-cabinets/cabinet/communication/reputation?nm_id=bad", nil)
+	ctx := context.WithValue(req.Context(), middleware.WorkspaceIDKey, uuid.New())
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.CommunicationReputation(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	resp := decodeEnvelope(t, rec)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "VALIDATION_ERROR", resp.Errors[0].Code)
 }
 
 // --- Delete tests ---

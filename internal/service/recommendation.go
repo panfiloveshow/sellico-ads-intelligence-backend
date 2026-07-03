@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,12 +16,15 @@ import (
 )
 
 type RecommendationListFilter struct {
-	CampaignID *uuid.UUID
-	PhraseID   *uuid.UUID
-	ProductID  *uuid.UUID
-	Type       string
-	Severity   string
-	Status     string
+	CampaignID    *uuid.UUID
+	PhraseID      *uuid.UUID
+	ProductID     *uuid.UUID
+	Type          string
+	Severity      string
+	Status        string
+	TaskCategory  string
+	TaskOwnerRole string
+	Overdue       *bool
 }
 
 type RecommendationUpsertInput struct {
@@ -67,14 +71,49 @@ func (s *RecommendationService) List(ctx context.Context, workspaceID uuid.UUID,
 		extensionEvidence = &workspaceExtensionEvidence{}
 	}
 
-	result := make([]domain.Recommendation, len(rows))
-	for i, row := range rows {
-		recommendation := recommendationFromSqlc(row)
+	result := recommendationsFromSqlcRows(rows)
+	result = filterRecommendationsForTaskView(result, filter, time.Now())
+	for i, recommendation := range result {
 		recommendation = s.enrichCabinetContext(ctx, recommendation)
 		recommendation.Evidence = extensionEvidence.recommendationEvidence(recommendation)
 		result[i] = recommendation
 	}
 	return result, nil
+}
+
+func recommendationsFromSqlcRows(rows []sqlcgen.Recommendation) []domain.Recommendation {
+	result := make([]domain.Recommendation, len(rows))
+	for i, row := range rows {
+		result[i] = recommendationFromSqlc(row)
+	}
+	return result
+}
+
+func filterRecommendationsForTaskView(items []domain.Recommendation, filter RecommendationListFilter, now time.Time) []domain.Recommendation {
+	if filter.TaskCategory == "" && filter.TaskOwnerRole == "" && filter.Overdue == nil {
+		return items
+	}
+	result := make([]domain.Recommendation, 0, len(items))
+	for _, item := range items {
+		if filter.TaskCategory != "" && domain.RecommendationTaskCategory(item.Type) != filter.TaskCategory {
+			continue
+		}
+		if filter.TaskOwnerRole != "" && domain.RecommendationTaskOwnerRole(item.Type) != filter.TaskOwnerRole {
+			continue
+		}
+		if filter.Overdue != nil && recommendationIsOverdue(item, now) != *filter.Overdue {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func recommendationIsOverdue(item domain.Recommendation, now time.Time) bool {
+	if item.Status != domain.RecommendationStatusActive || item.CreatedAt.IsZero() || now.Before(item.CreatedAt) {
+		return false
+	}
+	return now.Sub(item.CreatedAt) >= domain.RecommendationOverdueAfter
 }
 
 func (s *RecommendationService) Get(ctx context.Context, workspaceID, recommendationID uuid.UUID) (*domain.Recommendation, error) {

@@ -9,6 +9,7 @@ documented in `financial-dashboard/rules.md` and `backandrules.md`.
 | Variable | Required | Purpose |
 |---|---|---|
 | `SELLICO_API_BASE_URL` | yes (default `https://sellico.ru/api`) | Upstream base URL |
+| `SELLICO_UNIT_ECONOMICS_READINESS_PATH` | optional | POST endpoint for real unit-economics readiness checks before bid scale-up; empty disables scale-up economics approval |
 | `SELLICO_API_TOKEN` | one-of | Static service-account bearer (preferred in prod) |
 | `SELLICO_EMAIL` + `SELLICO_PASSWORD` | one-of | Backend auto-logs-in via `POST /api/login` and caches the token for 23h |
 
@@ -16,6 +17,40 @@ If neither auth path is configured, the service-account features are
 silently disabled — the system still boots and the worker runs the legacy
 per-user discovery path (no-op when no workspace has cached a Sellico
 personal token).
+
+### Unit economics readiness for bid scale-up
+
+When `SELLICO_UNIT_ECONOMICS_READINESS_PATH` is set and the service-account
+token is configured, the worker and API call that upstream Sellico endpoint
+before bid increases. This covers automated strategy runs plus manual or
+recommendation-applied campaign bid increases. The request is a POST with
+real product ids:
+
+```json
+{
+  "workspace_id": "<local workspace uuid>",
+  "seller_cabinet_id": "<local cabinet uuid>",
+  "product_ids": ["<local product uuid>"],
+  "wb_product_ids": [123456789]
+}
+```
+
+Expected response shape:
+
+```json
+{
+  "source": "sellico-unit-economics",
+  "checked_at": "2026-05-27T12:00:00Z",
+  "missing_economics_product_ids": [],
+  "unprofitable_product_ids": [],
+  "stale_product_ids": []
+}
+```
+
+Any missing, stale, unprofitable, unauthorized, or unreachable response blocks
+only bid increases. Bid reductions remain allowed so the system can still
+protect spend. This preserves the real-data-only rule: Ads Intelligence never
+infers profit from ROAS alone and never fabricates margin.
 
 ## What's implemented now
 

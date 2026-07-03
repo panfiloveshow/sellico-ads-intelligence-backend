@@ -47,10 +47,9 @@ configure for sync are encrypted with AES-256-GCM under a workspace key.
 
 | Permission | Why we need it |
 |------------|----------------|
-| `storage` | Save your Sellico backend URL and access token between sessions. |
-| `cookies` | Read the Sellico session cookie so the extension can share auth with the web app. |
+| `storage` | Save your Sellico backend URL and extension access token between sessions. |
 | `host_permissions: seller.wildberries.ru, cmp.wildberries.ru` | Required to inject the panel and listen for bid/position changes on those exact pages. |
-| `host_permissions: sellico.ru, api.sellico.ru` | Send captured events to your Sellico account. |
+| `host_permissions: sellico.ru, api.sellico.ru` | Connect the extension explicitly from Sellico and send captured events to your workspace. |
 | `optional_host_permissions: localhost:8080, 127.0.0.1:8080` | OFF by default; only granted if you opt-in for self-hosted or local Sellico testing. |
 
 The extension does NOT request `tabs`, `activeTab`, `webRequest`, or

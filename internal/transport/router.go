@@ -50,6 +50,7 @@ type RouterDeps struct {
 	DeliveryHandler          *handler.DeliveryHandler
 	SEOHandler               *handler.SEOHandler
 	ProductEventHandler      *handler.ProductEventHandler
+	ProductEconomicsHandler  *handler.ProductEconomicsHandler
 }
 
 // notImplemented is a placeholder handler returning 501 Not Implemented.
@@ -64,7 +65,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 	r := chi.NewRouter()
 	authMiddleware := middleware.Auth(deps.JWTSecret)
 	if deps.Authenticator != nil {
-		authMiddleware = middleware.SharedAuth(deps.Authenticator)
+		authMiddleware = middleware.SharedOrLocalAuth(deps.Authenticator, deps.JWTSecret)
 	}
 
 	tenantMiddleware := middleware.TenantScope(deps.MembershipChecker)
@@ -196,6 +197,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						sc.Get("/{id}", deps.SellerCabinetHandler.Get)
 						sc.Get("/{id}/campaigns", deps.SellerCabinetHandler.ListCampaigns)
 						sc.Get("/{id}/products", deps.SellerCabinetHandler.ListProducts)
+						sc.Get("/{id}/communication/reputation", deps.SellerCabinetHandler.CommunicationReputation)
 						sc.Post("/{id}/sync", deps.SellerCabinetHandler.TriggerSync)
 						sc.Delete("/{id}", deps.SellerCabinetHandler.Delete)
 					} else {
@@ -204,6 +206,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						sc.Get("/{id}", notImplemented)
 						sc.Get("/{id}/campaigns", notImplemented)
 						sc.Get("/{id}/products", notImplemented)
+						sc.Get("/{id}/communication/reputation", notImplemented)
 						sc.Post("/{id}/sync", notImplemented)
 						sc.Delete("/{id}", notImplemented)
 					}
@@ -216,6 +219,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						sc.Get("/{id}", deps.SellerCabinetHandler.Get)
 						sc.Get("/{id}/campaigns", deps.SellerCabinetHandler.ListCampaigns)
 						sc.Get("/{id}/products", deps.SellerCabinetHandler.ListProducts)
+						sc.Get("/{id}/communication/reputation", deps.SellerCabinetHandler.CommunicationReputation)
 						sc.Post("/{id}/sync", deps.SellerCabinetHandler.TriggerSync)
 						sc.Delete("/{id}", deps.SellerCabinetHandler.Delete)
 					} else {
@@ -224,6 +228,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						sc.Get("/{id}", notImplemented)
 						sc.Get("/{id}/campaigns", notImplemented)
 						sc.Get("/{id}/products", notImplemented)
+						sc.Get("/{id}/communication/reputation", notImplemented)
 						sc.Post("/{id}/sync", notImplemented)
 						sc.Delete("/{id}", notImplemented)
 					}
@@ -233,6 +238,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 				scoped.Route("/ads", func(a chi.Router) {
 					if deps.AdsReadHandler != nil {
 						a.Get("/overview", deps.AdsReadHandler.Overview)
+						a.Get("/reports/client-audit", deps.AdsReadHandler.ClientAuditReport)
 						a.Get("/data-health", deps.AdsReadHandler.DataHealth)
 						a.Get("/products", deps.AdsReadHandler.ListProducts)
 						a.Get("/products/{id}", deps.AdsReadHandler.GetProduct)
@@ -243,6 +249,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						a.Get("/debug/normquery", deps.AdsReadHandler.DebugNormQuery)
 					} else {
 						a.Get("/overview", notImplemented)
+						a.Get("/reports/client-audit", notImplemented)
 						a.Get("/data-health", notImplemented)
 						a.Get("/products", notImplemented)
 						a.Get("/products/{id}", notImplemented)
@@ -258,6 +265,9 @@ func NewRouter(deps RouterDeps) chi.Router {
 				scoped.Route("/campaigns", func(c chi.Router) {
 					if deps.CampaignHandler != nil {
 						c.Get("/", deps.CampaignHandler.List)
+						if deps.CampaignActionHandler != nil {
+							c.With(middleware.RequireWriteAccess()).Post("/", deps.CampaignActionHandler.Create)
+						}
 						c.Get("/{id}", deps.CampaignHandler.Get)
 						c.Get("/{id}/stats", deps.CampaignHandler.GetStats)
 						c.Get("/{id}/daily-stats", deps.CampaignHandler.GetStats)
@@ -402,12 +412,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/start", deps.CampaignActionHandler.Start)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/pause", deps.CampaignActionHandler.Pause)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/stop", deps.CampaignActionHandler.Stop)
+					scoped.With(middleware.RequireWriteAccess()).Patch("/campaigns/{id}/name", deps.CampaignActionHandler.Rename)
+					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}", deps.CampaignActionHandler.Delete)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/bids", deps.CampaignActionHandler.SetBid)
 					scoped.Get("/campaigns/{id}/bids/min", deps.CampaignActionHandler.MinimumBids)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.SetClusterBid)
+					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.DeleteClusterBid)
+					scoped.Get("/campaigns/{id}/cluster-minus", deps.CampaignActionHandler.GetClusterMinus)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/cluster-minus", deps.CampaignActionHandler.SetClusterMinus)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/budget/deposit", deps.CampaignActionHandler.DepositBudget)
 					scoped.Get("/campaigns/{id}/bid-history", deps.CampaignActionHandler.BidHistory)
+					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/bid-history/{changeId}/rollback", deps.CampaignActionHandler.RollbackBidChange)
 					scoped.Get("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.ListMinusPhrases)
 					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.AddMinusPhrase)
 					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/minus-phrases/{phraseId}", deps.CampaignActionHandler.DeleteMinusPhrase)
@@ -430,6 +445,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 					scoped.Get("/product-events", deps.ProductEventHandler.ListByWorkspace)
 					scoped.Get("/products/{id}/events", deps.ProductEventHandler.ListByProduct)
 				}
+
+				// Product economics — manual/CSV inputs for margin-aware decisions
+				scoped.Route("/product-economics", func(economics chi.Router) {
+					if deps.ProductEconomicsHandler != nil {
+						economics.Get("/", deps.ProductEconomicsHandler.List)
+						economics.With(middleware.RequireWriteAccess()).Post("/import", deps.ProductEconomicsHandler.Import)
+					} else {
+						economics.Get("/", notImplemented)
+						economics.With(middleware.RequireWriteAccess()).Post("/import", notImplemented)
+					}
+				})
 
 				// SEO Analysis
 				if deps.SEOHandler != nil {
@@ -510,29 +536,39 @@ func NewRouter(deps RouterDeps) chi.Router {
 					if deps.ExtensionHandler != nil {
 						ext.Post("/sessions", deps.ExtensionHandler.CreateSession)
 						ext.Post("/session/start", deps.ExtensionHandler.CreateSession)
+						ext.Post("/token/exchange", deps.ExtensionHandler.ExchangeToken)
 						ext.Post("/context", deps.ExtensionHandler.CreateContext)
 						ext.Post("/page-context", deps.ExtensionHandler.CreatePageContext)
 						ext.Post("/bid-snapshots", deps.ExtensionHandler.CreateBidSnapshots)
 						ext.Post("/position-snapshots", deps.ExtensionHandler.CreatePositionSnapshots)
 						ext.Post("/ui-signals", deps.ExtensionHandler.CreateUISignals)
 						ext.Post("/network-captures/batch", deps.ExtensionHandler.CreateNetworkCaptures)
+						ext.Post("/dom-row-snapshots", deps.ExtensionHandler.CreateDOMRowSnapshots)
 						ext.Get("/version", deps.ExtensionHandler.Version)
 						ext.Get("/widgets/search", deps.ExtensionHandler.SearchWidget)
 						ext.Get("/widgets/product", deps.ExtensionHandler.ProductWidget)
 						ext.Get("/widgets/campaign", deps.ExtensionHandler.CampaignWidget)
+						ext.Get("/evidence-summary", deps.ExtensionHandler.EvidenceSummary)
+						ext.Get("/evidence-debug", deps.ExtensionHandler.EvidenceDebug)
+						ext.Get("/evidence-debug/report", deps.ExtensionHandler.EvidenceSupportReport)
 					} else {
 						ext.Post("/sessions", notImplemented)
 						ext.Post("/session/start", notImplemented)
+						ext.Post("/token/exchange", notImplemented)
 						ext.Post("/context", notImplemented)
 						ext.Post("/page-context", notImplemented)
 						ext.Post("/bid-snapshots", notImplemented)
 						ext.Post("/position-snapshots", notImplemented)
 						ext.Post("/ui-signals", notImplemented)
 						ext.Post("/network-captures/batch", notImplemented)
+						ext.Post("/dom-row-snapshots", notImplemented)
 						ext.Get("/version", notImplemented)
 						ext.Get("/widgets/search", notImplemented)
 						ext.Get("/widgets/product", notImplemented)
 						ext.Get("/widgets/campaign", notImplemented)
+						ext.Get("/evidence-summary", notImplemented)
+						ext.Get("/evidence-debug", notImplemented)
+						ext.Get("/evidence-debug/report", notImplemented)
 					}
 				})
 			})

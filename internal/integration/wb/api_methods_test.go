@@ -54,6 +54,56 @@ func TestListCampaigns_UnmarshalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unmarshal adverts v2 campaigns")
 }
 
+func TestCreateCampaign_UsesCurrentEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v2/seacat/save-ad", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "token", r.Header.Get("Authorization"))
+		var payload CreateCampaignRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Equal(t, "Growth Search", payload.Name)
+		assert.Equal(t, []int64{146168367, 200425104}, payload.NMIDs)
+		assert.Equal(t, "manual", payload.BidType)
+		assert.Equal(t, "cpm", payload.PaymentType)
+		assert.Equal(t, []string{"search", "recommendations"}, payload.PlacementTypes)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`1234567`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	wbCampaignID, err := client.CreateCampaign(context.Background(), "token", CreateCampaignRequest{
+		Name:           "Growth Search",
+		NMIDs:          []int64{146168367, 200425104},
+		BidType:        "manual",
+		PaymentType:    "cpm",
+		PlacementTypes: []string{"search", "recommendations"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1234567), wbCampaignID)
+}
+
+func TestGetCommissionTariffs_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/tariffs/commission", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "ru", r.URL.Query().Get("locale"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"report":[{"parentID":657,"parentName":"Бытовая техника","subjectID":6461,"subjectName":"Оборудование зуботехническое","kgvpMarketplace":15.5,"kgvpSupplier":12.5,"kgvpPickup":14.5,"kgvpBooking":14.5,"kgvpSupplierExpress":3,"paidStorageKgvp":15.5}]}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	result, err := client.GetCommissionTariffs(context.Background(), "token", "")
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, int64(6461), result[0].SubjectID)
+	assert.Equal(t, "Оборудование зуботехническое", result[0].SubjectName)
+	assert.Equal(t, 15.5, result[0].KGVPMarketplace)
+}
+
 func TestGetCampaignStats_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/adv/v3/fullstats", r.URL.Path)
@@ -317,6 +367,41 @@ func TestSetClusterBids_UsesCurrentEndpoint(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDeleteClusterBids_UsesCurrentEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v0/normquery/bids", r.URL.Path)
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.JSONEq(t, `{"bids":[{"advert_id":42,"nm_id":111,"norm_query":"shoes","bid":150}]}`, readRequestBody(t, r))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.DeleteClusterBids(context.Background(), "token", 42, []ClusterBidItem{
+		{NMID: 111, NormQuery: "shoes", Bid: 150},
+	})
+
+	require.NoError(t, err)
+}
+
+func TestGetClusterMinus_UsesCurrentEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v0/normquery/get-minus", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.JSONEq(t, `{"items":[{"advert_id":42,"nm_id":111}]}`, readRequestBody(t, r))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[{"advert_id":42,"nm_id":111,"norm_queries":["cheap shoes","used shoes"]}]}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	result, err := client.GetClusterMinus(context.Background(), "token", 42, 111)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"cheap shoes", "used shoes"}, result)
+}
+
 func TestUpdateCampaignBid_UsesCurrentEndpointWithExplicitNMID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/advert/v1/bids", r.URL.Path)
@@ -353,6 +438,38 @@ func TestUpdateCampaignBid_ResolvesCampaignNMIDs(t *testing.T) {
 
 	client := newTestClient(server.URL)
 	err := client.UpdateCampaignBid(context.Background(), "token", 42, 9, 0, "recommendations", 250)
+
+	require.NoError(t, err)
+}
+
+func TestRenameCampaign_UsesCurrentEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v0/rename", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.JSONEq(t, `{"advertId":42,"name":"Growth Search"}`, readRequestBody(t, r))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.RenameCampaign(context.Background(), "token", 42, "Growth Search")
+
+	require.NoError(t, err)
+}
+
+func TestDeleteCampaign_UsesCurrentEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v0/delete", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "42", r.URL.Query().Get("id"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.DeleteCampaign(context.Background(), "token", 42)
 
 	require.NoError(t, err)
 }
@@ -405,6 +522,30 @@ func TestGetSalesFunnel_Success(t *testing.T) {
 	require.Len(t, result, 1)
 	assert.Equal(t, int64(5), result[0].Orders)
 	assert.Equal(t, 1000.0, result[0].OrdersSum)
+}
+
+func TestGetSalesFunnelProductsV3_MapsOpenCartAndOrderCounts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/analytics/v3/sales-funnel/products", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":{"products":[{"product":{"nmId":268913787},"statistic":{"selected":{"openCount":45,"cartCount":34,"orderCount":19}}}]}}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	result, err := client.GetSalesFunnelProductsV3(context.Background(), "token", SalesFunnelParams{
+		DateFrom: "2026-05-21",
+		DateTo:   "2026-05-28",
+		NmIDs:    []int64{268913787},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, int64(268913787), result[0].NmID)
+	assert.Equal(t, int64(45), result[0].OpenCount)
+	assert.Equal(t, int64(34), result[0].CartCount)
+	assert.Equal(t, int64(19), result[0].OrderCount)
 }
 
 func TestGetSellerAnalytics_Success(t *testing.T) {

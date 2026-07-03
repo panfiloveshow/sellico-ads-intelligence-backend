@@ -126,9 +126,5 @@ func (s *PhraseService) ListRecommendations(ctx context.Context, workspaceID, ph
 		return nil, apperror.New(apperror.ErrInternal, "failed to list phrase recommendations")
 	}
 
-	result := make([]domain.Recommendation, len(rows))
-	for i, row := range rows {
-		result[i] = recommendationFromSqlc(row)
-	}
-	return result, nil
+	return filterRecommendationsForTaskView(recommendationsFromSqlcRows(rows), filter, time.Now()), nil
 }

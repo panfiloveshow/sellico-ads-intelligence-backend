@@ -19,5 +19,16 @@
 + /api/v1/cabinets
 + /api/v1/cabinets/{id}
 + /api/v1/cabinets/{id}/campaigns
++ /api/v1/cabinets/{id}/communication/reputation
 + /api/v1/cabinets/{id}/products
 + /api/v1/cabinets/{id}/sync
+
+# ---- Compatibility/debug endpoints. Kept out of public OpenAPI until the
+# v1.0 spec-sync pass decides whether they are public product API or internal
+# diagnostics. ----
++ /api/v1/ads/data-health
++ /api/v1/ads/debug/normquery
++ /api/v1/campaigns/{id}/bids/min
++ /api/v1/extension/token/exchange
++ /api/v1/workspaces/{workspaceId}/ads-intelligence/wb/data-health
++ /api/v1/workspaces/{workspaceId}/ads-intelligence/wb/debug/normquery

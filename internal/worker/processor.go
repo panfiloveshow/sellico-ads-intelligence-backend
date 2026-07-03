@@ -60,6 +60,18 @@ type syncNotifier interface {
 	NotifySyncComplete(ctx context.Context, workspaceID uuid.UUID, status string, issues []string)
 }
 
+type reportNotifier interface {
+	NotifyAgencyClientReport(ctx context.Context, workspaceID uuid.UUID, reportDate, dateFrom, dateTo time.Time, overview *domain.AdsOverview, recommendations []domain.Recommendation) service.NotificationDeliveryResult
+}
+
+type adsReportReader interface {
+	Overview(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter ...service.OverviewFilter) (*domain.AdsOverview, error)
+}
+
+type reportRecommendationLister interface {
+	List(ctx context.Context, workspaceID uuid.UUID, filter service.RecommendationListFilter, limit, offset int32) ([]domain.Recommendation, error)
+}
+
 // integrationRefresher auto-discovers new Sellico integrations. Refresh
 // dispatches to whichever discovery paths the service has been configured
 // for (legacy per-user, service-account, or both).
@@ -102,6 +114,9 @@ type Processor struct {
 	exportGenerator      exportGenerator
 	client               taskEnqueuer
 	notifier             syncNotifier
+	reportNotifier       reportNotifier
+	adsRead              adsReportReader
+	recommendations      reportRecommendationLister
 	integrationRefresher integrationRefresher
 	bidRunner            bidAutomationRunner
 	semantics            semanticsCollector
@@ -125,6 +140,16 @@ func NewProcessor(syncService syncRunner, queries *sqlcgen.Queries, engine recom
 // WithNotifier sets the notification service for sync-complete alerts.
 func (p *Processor) WithNotifier(n syncNotifier) *Processor {
 	p.notifier = n
+	if reporter, ok := n.(reportNotifier); ok {
+		p.reportNotifier = reporter
+	}
+	return p
+}
+
+func (p *Processor) WithReportDependencies(adsRead adsReportReader, recommendations reportRecommendationLister, notifier reportNotifier) *Processor {
+	p.adsRead = adsRead
+	p.recommendations = recommendations
+	p.reportNotifier = notifier
 	return p
 }
 
@@ -257,6 +282,53 @@ func (p *Processor) HandleExtendedRecommendations(ctx context.Context, task *asy
 
 func (p *Processor) HandleSweepExtendedRecommendations(ctx context.Context, _ *asynq.Task) error {
 	return p.runSweep(ctx, TaskSweepExtendedRecommendations, TaskExtendedRecommendations, QueueRecommendations)
+}
+
+func (p *Processor) HandleSendClientAuditReport(ctx context.Context, task *asynq.Task) error {
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
+	if err != nil {
+		return err
+	}
+	if p.adsRead == nil || p.recommendations == nil || p.reportNotifier == nil {
+		return fmt.Errorf("client audit report dependencies are not configured")
+	}
+
+	dateFrom, dateTo, sellerCabinetID, err := clientAuditReportParams(payload.Metadata, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	return p.runWithJobRun(ctx, TaskSendClientAuditReport, &workspaceID, payload, func() (map[string]any, error) {
+		overview, runErr := p.adsRead.Overview(ctx, workspaceID, dateFrom, dateTo, service.OverviewFilter{SellerCabinetID: sellerCabinetID})
+		if runErr != nil {
+			return nil, runErr
+		}
+		recommendations, runErr := p.recommendations.List(ctx, workspaceID, service.RecommendationListFilter{Status: domain.RecommendationStatusActive}, 1000, 0)
+		if runErr != nil {
+			return nil, runErr
+		}
+		recommendations = filterReportRecommendationsBySellerCabinet(recommendations, sellerCabinetID)
+		delivery := p.reportNotifier.NotifyAgencyClientReport(ctx, workspaceID, time.Now().UTC(), dateFrom, dateTo, overview, recommendations)
+		result := map[string]any{
+			"report_generated": 1,
+			"telegram_sent":    delivery.TelegramSent,
+			"email_sent":       delivery.EmailSent,
+			"date_from":        dateFrom.Format("2006-01-02"),
+			"date_to":          dateTo.Format("2006-01-02"),
+			"recommendations":  len(recommendations),
+			"attention_items":  len(overview.Attention),
+			"campaigns":        overview.Totals.Campaigns,
+			"products":         overview.Totals.Products,
+			"queries":          overview.Totals.Queries,
+		}
+		if sellerCabinetID != nil {
+			result["seller_cabinet_id"] = sellerCabinetID.String()
+		}
+		return result, nil
+	})
+}
+
+func (p *Processor) HandleSweepClientAuditReports(ctx context.Context, _ *asynq.Task) error {
+	return p.runSweep(ctx, TaskSweepClientAuditReports, TaskSendClientAuditReport, QueueRecommendations)
 }
 
 // HandleCollectKeywords collects keywords from phrases/SERP for a workspace.
@@ -999,6 +1071,7 @@ func hasMeaningfulProgress(metadata map[string]any) bool {
 		"business_sales",
 		"generated",
 		"enqueued",
+		"report_generated",
 	}
 	for _, key := range keys {
 		if intFromMetadata(metadata, key) > 0 {
@@ -1054,6 +1127,72 @@ func stringFromMetadata(metadata map[string]any, key string) string {
 		return text
 	}
 	return ""
+}
+
+func clientAuditReportParams(metadata any, now time.Time) (time.Time, time.Time, *uuid.UUID, error) {
+	values, _ := metadata.(map[string]any)
+	dateTo := truncateUTCDate(now)
+	dateFrom := dateTo.AddDate(0, 0, -29)
+	if raw := stringFromAnyMap(values, "date_to"); raw != "" {
+		parsed, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			return time.Time{}, time.Time{}, nil, fmt.Errorf("parse date_to: %w", err)
+		}
+		dateTo = parsed
+	}
+	if raw := stringFromAnyMap(values, "date_from"); raw != "" {
+		parsed, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			return time.Time{}, time.Time{}, nil, fmt.Errorf("parse date_from: %w", err)
+		}
+		dateFrom = parsed
+	}
+	if dateFrom.After(dateTo) {
+		return time.Time{}, time.Time{}, nil, fmt.Errorf("date_from must be before or equal to date_to")
+	}
+
+	var sellerCabinetID *uuid.UUID
+	if raw := stringFromAnyMap(values, "seller_cabinet_id"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return time.Time{}, time.Time{}, nil, fmt.Errorf("parse seller_cabinet_id: %w", err)
+		}
+		sellerCabinetID = &parsed
+	}
+	return dateFrom, dateTo, sellerCabinetID, nil
+}
+
+func stringFromAnyMap(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
+
+func truncateUTCDate(value time.Time) time.Time {
+	utc := value.UTC()
+	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func filterReportRecommendationsBySellerCabinet(items []domain.Recommendation, sellerCabinetID *uuid.UUID) []domain.Recommendation {
+	if sellerCabinetID == nil {
+		return items
+	}
+	filtered := make([]domain.Recommendation, 0, len(items))
+	for _, item := range items {
+		if item.SellerCabinetID == nil || *item.SellerCabinetID != *sellerCabinetID {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }
 
 func (p *Processor) enqueueRecommendationGeneration(workspaceID uuid.UUID) (string, error) {

@@ -128,11 +128,7 @@ func (s *CampaignService) ListRecommendations(ctx context.Context, workspaceID, 
 		return nil, apperror.New(apperror.ErrInternal, "failed to list campaign recommendations")
 	}
 
-	result := make([]domain.Recommendation, len(rows))
-	for i, row := range rows {
-		result[i] = recommendationFromSqlc(row)
-	}
-	return result, nil
+	return filterRecommendationsForTaskView(recommendationsFromSqlcRows(rows), filter, time.Now()), nil
 }
 
 // --- sqlc → domain mappers ---

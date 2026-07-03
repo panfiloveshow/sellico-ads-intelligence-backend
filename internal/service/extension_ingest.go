@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,16 +31,76 @@ var (
 		"cabinet":  {},
 	}
 	allowedExtensionEndpointKeys = map[string]struct{}{
-		"wb.adverts":        {},
-		"wb.campaign.stats": {},
-		"wb.query.clusters": {},
-		"wb.bid.estimate":   {},
-		"wb.positions":      {},
-		"wb.serp.snapshot":  {},
-		"wb.ui.auction":     {},
-		"wb.ui.search":      {},
+		"wb.adverts":               {},
+		"wb.balance":               {},
+		"wb.bid.estimate":          {},
+		"wb.bid.min":               {},
+		"wb.bid.product":           {},
+		"wb.bid.recommendations":   {},
+		"wb.budget":                {},
+		"wb.campaign.inventory":    {},
+		"wb.campaign.settings":     {},
+		"wb.campaign.stats":        {},
+		"wb.finance":               {},
+		"wb.positions":             {},
+		"wb.query.bids":            {},
+		"wb.query.clusters":        {},
+		"wb.query.minus":           {},
+		"wb.query.stats":           {},
+		"wb.sales_funnel.products": {},
+		"wb.search_report":         {},
+		"wb.serp.snapshot":         {},
+		"wb.ui.advert":             {},
+		"wb.ui.analyst":            {},
+		"wb.ui.auction":            {},
+		"wb.ui.campaign.stats":     {},
+		"wb.ui.placement":          {},
+		"wb.ui.search":             {},
+	}
+	allowedExtensionTableRoles = map[string]struct{}{
+		"campaigns": {},
+		"products":  {},
+		"queries":   {},
+		"bids":      {},
+		"stats":     {},
+		"finance":   {},
+		"unknown":   {},
+	}
+	allowedExtensionEndpointPathNeedles = map[string][]string{
+		"wb.adverts":               {"/adv/v1/promotion/adverts", "/adv/v0/advert"},
+		"wb.balance":               {"/adv/v1/balance"},
+		"wb.bid.estimate":          {"/adv/v2/recommended-bids"},
+		"wb.bid.min":               {"/api/advert/v1/bids/min"},
+		"wb.bid.product":           {"/api/advert/v1/bids"},
+		"wb.bid.recommendations":   {"/api/advert/v0/bids/recommendations", "/api/v1/advert/preset-bids"},
+		"wb.budget":                {"/adv/v1/budget"},
+		"wb.campaign.inventory":    {"/adv/v1/promotion/count"},
+		"wb.campaign.settings":     {"/api/advert/v2/adverts"},
+		"wb.campaign.stats":        {"/adv/v3/fullstats", "/adv/v0/stats"},
+		"wb.finance":               {"/adv/v1/upd", "/adv/v1/payments"},
+		"wb.positions":             {"/positions", "/position"},
+		"wb.query.bids":            {"/adv/v0/normquery/get-bids", "/adv/v0/normquery/bids"},
+		"wb.query.clusters":        {"/adv/v0/normquery"},
+		"wb.query.minus":           {"/adv/v0/normquery/set-minus"},
+		"wb.query.stats":           {"/adv/v1/normquery/stats"},
+		"wb.sales_funnel.products": {"/api/analytics/v3/sales-funnel/products"},
+		"wb.search_report":         {"/api/v2/search-report"},
+		"wb.serp.snapshot":         {"/search"},
+		"wb.ui.advert":             {"/api/v1/advert/"},
+		"wb.ui.analyst":            {"/api/v5/analyst-info"},
+		"wb.ui.auction":            {"/adv/v1/auction/adverts"},
+		"wb.ui.campaign.stats":     {"/api/v5/fullstat"},
+		"wb.ui.placement":          {"/placement"},
+		"wb.ui.search":             {"/search"},
 	}
 )
+
+var extensionSensitiveValuePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}`),
+	regexp.MustCompile(`(?i)\b(access_token|refresh_token|auth_token|token|jwt|authorization)=([^&\s"'<>]+)`),
+	regexp.MustCompile(`\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b`),
+	regexp.MustCompile(`(?i)\b(sessionid|session_id|sid|jwt|token|access_token|refresh_token)=([^;\s]+)`),
+}
 
 type CreateExtensionPageContextInput struct {
 	URL             string
@@ -113,8 +176,33 @@ type CreateExtensionNetworkCaptureInput struct {
 	CapturedAt      *time.Time
 }
 
+type CreateExtensionDOMRowSnapshotInput struct {
+	SellerCabinetID *uuid.UUID
+	CampaignID      *uuid.UUID
+	PhraseID        *uuid.UUID
+	ProductID       *uuid.UUID
+	PageType        string
+	TableRole       string
+	RowKey          string
+	Query           *string
+	Region          *string
+	VisibleText     string
+	Cells           json.RawMessage
+	Metadata        json.RawMessage
+	Confidence      float64
+	CapturedAt      *time.Time
+}
+
 func (s *ExtensionService) resolveProductID(ctx context.Context, workspaceID uuid.UUID, productID *uuid.UUID, metadata json.RawMessage) (*uuid.UUID, error) {
 	if productID != nil {
+		if _, err := s.queries.GetProductByIDAndWorkspace(ctx, sqlcgen.GetProductByIDAndWorkspaceParams{
+			ID:          uuidToPgtype(*productID),
+			WorkspaceID: uuidToPgtype(workspaceID),
+		}); errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.ErrValidation, "product_id does not belong to workspace")
+		} else if err != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to validate product workspace")
+		}
 		return productID, nil
 	}
 	wbProductID := metadataInt64(metadata, "wb_product_id", "wbProductID")
@@ -137,6 +225,14 @@ func (s *ExtensionService) resolveProductID(ctx context.Context, workspaceID uui
 
 func (s *ExtensionService) resolveCampaignID(ctx context.Context, workspaceID uuid.UUID, campaignID *uuid.UUID, metadata json.RawMessage) (*uuid.UUID, error) {
 	if campaignID != nil {
+		if _, err := s.queries.GetCampaignByIDAndWorkspace(ctx, sqlcgen.GetCampaignByIDAndWorkspaceParams{
+			ID:          uuidToPgtype(*campaignID),
+			WorkspaceID: uuidToPgtype(workspaceID),
+		}); errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.ErrValidation, "campaign_id does not belong to workspace")
+		} else if err != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to validate campaign workspace")
+		}
 		return campaignID, nil
 	}
 	wbCampaignID := metadataInt64(metadata, "wb_campaign_id", "wbCampaignID")
@@ -155,6 +251,23 @@ func (s *ExtensionService) resolveCampaignID(ctx context.Context, workspaceID uu
 	}
 	id := uuidFromPgtype(row.ID)
 	return &id, nil
+}
+
+func (s *ExtensionService) resolveSellerCabinetID(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID) (*uuid.UUID, error) {
+	if sellerCabinetID == nil {
+		return nil, nil
+	}
+	row, err := s.queries.GetSellerCabinetByID(ctx, uuidToPgtype(*sellerCabinetID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrValidation, "seller_cabinet_id does not belong to workspace")
+	}
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to validate seller cabinet workspace")
+	}
+	if uuidFromPgtype(row.WorkspaceID) != workspaceID {
+		return nil, apperror.New(apperror.ErrValidation, "seller_cabinet_id does not belong to workspace")
+	}
+	return sellerCabinetID, nil
 }
 
 func (s *ExtensionService) CreatePageContext(ctx context.Context, userID, workspaceID uuid.UUID, input CreateExtensionPageContextInput) (*domain.ExtensionPageContext, error) {
@@ -179,6 +292,10 @@ func (s *ExtensionService) CreatePageContext(ctx context.Context, userID, worksp
 		return nil, err
 	}
 	productID, err := s.resolveProductID(ctx, workspaceID, input.ProductID, metadata)
+	if err != nil {
+		return nil, err
+	}
+	sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +330,7 @@ func (s *ExtensionService) CreatePageContext(ctx context.Context, userID, worksp
 		UserID:          uuidToPgtype(userID),
 		Url:             strings.TrimSpace(input.URL),
 		PageType:        pageType,
-		SellerCabinetID: uuidToPgtypePtr(input.SellerCabinetID),
+		SellerCabinetID: uuidToPgtypePtr(sellerCabinetID),
 		CampaignID:      uuidToPgtypePtr(campaignID),
 		PhraseID:        uuidToPgtypePtr(input.PhraseID),
 		ProductID:       uuidToPgtypePtr(productID),
@@ -255,14 +372,18 @@ func (s *ExtensionService) CreateBidSnapshots(ctx context.Context, userID, works
 	}
 
 	for _, input := range inputs {
-		if input.PhraseID == nil && input.Query == nil && input.CampaignID == nil {
+		metadata := normalizeJSON(input.Metadata)
+		if input.PhraseID == nil && input.Query == nil && input.CampaignID == nil && metadataInt64(metadata, "wb_campaign_id", "wbCampaignID") <= 0 {
 			return 0, apperror.New(apperror.ErrValidation, "bid snapshot requires phrase, query or campaign context")
 		}
 		capturedAt := extensionCapturedAt(input.CapturedAt)
 		query := normalizeOptionalText(input.Query)
 		region := normalizeOptionalText(input.Region)
-		metadata := normalizeJSON(input.Metadata)
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, metadata)
+		if err != nil {
+			return 0, err
+		}
+		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 		if err != nil {
 			return 0, err
 		}
@@ -274,7 +395,7 @@ func (s *ExtensionService) CreateBidSnapshots(ctx context.Context, userID, works
 			SessionID:       session.ID,
 			WorkspaceID:     uuidToPgtype(workspaceID),
 			UserID:          uuidToPgtype(userID),
-			SellerCabinetID: uuidToPgtypePtr(input.SellerCabinetID),
+			SellerCabinetID: uuidToPgtypePtr(sellerCabinetID),
 			CampaignID:      uuidToPgtypePtr(campaignID),
 			PhraseID:        uuidToPgtypePtr(input.PhraseID),
 			Query:           textToPgtype(query),
@@ -331,6 +452,10 @@ func (s *ExtensionService) CreatePositionSnapshots(ctx context.Context, userID, 
 		if err != nil {
 			return 0, err
 		}
+		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
+		if err != nil {
+			return 0, err
+		}
 		if productID == nil {
 			return 0, apperror.New(apperror.ErrValidation, "position snapshot requires product_id")
 		}
@@ -351,7 +476,7 @@ func (s *ExtensionService) CreatePositionSnapshots(ctx context.Context, userID, 
 			SessionID:       session.ID,
 			WorkspaceID:     uuidToPgtype(workspaceID),
 			UserID:          uuidToPgtype(userID),
-			SellerCabinetID: uuidToPgtypePtr(input.SellerCabinetID),
+			SellerCabinetID: uuidToPgtypePtr(sellerCabinetID),
 			CampaignID:      uuidToPgtypePtr(campaignID),
 			PhraseID:        uuidToPgtypePtr(input.PhraseID),
 			ProductID:       uuidToPgtypePtr(productID),
@@ -413,6 +538,10 @@ func (s *ExtensionService) CreateUISignals(ctx context.Context, userID, workspac
 		if err != nil {
 			return 0, err
 		}
+		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
+		if err != nil {
+			return 0, err
+		}
 		confidence, convErr := numericFromFloat64(input.Confidence)
 		if convErr != nil {
 			return 0, apperror.New(apperror.ErrValidation, "invalid ui signal confidence")
@@ -421,7 +550,7 @@ func (s *ExtensionService) CreateUISignals(ctx context.Context, userID, workspac
 			SessionID:       session.ID,
 			WorkspaceID:     uuidToPgtype(workspaceID),
 			UserID:          uuidToPgtype(userID),
-			SellerCabinetID: uuidToPgtypePtr(input.SellerCabinetID),
+			SellerCabinetID: uuidToPgtypePtr(sellerCabinetID),
 			CampaignID:      uuidToPgtypePtr(campaignID),
 			PhraseID:        uuidToPgtypePtr(input.PhraseID),
 			ProductID:       uuidToPgtypePtr(productID),
@@ -467,6 +596,9 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 		return 0, err
 	}
 
+	var derivedBidInputs []CreateExtensionBidSnapshotInput
+	var derivedPositionInputs []CreateExtensionPositionSnapshotInput
+	var derivedSignalInputs []CreateExtensionUISignalInput
 	for _, input := range inputs {
 		pageType := strings.TrimSpace(strings.ToLower(input.PageType))
 		if _, ok := allowedExtensionPageTypes[pageType]; !ok {
@@ -479,10 +611,17 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 		if len(input.Payload) == 0 {
 			return 0, apperror.New(apperror.ErrValidation, "network capture payload is required")
 		}
+		rawPayload := normalizeJSON(input.Payload)
+		if err := validateExtensionNetworkCaptureURL(endpointKey, rawPayload); err != nil {
+			return 0, err
+		}
 		capturedAt := extensionCapturedAt(input.CapturedAt)
 		query := normalizeOptionalText(input.Query)
 		region := normalizeOptionalText(input.Region)
-		payload := normalizeJSON(input.Payload)
+		payload := sanitizeExtensionPayload(rawPayload)
+		derivedBidInputs = append(derivedBidInputs, deriveBidSnapshotsFromNetworkCapture(input, payload)...)
+		derivedPositionInputs = append(derivedPositionInputs, derivePositionSnapshotsFromNetworkCapture(input, payload)...)
+		derivedSignalInputs = append(derivedSignalInputs, deriveUISignalsFromNetworkCapture(input, payload)...)
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, payload)
 		if err != nil {
 			return 0, err
@@ -491,11 +630,15 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 		if err != nil {
 			return 0, err
 		}
+		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
+		if err != nil {
+			return 0, err
+		}
 		row, createErr := s.queries.CreateExtensionNetworkCapture(ctx, sqlcgen.CreateExtensionNetworkCaptureParams{
 			SessionID:       session.ID,
 			WorkspaceID:     uuidToPgtype(workspaceID),
 			UserID:          uuidToPgtype(userID),
-			SellerCabinetID: uuidToPgtypePtr(input.SellerCabinetID),
+			SellerCabinetID: uuidToPgtypePtr(sellerCabinetID),
 			CampaignID:      uuidToPgtypePtr(campaignID),
 			PhraseID:        uuidToPgtypePtr(input.PhraseID),
 			ProductID:       uuidToPgtypePtr(productID),
@@ -522,6 +665,128 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 			return 0, apperror.New(apperror.ErrInternal, "failed to store extension network capture")
 		}
 		_ = row
+		if budget := deriveCampaignBudgetFromNetworkCapture(input, payload); budget != nil && campaignID != nil {
+			if _, budgetErr := s.queries.UpsertCampaignBudget(ctx, sqlcgen.UpsertCampaignBudgetParams{
+				CampaignID: uuidToPgtype(*campaignID),
+				Cash:       budget.cash,
+				Netting:    budget.netting,
+				Total:      budget.total,
+				CapturedAt: timePtrToPgtype(&capturedAt),
+			}); budgetErr != nil {
+				log.Printf("[WARN] extension network budget normalization failed: workspace_id=%s campaign_id=%s err=%v", workspaceID, campaignID.String(), budgetErr)
+			}
+		}
+	}
+
+	if err := s.touchSession(ctx, session.ID); err != nil {
+		return 0, apperror.New(apperror.ErrInternal, "failed to update extension activity")
+	}
+	if len(derivedBidInputs) > 0 {
+		if _, err := s.CreateBidSnapshots(ctx, userID, workspaceID, derivedBidInputs); err != nil {
+			log.Printf("[WARN] extension network bid normalization failed: workspace_id=%s items=%d err=%v", workspaceID, len(derivedBidInputs), err)
+		}
+	}
+	if len(derivedPositionInputs) > 0 {
+		if _, err := s.CreatePositionSnapshots(ctx, userID, workspaceID, derivedPositionInputs); err != nil {
+			log.Printf("[WARN] extension network position normalization failed: workspace_id=%s items=%d err=%v", workspaceID, len(derivedPositionInputs), err)
+		}
+	}
+	if len(derivedSignalInputs) > 0 {
+		if _, err := s.CreateUISignals(ctx, userID, workspaceID, derivedSignalInputs); err != nil {
+			log.Printf("[WARN] extension network ui signal normalization failed: workspace_id=%s items=%d err=%v", workspaceID, len(derivedSignalInputs), err)
+		}
+	}
+	return len(inputs), nil
+}
+
+func (s *ExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, workspaceID uuid.UUID, inputs []CreateExtensionDOMRowSnapshotInput) (int, error) {
+	if len(inputs) == 0 {
+		return 0, apperror.New(apperror.ErrValidation, "at least one dom row snapshot is required")
+	}
+	session, err := s.getSession(ctx, userID, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, input := range inputs {
+		pageType := strings.TrimSpace(strings.ToLower(input.PageType))
+		if _, ok := allowedExtensionPageTypes[pageType]; !ok {
+			return 0, apperror.New(apperror.ErrValidation, "unsupported dom row page_type")
+		}
+		tableRole := strings.TrimSpace(strings.ToLower(input.TableRole))
+		if tableRole == "" {
+			tableRole = "unknown"
+		}
+		if _, ok := allowedExtensionTableRoles[tableRole]; !ok {
+			return 0, apperror.New(apperror.ErrValidation, "unsupported dom row table_role")
+		}
+		rowKey := truncateExtensionText(redactSensitiveString(strings.TrimSpace(input.RowKey)), 300)
+		visibleText := truncateExtensionText(redactSensitiveString(strings.TrimSpace(input.VisibleText)), 1200)
+		if rowKey == "" || visibleText == "" {
+			return 0, apperror.New(apperror.ErrValidation, "dom row snapshot requires row_key and visible_text")
+		}
+
+		capturedAt := extensionCapturedAt(input.CapturedAt)
+		query := normalizeOptionalText(input.Query)
+		region := normalizeOptionalText(input.Region)
+		metadata := sanitizeExtensionPayload(normalizeJSON(input.Metadata))
+		cells := sanitizeExtensionPayload(normalizeJSON(input.Cells))
+		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, metadata)
+		if err != nil {
+			return 0, err
+		}
+		productID, err := s.resolveProductID(ctx, workspaceID, input.ProductID, metadata)
+		if err != nil {
+			return 0, err
+		}
+		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
+		if err != nil {
+			return 0, err
+		}
+		confidenceValue := input.Confidence
+		if confidenceValue <= 0 {
+			confidenceValue = 0.65
+		}
+		confidence, convErr := numericFromFloat64(confidenceValue)
+		if convErr != nil {
+			return 0, apperror.New(apperror.ErrValidation, "invalid dom row snapshot confidence")
+		}
+		row, createErr := s.queries.CreateExtensionDOMRowSnapshot(ctx, sqlcgen.CreateExtensionDOMRowSnapshotParams{
+			SessionID:       session.ID,
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			UserID:          uuidToPgtype(userID),
+			SellerCabinetID: uuidToPgtypePtr(sellerCabinetID),
+			CampaignID:      uuidToPgtypePtr(campaignID),
+			PhraseID:        uuidToPgtypePtr(input.PhraseID),
+			ProductID:       uuidToPgtypePtr(productID),
+			PageType:        pageType,
+			TableRole:       tableRole,
+			RowKey:          rowKey,
+			Query:           textToPgtype(query),
+			Region:          textToPgtype(region),
+			VisibleText:     visibleText,
+			Cells:           cells,
+			Metadata:        metadata,
+			Source:          domain.SourceExtension,
+			Confidence:      confidence,
+			DedupeKey: buildExtensionDedupeKey(
+				"dom_row_snapshot",
+				capturedAt,
+				pageType,
+				tableRole,
+				rowKey,
+				uuidString(campaignID),
+				uuidString(input.PhraseID),
+				uuidString(productID),
+				query,
+				region,
+			),
+			CapturedAt: timePtrToPgtype(&capturedAt),
+		})
+		if createErr != nil {
+			return 0, apperror.New(apperror.ErrInternal, "failed to store extension dom row snapshot")
+		}
+		_ = row
 	}
 
 	if err := s.touchSession(ctx, session.ID); err != nil {
@@ -537,6 +802,18 @@ func buildExtensionDedupeKey(kind string, capturedAt time.Time, parts ...string)
 	return hex.EncodeToString(sum[:])
 }
 
+func truncateExtensionText(value string, maxLen int) string {
+	value = strings.TrimSpace(value)
+	if maxLen <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= maxLen {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxLen]))
+}
+
 func extensionCapturedAt(value *time.Time) time.Time {
 	if value == nil {
 		return time.Now().UTC()
@@ -549,6 +826,146 @@ func normalizeJSON(value json.RawMessage) []byte {
 		return nil
 	}
 	return value
+}
+
+func sanitizeExtensionPayload(value json.RawMessage) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	var payload any
+	if err := json.Unmarshal(value, &payload); err != nil {
+		return value
+	}
+	redactSensitiveFields(payload)
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return value
+	}
+	return out
+}
+
+func validateExtensionNetworkCaptureURL(endpointKey string, payload json.RawMessage) error {
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return apperror.New(apperror.ErrValidation, "network capture payload must be valid JSON")
+	}
+	rawURL, _ := raw["url"].(string)
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return apperror.New(apperror.ErrValidation, "network capture payload url is required")
+	}
+	if extensionCaptureURLHasSensitiveQuery(rawURL) {
+		return apperror.New(apperror.ErrValidation, "network capture url contains sensitive query parameters")
+	}
+	path, host, err := parseExtensionCaptureURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if host != "" && !isAllowedExtensionCaptureHost(host) {
+		return apperror.New(apperror.ErrValidation, "network capture host is not allowed")
+	}
+	needles := allowedExtensionEndpointPathNeedles[endpointKey]
+	if len(needles) == 0 {
+		return nil
+	}
+	pathLower := strings.ToLower(path)
+	for _, needle := range needles {
+		if strings.Contains(pathLower, strings.ToLower(needle)) {
+			return nil
+		}
+	}
+	return apperror.New(apperror.ErrValidation, "network capture url does not match endpoint_key")
+}
+
+func parseExtensionCaptureURL(rawURL string) (path string, host string, err error) {
+	if strings.HasPrefix(rawURL, "/") {
+		return rawURL, "", nil
+	}
+	parsed, parseErr := url.Parse(rawURL)
+	if parseErr != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", "", apperror.New(apperror.ErrValidation, "network capture url is invalid")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return "", "", apperror.New(apperror.ErrValidation, "network capture url scheme is not allowed")
+	}
+	return parsed.EscapedPath(), strings.ToLower(parsed.Hostname()), nil
+}
+
+func extensionCaptureURLHasSensitiveQuery(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	for key := range parsed.Query() {
+		if isSensitiveExtensionPayloadKey(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowedExtensionCaptureHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "seller.wildberries.ru" ||
+		host == "cmp.wildberries.ru" ||
+		host == "advert-api.wildberries.ru" ||
+		host == "statistics-api.wildberries.ru" ||
+		strings.HasSuffix(host, ".wildberries.ru") ||
+		strings.HasSuffix(host, ".wb.ru") ||
+		strings.HasSuffix(host, ".rwb.ru") ||
+		strings.HasSuffix(host, ".wbbasket.ru") ||
+		strings.HasSuffix(host, ".wbcontent.net")
+}
+
+func redactSensitiveFields(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if isSensitiveExtensionPayloadKey(key) {
+				typed[key] = "[redacted]"
+				continue
+			}
+			if text, ok := nested.(string); ok {
+				typed[key] = redactSensitiveString(text)
+				continue
+			}
+			redactSensitiveFields(nested)
+		}
+	case []any:
+		for index, nested := range typed {
+			if text, ok := nested.(string); ok {
+				typed[index] = redactSensitiveString(text)
+				continue
+			}
+			redactSensitiveFields(nested)
+		}
+	}
+}
+
+func redactSensitiveString(value string) string {
+	out := value
+	for _, pattern := range extensionSensitiveValuePatterns {
+		out = pattern.ReplaceAllString(out, "[redacted]")
+	}
+	return out
+}
+
+func isSensitiveExtensionPayloadKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
+	case "authorization", "cookie", "set-cookie", "x-user-token", "x-access-token", "access_token", "access-token", "accesstoken", "refresh_token", "refresh-token", "refreshtoken", "session_id", "session-id", "sessionid", "sid", "token", "jwt", "password", "passwd", "secret", "api_key", "api-key", "apikey":
+		return true
+	default:
+		return strings.Contains(normalized, "password") ||
+			strings.Contains(normalized, "authorization") ||
+			strings.Contains(normalized, "access_token") ||
+			strings.Contains(normalized, "refresh_token") ||
+			strings.Contains(normalized, "session_id") ||
+			strings.Contains(normalized, "sessionid") ||
+			strings.Contains(normalized, "session_token")
+	}
 }
 
 func normalizeOptionalText(value *string) string {
