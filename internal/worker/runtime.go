@@ -92,7 +92,10 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		QueueRecommendations: 4,
 		QueueExports:         2,
 		QueueBidAutomation:   3,
-		QueueRepricer:        1,
+		// Repricer is user-interactive (manual sync/bulk/run) — give it the
+		// highest weight so a click isn't starved behind the WB sweep queues.
+		// Still Concurrency 1, so no parallel WB calls.
+		QueueRepricer: 6,
 		QueueSemantics:       2,
 		QueueCompetitors:     2,
 		QueueDelivery:        2,
