@@ -1,9 +1,16 @@
 package service
 
-import "github.com/rs/zerolog"
+import (
+	"fmt"
+	"math"
+
+	"github.com/rs/zerolog"
+
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+)
 
 // PriceEngine computes repricer decisions from product economics, stock, sales
-// velocity and ad signals. Pure functions live alongside it (see Phase 4).
+// velocity and ad signals. The decision functions are pure (see *_test.go).
 type PriceEngine struct {
 	logger zerolog.Logger
 }
@@ -11,4 +18,234 @@ type PriceEngine struct {
 // NewPriceEngine creates a PriceEngine.
 func NewPriceEngine(logger zerolog.Logger) *PriceEngine {
 	return &PriceEngine{logger: logger.With().Str("component", "price_engine").Logger()}
+}
+
+// PriceEngineInputs is everything the engine needs to decide one product's price.
+// All *Rub values are integer rubles.
+type PriceEngineInputs struct {
+	Current                   domain.ProductPrice
+	Economics                 domain.ProductEconomics
+	CommissionFallbackPercent *float64 // from wb_commission_tariffs when economics.CommissionPercent is nil
+	Stock                     int64
+	StockKnown                bool
+	SalesUnitsPerDay          float64
+	// Ad signals (price_ad_linked).
+	DRR                *float64
+	HasActiveCampaigns bool
+}
+
+// PriceDecision is the engine's verdict for one product.
+type PriceDecision struct {
+	ShouldChange       bool
+	NewPriceRub        int64  // base price to send to WB, integer rubles
+	NewDiscountPercent int    // kept equal to current discount in v1
+	TargetEffectiveRub int64  // clamped target effective (discounted) price
+	MinPriceRub        int64  // margin floor used, 0 if unknown
+	Direction          string // up|down|none
+	Reason             string
+	SkipReason         string
+}
+
+func skip(reason string) PriceDecision { return PriceDecision{Direction: "none", SkipReason: reason} }
+func noChange(reason string, floor int64) PriceDecision {
+	return PriceDecision{Direction: "none", Reason: reason, MinPriceRub: floor}
+}
+
+// ComputeMinEffectivePrice returns the lowest effective (discounted) price, in
+// integer rubles, at which the product still hits its target margin:
+//
+//	floor = ceil( (cost + logistics + other) / (1 - (commission% + tax% + margin%)/100) )
+//
+// Returns (0, reason) when it cannot be computed. commissionFallback (from WB
+// commission tariffs) is used only when economics.CommissionPercent is nil.
+func ComputeMinEffectivePrice(econ domain.ProductEconomics, commissionFallback *float64) (int64, string) {
+	if econ.CostPrice == nil {
+		return 0, "missing_cost_price"
+	}
+	cost := *econ.CostPrice
+	if econ.LogisticsCost != nil {
+		cost += *econ.LogisticsCost
+	}
+	if econ.OtherCosts != nil {
+		cost += *econ.OtherCosts
+	}
+	if cost < 0 {
+		return 0, "negative_cost"
+	}
+
+	commission := 0.0
+	switch {
+	case econ.CommissionPercent != nil:
+		commission = *econ.CommissionPercent
+	case commissionFallback != nil:
+		commission = *commissionFallback
+	default:
+		return 0, "missing_commission_percent"
+	}
+	tax := 0.0
+	if econ.TaxRatePercent != nil {
+		tax = *econ.TaxRatePercent
+	}
+	margin := 0.0
+	if econ.TargetMarginPercent != nil {
+		margin = *econ.TargetMarginPercent
+	}
+
+	denom := 1 - (commission+tax+margin)/100
+	if denom < 0.05 {
+		// commission+tax+margin ≥ 95% — no achievable price, refuse rather than
+		// return an absurd floor.
+		return 0, "economics_percentages_invalid"
+	}
+	return int64(math.Ceil(float64(cost) / denom)), ""
+}
+
+// basePriceForTarget converts a target effective price to the base price WB needs,
+// keeping the discount constant: base = ceil(target / (1 - discount/100)).
+// discount is clamped to [0, 95].
+func basePriceForTarget(targetEffectiveRub int64, discountPercent int) int64 {
+	if discountPercent < 0 {
+		discountPercent = 0
+	}
+	if discountPercent > 95 {
+		discountPercent = 95
+	}
+	if discountPercent == 0 {
+		return targetEffectiveRub
+	}
+	return int64(math.Ceil(float64(targetEffectiveRub) * 100 / float64(100-discountPercent)))
+}
+
+// effectiveMinFloor combines the margin floor with an optional hard MinPriceRub override.
+func effectiveMinFloor(marginFloor int64, params domain.StrategyParams) int64 {
+	floor := marginFloor
+	if params.MinPriceRub != nil && *params.MinPriceRub > floor {
+		floor = *params.MinPriceRub
+	}
+	return floor
+}
+
+// DecideMarginFloor raises a product priced below its margin floor back up to it.
+func DecideMarginFloor(in PriceEngineInputs, params domain.StrategyParams) PriceDecision {
+	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	if reason != "" {
+		return skip(reason)
+	}
+	floor := effectiveMinFloor(marginFloor, params)
+	current := in.Current.EffectivePriceRub()
+	if current <= 0 {
+		return skip("invalid_current_price")
+	}
+	if current >= floor {
+		return noChange("above_margin_floor", floor)
+	}
+	// Raise to floor. Margin protection bypasses the step cap (selling below cost
+	// is worse than a large corrective raise); raising never triggers quarantine.
+	return PriceDecision{
+		ShouldChange:       true,
+		NewPriceRub:        basePriceForTarget(floor, in.Current.DiscountPercent),
+		NewDiscountPercent: in.Current.DiscountPercent,
+		TargetEffectiveRub: floor,
+		MinPriceRub:        floor,
+		Direction:          "up",
+		Reason:             fmt.Sprintf("below margin floor %d, raising to floor", floor),
+	}
+}
+
+// DecideInventoryDemand nudges price down on overstock+slow sales and up on
+// low-stock+fast sales, always clamped to the margin floor / max price.
+func DecideInventoryDemand(in PriceEngineInputs, params domain.StrategyParams) PriceDecision {
+	p := params.MergedPriceParams()
+	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	if reason != "" {
+		return skip(reason)
+	}
+	floor := effectiveMinFloor(marginFloor, p)
+	current := in.Current.EffectivePriceRub()
+	if current <= 0 {
+		return skip("invalid_current_price")
+	}
+	if !in.StockKnown {
+		return skip("stock_unknown")
+	}
+
+	daysOfStock := math.Inf(1)
+	if in.SalesUnitsPerDay > 0 {
+		daysOfStock = float64(in.Stock) / in.SalesUnitsPerDay
+	}
+	slow := in.SalesUnitsPerDay <= p.SlowVelocityPerDay
+
+	switch {
+	case daysOfStock > float64(p.OverstockDays) && slow:
+		target := int64(math.Round(float64(current) * (1 - p.StepPercent/100)))
+		if target < floor {
+			target = floor
+		}
+		if target >= current {
+			return noChange("already_at_floor", floor)
+		}
+		return priceMove(in, "down", target, floor, fmt.Sprintf("overstock %.0f days, stepping down %.0f%%", daysOfStock, p.StepPercent))
+
+	case daysOfStock < float64(p.LowStockDays) && in.SalesUnitsPerDay > 0:
+		if params.MaxPriceRub == nil {
+			return skip("max_price_required_for_increase")
+		}
+		target := int64(math.Round(float64(current) * (1 + p.StepPercent/100)))
+		if target > *params.MaxPriceRub {
+			target = *params.MaxPriceRub
+		}
+		if target <= current {
+			return noChange("already_at_max", floor)
+		}
+		return priceMove(in, "up", target, floor, fmt.Sprintf("low stock %.0f days, stepping up %.0f%%", daysOfStock, p.StepPercent))
+
+	default:
+		return noChange("inventory_balanced", floor)
+	}
+}
+
+// DecideAdLinked lowers price when the product's ad DRR exceeds its allowed DRR
+// (a cheaper price lifts ad-traffic conversion and pulls DRR back down).
+func DecideAdLinked(in PriceEngineInputs, params domain.StrategyParams) PriceDecision {
+	p := params.MergedPriceParams()
+	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	if reason != "" {
+		return skip(reason)
+	}
+	floor := effectiveMinFloor(marginFloor, p)
+	current := in.Current.EffectivePriceRub()
+	if current <= 0 {
+		return skip("invalid_current_price")
+	}
+	if !in.HasActiveCampaigns {
+		return skip("no_active_campaigns")
+	}
+	if in.DRR == nil || in.Economics.MaxAllowedDRR == nil {
+		return skip("missing_ad_data")
+	}
+	if *in.DRR <= *in.Economics.MaxAllowedDRR {
+		return noChange("drr_within_limit", floor)
+	}
+	// DRR too high: step down toward floor to improve ad-traffic conversion.
+	target := int64(math.Round(float64(current) * (1 - p.StepPercent/100)))
+	if target < floor {
+		target = floor
+	}
+	if target >= current {
+		return noChange("already_at_floor", floor)
+	}
+	return priceMove(in, "down", target, floor, fmt.Sprintf("DRR %.1f%% over allowed %.1f%%, stepping down", *in.DRR, *in.Economics.MaxAllowedDRR))
+}
+
+// priceMove builds a change decision for a target effective price.
+func priceMove(in PriceEngineInputs, direction string, targetEffective, floor int64, reason string) PriceDecision {
+	return PriceDecision{
+		ShouldChange:       true,
+		NewPriceRub:        basePriceForTarget(targetEffective, in.Current.DiscountPercent),
+		NewDiscountPercent: in.Current.DiscountPercent,
+		TargetEffectiveRub: targetEffective,
+		MinPriceRub:        floor,
+		Direction:          direction,
+		Reason:             reason,
+	}
 }

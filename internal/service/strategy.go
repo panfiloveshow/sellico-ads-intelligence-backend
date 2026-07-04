@@ -136,6 +136,10 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
 		domain.StrategyTypeRecommendation:
+	case domain.StrategyTypePriceMarginFloor,
+		domain.StrategyTypePriceInventoryDemand,
+		domain.StrategyTypePriceAdLinked:
+		return validatePriceStrategy(input)
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid strategy type")
 	}
@@ -167,6 +171,37 @@ func validateStrategyForSave(input domain.Strategy) error {
 		return apperror.New(apperror.ErrValidation, "max_changes_per_day must be non-negative")
 	case params.MaxDataAgeHours < 0:
 		return apperror.New(apperror.ErrValidation, "max_data_age_hours must be non-negative")
+	}
+	return nil
+}
+
+// validatePriceStrategy validates repricer (price_*) strategy parameters.
+func validatePriceStrategy(input domain.Strategy) error {
+	p := input.Params
+	if p.StepPercent < 0 || p.StepPercent > 10 {
+		return apperror.New(apperror.ErrValidation, "step_percent must be between 0 and 10")
+	}
+	if p.MinPriceRub != nil && *p.MinPriceRub < 0 {
+		return apperror.New(apperror.ErrValidation, "min_price_rub must be non-negative")
+	}
+	if p.MaxPriceRub != nil && *p.MaxPriceRub < 0 {
+		return apperror.New(apperror.ErrValidation, "max_price_rub must be non-negative")
+	}
+	if p.MinPriceRub != nil && p.MaxPriceRub != nil && *p.MinPriceRub > *p.MaxPriceRub {
+		return apperror.New(apperror.ErrValidation, "min_price_rub must be less than or equal to max_price_rub")
+	}
+	if p.PriceApplyMode != "" && p.PriceApplyMode != domain.PriceApplyModeDryRun && p.PriceApplyMode != domain.PriceApplyModeAuto {
+		return apperror.New(apperror.ErrValidation, "price_apply_mode must be dry_run or auto")
+	}
+	if p.OverstockDays < 0 || p.LowStockDays < 0 {
+		return apperror.New(apperror.ErrValidation, "stock day thresholds must be non-negative")
+	}
+	if p.MaxPriceChangesPerDay < 0 {
+		return apperror.New(apperror.ErrValidation, "max_price_changes_per_day must be non-negative")
+	}
+	// inventory_demand can move price up, which requires a ceiling.
+	if input.Type == domain.StrategyTypePriceInventoryDemand && p.MaxPriceRub == nil {
+		return apperror.New(apperror.ErrValidation, "max_price_rub is required for price_inventory_demand")
 	}
 	return nil
 }

@@ -88,6 +88,10 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 	totalChanges := 0
 
 	for _, strategy := range activeStrategies {
+		// Repricer (price_*) strategies are handled by RepricerService, not the bid engine.
+		if domain.IsPriceStrategy(strategy.Type) {
+			continue
+		}
 		if reason := strategyAutomationSkipReason(strategy); reason != "" {
 			s.logger.Info().
 				Str("workspace_id", workspaceID.String()).
