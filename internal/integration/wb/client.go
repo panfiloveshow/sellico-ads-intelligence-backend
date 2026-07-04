@@ -48,6 +48,7 @@ type Client struct {
 	commonURL                string
 	feedbacksURL             string
 	pricesURL                string
+	showcaseURL              string
 	rateLimit                int
 	fullStatsInterBatchDelay time.Duration
 	normQueryInterBatchDelay time.Duration
@@ -65,6 +66,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 	commonURL := "https://common-api.wildberries.ru"
 	feedbacksURL := "https://feedbacks-api.wildberries.ru"
 	pricesURL := "https://discounts-prices-api.wildberries.ru"
+	showcaseURL := "https://card.wb.ru"
 	if strings.Contains(cfg.WBAPIBaseURL, "localhost") || strings.Contains(cfg.WBAPIBaseURL, "127.0.0.1") {
 		contentURL = cfg.WBAPIBaseURL
 		statisticsURL = cfg.WBAPIBaseURL
@@ -72,6 +74,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		commonURL = cfg.WBAPIBaseURL
 		feedbacksURL = cfg.WBAPIBaseURL
 		pricesURL = cfg.WBAPIBaseURL
+		showcaseURL = cfg.WBAPIBaseURL
 	}
 
 	return &Client{
@@ -83,6 +86,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		commonURL:                commonURL,
 		feedbacksURL:             feedbacksURL,
 		pricesURL:                pricesURL,
+		showcaseURL:              showcaseURL,
 		rateLimit:                cfg.WBAPIRateLimit,
 		fullStatsInterBatchDelay: 20 * time.Second,
 		normQueryInterBatchDelay: 7 * time.Second,

@@ -196,6 +196,12 @@ type ProductCatalogItem struct {
 	EditableSizePrice   *bool      `json:"editable_size_price,omitempty"`
 	HasPrice            bool       `json:"has_price"`
 	SyncedAt            *time.Time `json:"synced_at,omitempty"`
+
+	// Storefront (card.wb.ru, tokenless) — buyer-facing price + СПП, shown when
+	// the seller price isn't synced. All *Rub fields are integer rubles.
+	ShowcasePriceRub *int64 `json:"showcase_price_rub,omitempty"` // buyer price (after СПП)
+	ShowcaseBasicRub *int64 `json:"showcase_basic_rub,omitempty"` // seller price (before СПП)
+	SppPercent       *int   `json:"spp_percent,omitempty"`        // WB loyalty discount %
 }
 
 // CabinetPricesScope reports whether a cabinet's WB token can read/write prices.

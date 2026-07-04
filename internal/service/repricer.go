@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -257,7 +258,85 @@ func (s *RepricerService) ListCatalog(ctx context.Context, workspaceID uuid.UUID
 		}
 		out[i] = item
 	}
+	s.enrichCatalogShowcase(ctx, out)
 	return out, nil
+}
+
+type showcaseEntry struct {
+	sc     wb.Showcase
+	expiry time.Time
+}
+
+// showcaseCache memoizes card.wb.ru lookups. ponytail: process-global map for a
+// single-instance API; a per-request miss fans out at most len/100 HTTP calls.
+var showcaseCache = struct {
+	mu   sync.Mutex
+	data map[int64]showcaseEntry
+}{data: map[int64]showcaseEntry{}}
+
+const showcaseTTL = 15 * time.Minute
+
+// enrichCatalogShowcase fills each item's image URL (always, computed from the
+// nmID) and the buyer price + СПП from the tokenless card.wb.ru storefront, so
+// the catalog shows a price even without the "Цены и скидки" scope.
+func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []domain.ProductCatalogItem) {
+	if len(items) == 0 {
+		return
+	}
+	now := time.Now()
+	var missing []int64
+	cached := make(map[int64]wb.Showcase, len(items))
+
+	showcaseCache.mu.Lock()
+	for _, it := range items {
+		if e, ok := showcaseCache.data[it.WBProductID]; ok && e.expiry.After(now) {
+			cached[it.WBProductID] = e.sc
+		} else {
+			missing = append(missing, it.WBProductID)
+		}
+	}
+	showcaseCache.mu.Unlock()
+
+	if len(missing) > 0 {
+		if fetched, err := s.wbClient.ShowcaseByNmIDs(ctx, missing); err == nil {
+			showcaseCache.mu.Lock()
+			exp := time.Now().Add(showcaseTTL)
+			for nm, sc := range fetched {
+				showcaseCache.data[nm] = showcaseEntry{sc: sc, expiry: exp}
+				cached[nm] = sc
+			}
+			showcaseCache.mu.Unlock()
+		} else {
+			s.logger.Warn().Err(err).Msg("catalog showcase enrichment failed")
+		}
+	}
+
+	for i := range items {
+		nm := items[i].WBProductID
+		if items[i].ImageURL == nil || *items[i].ImageURL == "" {
+			url := wb.WBImageURL(nm)
+			items[i].ImageURL = &url
+		}
+		sc, ok := cached[nm]
+		if !ok {
+			continue
+		}
+		if items[i].Title == "" && sc.Name != "" {
+			items[i].Title = sc.Name
+		}
+		if sc.BuyerRub > 0 {
+			buyer := sc.BuyerRub
+			items[i].ShowcasePriceRub = &buyer
+		}
+		if sc.BasicRub > 0 {
+			basic := sc.BasicRub
+			items[i].ShowcaseBasicRub = &basic
+		}
+		if sc.SppPercent > 0 {
+			spp := sc.SppPercent
+			items[i].SppPercent = &spp
+		}
+	}
 }
 
 // ListCabinetsScope reports each cabinet's prices-scope status for the workspace.
