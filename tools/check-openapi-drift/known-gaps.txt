@@ -46,3 +46,4 @@
 + /api/v1/price-schedules
 + /api/v1/price-schedules/{scheduleId}
 + /api/v1/repricer/run
++ /api/v1/prices/cabinets-status

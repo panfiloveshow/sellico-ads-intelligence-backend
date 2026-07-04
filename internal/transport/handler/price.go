@@ -17,7 +17,8 @@ import (
 )
 
 type priceServicer interface {
-	ListPrices(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.ProductPrice, error)
+	ListCatalog(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.ProductCatalogItem, error)
+	ListCabinetsScope(ctx context.Context, workspaceID uuid.UUID) ([]domain.CabinetPricesScope, error)
 	SyncPrices(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	ApplyManualBulk(ctx context.Context, actorID, workspaceID uuid.UUID, req domain.ManualPriceBulkRequest) (*domain.PriceBulkResult, error)
 	ListChanges(ctx context.Context, workspaceID uuid.UUID, f domain.PriceChangeFilter) ([]domain.PriceChange, error)
@@ -55,12 +56,28 @@ func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
 			cabinetID = &id
 		}
 	}
-	items, err := h.service.ListPrices(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	items, err := h.service.ListCatalog(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items))})
+}
+
+// CabinetsStatus returns each cabinet's prices-scope status so the UI can warn
+// when a token lacks the "Цены и скидки" category.
+func (h *PriceHandler) CabinetsStatus(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	items, err := h.service.ListCabinetsScope(r.Context(), workspaceID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, items)
 }
 
 // TriggerSync enqueues an async WB price refresh (respects rate limits; avoids

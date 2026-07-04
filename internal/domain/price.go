@@ -181,6 +181,31 @@ type ManualPriceBulkRequest struct {
 	Force      bool                   `json:"force,omitempty"`
 }
 
+// ProductCatalogItem is a catalog product joined with its current price (if
+// synced). Price fields are nil when the product has no synced price yet.
+type ProductCatalogItem struct {
+	WBProductID         int64      `json:"wb_product_id"`
+	Title               string     `json:"title"`
+	Brand               *string    `json:"brand,omitempty"`
+	ImageURL            *string    `json:"image_url,omitempty"`
+	StockTotal          *int       `json:"stock_total,omitempty"`
+	PriceRub            *int64     `json:"price_rub,omitempty"`
+	DiscountPercent     *int       `json:"discount_percent,omitempty"`
+	ClubDiscountPercent *int       `json:"club_discount_percent,omitempty"`
+	DiscountedPriceRub  *int64     `json:"discounted_price_rub,omitempty"`
+	EditableSizePrice   *bool      `json:"editable_size_price,omitempty"`
+	HasPrice            bool       `json:"has_price"`
+	SyncedAt            *time.Time `json:"synced_at,omitempty"`
+}
+
+// CabinetPricesScope reports whether a cabinet's WB token can read/write prices.
+type CabinetPricesScope struct {
+	SellerCabinetID   uuid.UUID  `json:"seller_cabinet_id"`
+	Name              string     `json:"name"`
+	PricesScopeStatus string     `json:"prices_scope_status"` // unknown|ok|missing
+	CheckedAt         *time.Time `json:"prices_scope_checked_at,omitempty"`
+}
+
 // PriceChangeFilter narrows a price-change listing.
 type PriceChangeFilter struct {
 	WBProductID *int64

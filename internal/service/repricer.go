@@ -82,16 +82,22 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 	total := 0
 	for _, cabinet := range cabinets {
 		cabinetID := uuidFromPgtype(cabinet.ID)
-		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesList) {
-			s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("prices list cooling down, skipping cabinet")
-			continue
-		}
 		token, decErr := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 		if decErr != nil {
 			s.logger.Warn().Err(decErr).Str("cabinet_id", cabinetID.String()).Msg("failed to decrypt cabinet token")
 			continue
 		}
 
+		// Always refresh the catalog (names/images/brand) from content cards —
+		// the Content scope is separate from Prices&Discounts, so titles/photos
+		// populate even for cabinets whose token can't read prices.
+		s.enrichCabinetProducts(ctx, workspaceID, cabinetID, token)
+
+		// Prices (scope-gated / rate-limited).
+		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesList) {
+			s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("prices list cooling down, skipping prices for cabinet")
+			continue
+		}
 		count, syncErr := s.syncCabinetPrices(ctx, workspaceID, cabinetID, token)
 		if syncErr != nil {
 			if errors.Is(syncErr, wb.ErrPricesScopeMissing) {
@@ -105,10 +111,6 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 		}
 		s.markCabinetScope(ctx, cabinetID, domain.PricesScopeOK)
 		total += count
-		// Enrich product names/images from WB content cards so the priced
-		// products show titles and photos. Best-effort — failures (e.g. no
-		// content scope) don't fail the price sync.
-		s.enrichCabinetProducts(ctx, workspaceID, cabinetID, token)
 	}
 	return total, nil
 }
@@ -196,6 +198,86 @@ func (s *RepricerService) ListPrices(ctx context.Context, workspaceID uuid.UUID,
 	out := make([]domain.ProductPrice, len(rows))
 	for i, row := range rows {
 		out[i] = productPriceFromSqlc(row)
+	}
+	return out, nil
+}
+
+// ListCatalog returns the full product catalog (all products) left-joined with
+// their current prices, optionally narrowed to one cabinet. Products without a
+// synced price appear with nil price fields.
+func (s *RepricerService) ListCatalog(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.ProductCatalogItem, error) {
+	cabinetFilter := pgtype.UUID{}
+	if cabinetID != nil {
+		cabinetFilter = uuidToPgtype(*cabinetID)
+	}
+	rows, err := s.queries.ListCatalogWithPrices(ctx, uuidToPgtype(workspaceID), cabinetFilter, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ProductCatalogItem, len(rows))
+	for i, r := range rows {
+		item := domain.ProductCatalogItem{
+			WBProductID: r.WbProductID,
+			Title:       r.Title,
+			HasPrice:    r.PriceRub.Valid,
+		}
+		if r.Brand.Valid {
+			item.Brand = &r.Brand.String
+		}
+		if r.ImageUrl.Valid {
+			item.ImageURL = &r.ImageUrl.String
+		}
+		if r.StockTotal.Valid {
+			v := int(r.StockTotal.Int32)
+			item.StockTotal = &v
+		}
+		if r.PriceRub.Valid {
+			v := r.PriceRub.Int64
+			item.PriceRub = &v
+		}
+		if r.DiscountPercent.Valid {
+			v := int(r.DiscountPercent.Int32)
+			item.DiscountPercent = &v
+		}
+		if r.ClubDiscountPercent.Valid {
+			v := int(r.ClubDiscountPercent.Int32)
+			item.ClubDiscountPercent = &v
+		}
+		if r.DiscountedPriceRub.Valid {
+			v := r.DiscountedPriceRub.Int64
+			item.DiscountedPriceRub = &v
+		}
+		if r.EditableSizePrice.Valid {
+			v := r.EditableSizePrice.Bool
+			item.EditableSizePrice = &v
+		}
+		if r.SyncedAt.Valid {
+			t := r.SyncedAt.Time
+			item.SyncedAt = &t
+		}
+		out[i] = item
+	}
+	return out, nil
+}
+
+// ListCabinetsScope reports each cabinet's prices-scope status for the workspace.
+func (s *RepricerService) ListCabinetsScope(ctx context.Context, workspaceID uuid.UUID) ([]domain.CabinetPricesScope, error) {
+	rows, err := s.queries.ListCabinetPricesScope(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.CabinetPricesScope, len(rows))
+	for i, r := range rows {
+		item := domain.CabinetPricesScope{
+			SellerCabinetID:   uuidFromPgtype(r.ID),
+			Name:              r.Name,
+			PricesScopeStatus: r.PricesScopeStatus,
+		}
+		if r.PricesScopeCheckedAt.Valid {
+			t := r.PricesScopeCheckedAt.Time
+			item.CheckedAt = &t
+		}
+		out[i] = item
 	}
 	return out, nil
 }

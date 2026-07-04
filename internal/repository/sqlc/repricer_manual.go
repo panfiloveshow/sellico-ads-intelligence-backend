@@ -150,6 +150,91 @@ func (q *Queries) ListProductPricesByCabinet(ctx context.Context, sellerCabinetI
 }
 
 // ---------------------------------------------------------------------------
+// catalog (products LEFT JOIN product_prices)
+// ---------------------------------------------------------------------------
+
+type CatalogRow struct {
+	WbProductID         int64
+	Title               string
+	Brand               pgtype.Text
+	ImageUrl            pgtype.Text
+	StockTotal          pgtype.Int4
+	PriceRub            pgtype.Int8
+	DiscountPercent     pgtype.Int4
+	ClubDiscountPercent pgtype.Int4
+	DiscountedPriceRub  pgtype.Int8
+	EditableSizePrice   pgtype.Bool
+	SyncedAt            pgtype.Timestamptz
+}
+
+const listCatalogWithPrices = `
+SELECT p.wb_product_id, p.title, p.brand, p.image_url, p.stock_total,
+    pp.price_rub, pp.discount_percent, pp.club_discount_percent,
+    pp.discounted_price_rub, pp.editable_size_price, pp.synced_at
+FROM products p
+LEFT JOIN product_prices pp
+    ON pp.workspace_id = p.workspace_id AND pp.wb_product_id = p.wb_product_id
+WHERE p.workspace_id = $1
+  AND ($2::uuid IS NULL OR p.seller_cabinet_id = $2)
+ORDER BY (pp.price_rub IS NULL), p.wb_product_id
+LIMIT $3 OFFSET $4
+`
+
+func (q *Queries) ListCatalogWithPrices(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, limit, offset int32) ([]CatalogRow, error) {
+	rows, err := q.db.Query(ctx, listCatalogWithPrices, workspaceID, sellerCabinetID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CatalogRow
+	for rows.Next() {
+		var i CatalogRow
+		if err := rows.Scan(&i.WbProductID, &i.Title, &i.Brand, &i.ImageUrl, &i.StockTotal,
+			&i.PriceRub, &i.DiscountPercent, &i.ClubDiscountPercent, &i.DiscountedPriceRub,
+			&i.EditableSizePrice, &i.SyncedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// cabinet prices-scope status (for the frontend)
+// ---------------------------------------------------------------------------
+
+type CabinetScopeRow struct {
+	ID                   pgtype.UUID
+	Name                 string
+	PricesScopeStatus    string
+	PricesScopeCheckedAt pgtype.Timestamptz
+}
+
+const listCabinetPricesScope = `
+SELECT id, name, prices_scope_status, prices_scope_checked_at
+FROM seller_cabinets
+WHERE workspace_id = $1 AND deleted_at IS NULL
+ORDER BY name
+`
+
+func (q *Queries) ListCabinetPricesScope(ctx context.Context, workspaceID pgtype.UUID) ([]CabinetScopeRow, error) {
+	rows, err := q.db.Query(ctx, listCabinetPricesScope, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CabinetScopeRow
+	for rows.Next() {
+		var i CabinetScopeRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.PricesScopeStatus, &i.PricesScopeCheckedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
 // price_upload_tasks
 // ---------------------------------------------------------------------------
 
