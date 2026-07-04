@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
@@ -73,9 +74,11 @@ type pricesListResponse struct {
 			NmID       int64  `json:"nmID"`
 			VendorCode string `json:"vendorCode"`
 			Sizes      []struct {
-				SizeID          int64 `json:"sizeID"`
-				Price           int64 `json:"price"`
-				DiscountedPrice int64 `json:"discountedPrice"`
+				SizeID int64 `json:"sizeID"`
+				// WB returns rubles here, and discountedPrice can be fractional
+				// (e.g. 2494.23) — parse as float, round to whole rubles below.
+				Price           float64 `json:"price"`
+				DiscountedPrice float64 `json:"discountedPrice"`
 			} `json:"sizes"`
 			CurrencyIsoCode4217 string `json:"currencyIsoCode4217"`
 			Discount            int    `json:"discount"`
@@ -129,11 +132,12 @@ type priceTaskGoodsResponse struct {
 type quarantineResponse struct {
 	Data struct {
 		QuarantineGoods []struct {
-			NmID            int64 `json:"nmID"`
-			Price           int64 `json:"price"`
-			NewPrice        int64 `json:"newPrice"`
-			DiscountedPrice int64 `json:"discountedPrice"`
-			NewDiscounted   int64 `json:"newDiscountedPrice"`
+			NmID int64 `json:"nmID"`
+			// Rubles; discounted values can be fractional — round on mapping.
+			Price           float64 `json:"price"`
+			NewPrice        float64 `json:"newPrice"`
+			DiscountedPrice float64 `json:"discountedPrice"`
+			NewDiscounted   float64 `json:"newDiscountedPrice"`
 		} `json:"quarantineGoods"`
 	} `json:"data"`
 	Error     bool   `json:"error"`
@@ -186,8 +190,8 @@ func (c *Client) ListGoodsPrices(ctx context.Context, token string, limit, offse
 			Currency:          g.CurrencyIsoCode4217,
 		}
 		if len(g.Sizes) > 0 {
-			gp.Price = g.Sizes[0].Price
-			gp.DiscountedPrice = g.Sizes[0].DiscountedPrice
+			gp.Price = int64(math.Round(g.Sizes[0].Price))
+			gp.DiscountedPrice = int64(math.Round(g.Sizes[0].DiscountedPrice))
 		}
 		goods = append(goods, gp)
 	}
@@ -306,10 +310,10 @@ func (c *Client) ListQuarantineGoods(ctx context.Context, token string, limit, o
 	for _, g := range parsed.Data.QuarantineGoods {
 		goods = append(goods, QuarantineGood{
 			NmID:          g.NmID,
-			OldPrice:      g.Price,
-			NewPrice:      g.NewPrice,
-			DiscountedOld: g.DiscountedPrice,
-			DiscountedNew: g.NewDiscounted,
+			OldPrice:      int64(math.Round(g.Price)),
+			NewPrice:      int64(math.Round(g.NewPrice)),
+			DiscountedOld: int64(math.Round(g.DiscountedPrice)),
+			DiscountedNew: int64(math.Round(g.NewDiscounted)),
 		})
 	}
 	return goods, nil

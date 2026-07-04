@@ -26,7 +26,8 @@ func TestListGoodsPrices_ParsesAndPaginates(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"data":{"listGoods":[
 			{"nmID":111,"vendorCode":"A","currencyIsoCode4217":"RUB","discount":30,"clubDiscount":3,"editableSizePrice":false,"sizes":[{"sizeID":0,"price":1000,"discountedPrice":700}]},
-			{"nmID":222,"vendorCode":"B","discount":0,"editableSizePrice":true,"sizes":[{"sizeID":1,"price":500,"discountedPrice":500}]}
+			{"nmID":222,"vendorCode":"B","discount":0,"editableSizePrice":true,"sizes":[{"sizeID":1,"price":500,"discountedPrice":500}]},
+			{"nmID":333,"vendorCode":"C","discount":45,"editableSizePrice":false,"sizes":[{"sizeID":2,"price":4535,"discountedPrice":2494.23}]}
 		]},"error":false}`))
 	}))
 	defer server.Close()
@@ -34,13 +35,16 @@ func TestListGoodsPrices_ParsesAndPaginates(t *testing.T) {
 	client := newPricesTestClient(server.URL)
 	goods, err := client.ListGoodsPrices(context.Background(), "tok", 500, 1000, nil)
 	require.NoError(t, err)
-	require.Len(t, goods, 2)
+	require.Len(t, goods, 3)
 	assert.Equal(t, int64(111), goods[0].NmID)
 	assert.Equal(t, int64(1000), goods[0].Price)
 	assert.Equal(t, int64(700), goods[0].DiscountedPrice)
 	assert.Equal(t, 30, goods[0].Discount)
 	assert.False(t, goods[0].EditableSizePrice)
 	assert.True(t, goods[1].EditableSizePrice)
+	// WB returns fractional discountedPrice (e.g. 2494.23) — rounded to rubles.
+	assert.Equal(t, int64(2494), goods[2].DiscountedPrice)
+	assert.Equal(t, int64(4535), goods[2].Price)
 }
 
 func TestListGoodsPrices_ScopeMissing(t *testing.T) {
