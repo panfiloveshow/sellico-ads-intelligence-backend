@@ -284,7 +284,7 @@ func TestSharedTenantScope_ExtensionTokenIsWorkspaceScopedViewer(t *testing.T) {
 	userID := uuid.New()
 	workspaceID := uuid.New()
 	handler, called, gotWsID, gotRole := tenantDummyHandler()
-	mw := SharedTenantScope(nil)(handler)
+	mw := SharedTenantScope(nil, nil)(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/extension/widgets/campaign", nil)
 	req.Header.Set("X-Workspace-ID", workspaceID.String())
@@ -312,7 +312,7 @@ func TestSharedTenantScope_ExtensionTokenRejectsDifferentWorkspace(t *testing.T)
 	workspaceID := uuid.New()
 	otherWorkspaceID := uuid.New()
 	handler, called, _, _ := tenantDummyHandler()
-	mw := SharedTenantScope(nil)(handler)
+	mw := SharedTenantScope(nil, nil)(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+otherWorkspaceID.String()+"/extension/widgets/campaign", nil)
 	req.Header.Set("X-Workspace-ID", otherWorkspaceID.String())
@@ -332,6 +332,54 @@ func TestSharedTenantScope_ExtensionTokenRejectsDifferentWorkspace(t *testing.T)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.False(t, *called)
 	assertTenantErrorResponse(t, rec, "FORBIDDEN", "access denied")
+}
+
+func TestSharedTenantScope_LocalAccessTokenUsesLocalMembership(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	handler, called, gotWsID, gotRole := tenantDummyHandler()
+	checker := &mockMembershipChecker{member: &domain.WorkspaceMember{Role: domain.RoleManager}}
+	mw := SharedTenantScope(nil, checker)(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/campaigns", nil)
+	req.Header.Set("X-Workspace-ID", workspaceID.String())
+	ctx := context.WithValue(req.Context(), UserIDKey, userID)
+	ctx = context.WithValue(ctx, TokenClaimsKey, &jwt.TokenClaims{
+		UserID:    userID,
+		TokenType: "access",
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	mw.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, *called)
+	assert.Equal(t, workspaceID, *gotWsID)
+	assert.Equal(t, domain.RoleManager, *gotRole)
+}
+
+func TestSharedTenantScope_LocalAccessTokenNotAMember(t *testing.T) {
+	userID := uuid.New()
+	workspaceID := uuid.New()
+	handler, called, _, _ := tenantDummyHandler()
+	checker := &mockMembershipChecker{member: nil}
+	mw := SharedTenantScope(nil, checker)(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/campaigns", nil)
+	req.Header.Set("X-Workspace-ID", workspaceID.String())
+	ctx := context.WithValue(req.Context(), UserIDKey, userID)
+	ctx = context.WithValue(ctx, TokenClaimsKey, &jwt.TokenClaims{
+		UserID:    userID,
+		TokenType: "access",
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	mw.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.False(t, *called)
 }
 
 func TestTenantScope_ResponseContentType(t *testing.T) {

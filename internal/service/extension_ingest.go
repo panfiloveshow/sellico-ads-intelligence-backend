@@ -371,25 +371,41 @@ func (s *ExtensionService) CreateBidSnapshots(ctx context.Context, userID, works
 		return 0, err
 	}
 
+	accepted := 0
+	skipped := 0
 	for _, input := range inputs {
 		metadata := normalizeJSON(input.Metadata)
 		if input.PhraseID == nil && input.Query == nil && input.CampaignID == nil && metadataInt64(metadata, "wb_campaign_id", "wbCampaignID") <= 0 {
-			return 0, apperror.New(apperror.ErrValidation, "bid snapshot requires phrase, query or campaign context")
+			log.Printf("[WARN] extension bid snapshot skipped: workspace_id=%s reason=%s", workspaceID, "bid snapshot requires phrase, query or campaign context")
+			skipped++
+			continue
 		}
 		capturedAt := extensionCapturedAt(input.CapturedAt)
 		query := normalizeOptionalText(input.Query)
 		region := normalizeOptionalText(input.Region)
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension bid snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension bid snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		confidence, convErr := numericFromFloat64(input.Confidence)
 		if convErr != nil {
-			return 0, apperror.New(apperror.ErrValidation, "invalid bid snapshot confidence")
+			log.Printf("[WARN] extension bid snapshot skipped: workspace_id=%s reason=%s", workspaceID, "invalid bid snapshot confidence")
+			skipped++
+			continue
 		}
 		row, createErr := s.queries.CreateExtensionBidSnapshot(ctx, sqlcgen.CreateExtensionBidSnapshotParams{
 			SessionID:       session.ID,
@@ -422,15 +438,17 @@ func (s *ExtensionService) CreateBidSnapshots(ctx context.Context, userID, works
 			CapturedAt: timePtrToPgtype(&capturedAt),
 		})
 		if createErr != nil {
-			return 0, apperror.New(apperror.ErrInternal, "failed to store extension bid snapshot")
+			return accepted, apperror.New(apperror.ErrInternal, "failed to store extension bid snapshot")
 		}
 		_ = row
+		accepted++
 	}
+	_ = skipped
 
 	if err := s.touchSession(ctx, session.ID); err != nil {
-		return 0, apperror.New(apperror.ErrInternal, "failed to update extension activity")
+		return accepted, apperror.New(apperror.ErrInternal, "failed to update extension activity")
 	}
-	return len(inputs), nil
+	return accepted, nil
 }
 
 func (s *ExtensionService) CreatePositionSnapshots(ctx context.Context, userID, workspaceID uuid.UUID, inputs []CreateExtensionPositionSnapshotInput) (int, error) {
@@ -442,35 +460,60 @@ func (s *ExtensionService) CreatePositionSnapshots(ctx context.Context, userID, 
 		return 0, err
 	}
 
+	accepted := 0
+	skipped := 0
 	for _, input := range inputs {
 		metadata := normalizeJSON(input.Metadata)
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		productID, err := s.resolveProductID(ctx, workspaceID, input.ProductID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		if productID == nil {
-			return 0, apperror.New(apperror.ErrValidation, "position snapshot requires product_id")
+			log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%s", workspaceID, "position snapshot requires product_id")
+			skipped++
+			continue
 		}
 		if strings.TrimSpace(input.Query) == "" || strings.TrimSpace(input.Region) == "" {
-			return 0, apperror.New(apperror.ErrValidation, "position snapshot requires query and region")
+			log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%s", workspaceID, "position snapshot requires query and region")
+			skipped++
+			continue
 		}
 		if input.VisiblePosition <= 0 {
-			return 0, apperror.New(apperror.ErrValidation, "visible_position must be positive")
+			log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%s", workspaceID, "visible_position must be positive")
+			skipped++
+			continue
 		}
 		capturedAt := extensionCapturedAt(input.CapturedAt)
 		query := strings.TrimSpace(input.Query)
 		region := strings.TrimSpace(input.Region)
 		confidence, convErr := numericFromFloat64(input.Confidence)
 		if convErr != nil {
-			return 0, apperror.New(apperror.ErrValidation, "invalid position snapshot confidence")
+			log.Printf("[WARN] extension position snapshot skipped: workspace_id=%s reason=%s", workspaceID, "invalid position snapshot confidence")
+			skipped++
+			continue
 		}
 		row, createErr := s.queries.CreateExtensionPositionSnapshot(ctx, sqlcgen.CreateExtensionPositionSnapshotParams{
 			SessionID:       session.ID,
@@ -502,15 +545,17 @@ func (s *ExtensionService) CreatePositionSnapshots(ctx context.Context, userID, 
 			CapturedAt: timePtrToPgtype(&capturedAt),
 		})
 		if createErr != nil {
-			return 0, apperror.New(apperror.ErrInternal, "failed to store extension position snapshot")
+			return accepted, apperror.New(apperror.ErrInternal, "failed to store extension position snapshot")
 		}
 		_ = row
+		accepted++
 	}
+	_ = skipped
 
 	if err := s.touchSession(ctx, session.ID); err != nil {
-		return 0, apperror.New(apperror.ErrInternal, "failed to update extension activity")
+		return accepted, apperror.New(apperror.ErrInternal, "failed to update extension activity")
 	}
-	return len(inputs), nil
+	return accepted, nil
 }
 
 func (s *ExtensionService) CreateUISignals(ctx context.Context, userID, workspaceID uuid.UUID, inputs []CreateExtensionUISignalInput) (int, error) {
@@ -522,9 +567,13 @@ func (s *ExtensionService) CreateUISignals(ctx context.Context, userID, workspac
 		return 0, err
 	}
 
+	accepted := 0
+	skipped := 0
 	for _, input := range inputs {
 		if strings.TrimSpace(input.SignalType) == "" || strings.TrimSpace(input.Title) == "" {
-			return 0, apperror.New(apperror.ErrValidation, "ui signal requires signal_type and title")
+			log.Printf("[WARN] extension ui signal skipped: workspace_id=%s reason=%s", workspaceID, "ui signal requires signal_type and title")
+			skipped++
+			continue
 		}
 		capturedAt := extensionCapturedAt(input.CapturedAt)
 		query := normalizeOptionalText(input.Query)
@@ -532,19 +581,36 @@ func (s *ExtensionService) CreateUISignals(ctx context.Context, userID, workspac
 		metadata := normalizeJSON(input.Metadata)
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension ui signal skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		productID, err := s.resolveProductID(ctx, workspaceID, input.ProductID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension ui signal skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension ui signal skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		confidence, convErr := numericFromFloat64(input.Confidence)
 		if convErr != nil {
-			return 0, apperror.New(apperror.ErrValidation, "invalid ui signal confidence")
+			log.Printf("[WARN] extension ui signal skipped: workspace_id=%s reason=%s", workspaceID, "invalid ui signal confidence")
+			skipped++
+			continue
 		}
 		row, createErr := s.queries.CreateExtensionUISignal(ctx, sqlcgen.CreateExtensionUISignalParams{
 			SessionID:       session.ID,
@@ -576,15 +642,17 @@ func (s *ExtensionService) CreateUISignals(ctx context.Context, userID, workspac
 			CapturedAt: timePtrToPgtype(&capturedAt),
 		})
 		if createErr != nil {
-			return 0, apperror.New(apperror.ErrInternal, "failed to store extension ui signal")
+			return accepted, apperror.New(apperror.ErrInternal, "failed to store extension ui signal")
 		}
 		_ = row
+		accepted++
 	}
+	_ = skipped
 
 	if err := s.touchSession(ctx, session.ID); err != nil {
-		return 0, apperror.New(apperror.ErrInternal, "failed to update extension activity")
+		return accepted, apperror.New(apperror.ErrInternal, "failed to update extension activity")
 	}
-	return len(inputs), nil
+	return accepted, nil
 }
 
 func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, workspaceID uuid.UUID, inputs []CreateExtensionNetworkCaptureInput) (int, error) {
@@ -596,44 +664,72 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 		return 0, err
 	}
 
+	accepted := 0
+	skipped := 0
 	var derivedBidInputs []CreateExtensionBidSnapshotInput
 	var derivedPositionInputs []CreateExtensionPositionSnapshotInput
 	var derivedSignalInputs []CreateExtensionUISignalInput
 	for _, input := range inputs {
 		pageType := strings.TrimSpace(strings.ToLower(input.PageType))
 		if _, ok := allowedExtensionPageTypes[pageType]; !ok {
-			return 0, apperror.New(apperror.ErrValidation, "unsupported network capture page_type")
+			log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%s", workspaceID, "unsupported network capture page_type")
+			skipped++
+			continue
 		}
 		endpointKey := strings.TrimSpace(strings.ToLower(input.EndpointKey))
 		if _, ok := allowedExtensionEndpointKeys[endpointKey]; !ok {
-			return 0, apperror.New(apperror.ErrValidation, "unsupported network capture endpoint_key")
+			log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%s", workspaceID, "unsupported network capture endpoint_key")
+			skipped++
+			continue
 		}
 		if len(input.Payload) == 0 {
-			return 0, apperror.New(apperror.ErrValidation, "network capture payload is required")
+			log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%s", workspaceID, "network capture payload is required")
+			skipped++
+			continue
 		}
 		rawPayload := normalizeJSON(input.Payload)
 		if err := validateExtensionNetworkCaptureURL(endpointKey, rawPayload); err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		capturedAt := extensionCapturedAt(input.CapturedAt)
 		query := normalizeOptionalText(input.Query)
 		region := normalizeOptionalText(input.Region)
 		payload := sanitizeExtensionPayload(rawPayload)
-		derivedBidInputs = append(derivedBidInputs, deriveBidSnapshotsFromNetworkCapture(input, payload)...)
-		derivedPositionInputs = append(derivedPositionInputs, derivePositionSnapshotsFromNetworkCapture(input, payload)...)
-		derivedSignalInputs = append(derivedSignalInputs, deriveUISignalsFromNetworkCapture(input, payload)...)
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, payload)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		productID, err := s.resolveProductID(ctx, workspaceID, input.ProductID, payload)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension network capture skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
+		derivedBidInputs = append(derivedBidInputs, deriveBidSnapshotsFromNetworkCapture(input, payload)...)
+		derivedPositionInputs = append(derivedPositionInputs, derivePositionSnapshotsFromNetworkCapture(input, payload)...)
+		derivedSignalInputs = append(derivedSignalInputs, deriveUISignalsFromNetworkCapture(input, payload)...)
 		row, createErr := s.queries.CreateExtensionNetworkCapture(ctx, sqlcgen.CreateExtensionNetworkCaptureParams{
 			SessionID:       session.ID,
 			WorkspaceID:     uuidToPgtype(workspaceID),
@@ -662,9 +758,10 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 			CapturedAt: timePtrToPgtype(&capturedAt),
 		})
 		if createErr != nil {
-			return 0, apperror.New(apperror.ErrInternal, "failed to store extension network capture")
+			return accepted, apperror.New(apperror.ErrInternal, "failed to store extension network capture")
 		}
 		_ = row
+		accepted++
 		if budget := deriveCampaignBudgetFromNetworkCapture(input, payload); budget != nil && campaignID != nil {
 			if _, budgetErr := s.queries.UpsertCampaignBudget(ctx, sqlcgen.UpsertCampaignBudgetParams{
 				CampaignID: uuidToPgtype(*campaignID),
@@ -678,8 +775,9 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 		}
 	}
 
+	_ = skipped
 	if err := s.touchSession(ctx, session.ID); err != nil {
-		return 0, apperror.New(apperror.ErrInternal, "failed to update extension activity")
+		return accepted, apperror.New(apperror.ErrInternal, "failed to update extension activity")
 	}
 	if len(derivedBidInputs) > 0 {
 		if _, err := s.CreateBidSnapshots(ctx, userID, workspaceID, derivedBidInputs); err != nil {
@@ -696,7 +794,7 @@ func (s *ExtensionService) CreateNetworkCaptures(ctx context.Context, userID, wo
 			log.Printf("[WARN] extension network ui signal normalization failed: workspace_id=%s items=%d err=%v", workspaceID, len(derivedSignalInputs), err)
 		}
 	}
-	return len(inputs), nil
+	return accepted, nil
 }
 
 func (s *ExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, workspaceID uuid.UUID, inputs []CreateExtensionDOMRowSnapshotInput) (int, error) {
@@ -708,22 +806,30 @@ func (s *ExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, wo
 		return 0, err
 	}
 
+	accepted := 0
+	skipped := 0
 	for _, input := range inputs {
 		pageType := strings.TrimSpace(strings.ToLower(input.PageType))
 		if _, ok := allowedExtensionPageTypes[pageType]; !ok {
-			return 0, apperror.New(apperror.ErrValidation, "unsupported dom row page_type")
+			log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%s", workspaceID, "unsupported dom row page_type")
+			skipped++
+			continue
 		}
 		tableRole := strings.TrimSpace(strings.ToLower(input.TableRole))
 		if tableRole == "" {
 			tableRole = "unknown"
 		}
 		if _, ok := allowedExtensionTableRoles[tableRole]; !ok {
-			return 0, apperror.New(apperror.ErrValidation, "unsupported dom row table_role")
+			log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%s", workspaceID, "unsupported dom row table_role")
+			skipped++
+			continue
 		}
 		rowKey := truncateExtensionText(redactSensitiveString(strings.TrimSpace(input.RowKey)), 300)
 		visibleText := truncateExtensionText(redactSensitiveString(strings.TrimSpace(input.VisibleText)), 1200)
 		if rowKey == "" || visibleText == "" {
-			return 0, apperror.New(apperror.ErrValidation, "dom row snapshot requires row_key and visible_text")
+			log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%s", workspaceID, "dom row snapshot requires row_key and visible_text")
+			skipped++
+			continue
 		}
 
 		capturedAt := extensionCapturedAt(input.CapturedAt)
@@ -733,15 +839,30 @@ func (s *ExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, wo
 		cells := sanitizeExtensionPayload(normalizeJSON(input.Cells))
 		campaignID, err := s.resolveCampaignID(ctx, workspaceID, input.CampaignID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		productID, err := s.resolveProductID(ctx, workspaceID, input.ProductID, metadata)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		sellerCabinetID, err := s.resolveSellerCabinetID(ctx, workspaceID, input.SellerCabinetID)
 		if err != nil {
-			return 0, err
+			if apperror.Is(err, apperror.ErrValidation) {
+				log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%v", workspaceID, err)
+				skipped++
+				continue
+			}
+			return accepted, err
 		}
 		confidenceValue := input.Confidence
 		if confidenceValue <= 0 {
@@ -749,7 +870,9 @@ func (s *ExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, wo
 		}
 		confidence, convErr := numericFromFloat64(confidenceValue)
 		if convErr != nil {
-			return 0, apperror.New(apperror.ErrValidation, "invalid dom row snapshot confidence")
+			log.Printf("[WARN] extension dom row snapshot skipped: workspace_id=%s reason=%s", workspaceID, "invalid dom row snapshot confidence")
+			skipped++
+			continue
 		}
 		row, createErr := s.queries.CreateExtensionDOMRowSnapshot(ctx, sqlcgen.CreateExtensionDOMRowSnapshotParams{
 			SessionID:       session.ID,
@@ -784,15 +907,17 @@ func (s *ExtensionService) CreateDOMRowSnapshots(ctx context.Context, userID, wo
 			CapturedAt: timePtrToPgtype(&capturedAt),
 		})
 		if createErr != nil {
-			return 0, apperror.New(apperror.ErrInternal, "failed to store extension dom row snapshot")
+			return accepted, apperror.New(apperror.ErrInternal, "failed to store extension dom row snapshot")
 		}
 		_ = row
+		accepted++
 	}
+	_ = skipped
 
 	if err := s.touchSession(ctx, session.ID); err != nil {
-		return 0, apperror.New(apperror.ErrInternal, "failed to update extension activity")
+		return accepted, apperror.New(apperror.ErrInternal, "failed to update extension activity")
 	}
-	return len(inputs), nil
+	return accepted, nil
 }
 
 func buildExtensionDedupeKey(kind string, capturedAt time.Time, parts ...string) string {

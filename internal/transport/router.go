@@ -70,7 +70,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 	tenantMiddleware := middleware.TenantScope(deps.MembershipChecker)
 	if deps.WorkspaceResolver != nil {
-		tenantMiddleware = middleware.SharedTenantScope(deps.WorkspaceResolver)
+		tenantMiddleware = middleware.SharedTenantScope(deps.WorkspaceResolver, deps.MembershipChecker)
 	}
 
 	// --- Global middleware ---
@@ -102,11 +102,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 	// --- /api/v1 group ---
 	r.Route("/api/v1", func(v1 chi.Router) {
 		var rateLimitMiddleware func(http.Handler) http.Handler
+		var ipRateLimitMiddleware func(http.Handler) http.Handler
 		if deps.RateLimit.RequestsPerSecond > 0 {
-			rateLimitMiddleware = middleware.RateLimit(middleware.RateLimitConfig{
+			rlCfg := middleware.RateLimitConfig{
 				RequestsPerSecond: deps.RateLimit.RequestsPerSecond,
 				Burst:             deps.RateLimit.Burst,
-			})
+			}
+			rateLimitMiddleware = middleware.RateLimit(rlCfg)
+			// Separate instance (own bucket map) keyed by client IP, applied
+			// before auth so unauthenticated floods are capped before the
+			// upstream Sellico auth call — see DoS-amplification guard below.
+			ipRateLimitMiddleware = middleware.RateLimit(rlCfg)
 		}
 		// --- Public auth routes ---
 		v1.Route("/auth", func(auth chi.Router) {
@@ -130,7 +136,13 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 		// --- Protected routes (require auth) ---
 		v1.Group(func(protected chi.Router) {
+			// IP-keyed limiter runs before auth so a flood of garbage tokens is
+			// throttled before each request fans out an upstream Sellico auth call.
+			if ipRateLimitMiddleware != nil {
+				protected.Use(ipRateLimitMiddleware)
+			}
 			protected.Use(authMiddleware)
+			// Per-user limiter runs after auth (keyed by resolved user ID).
 			if rateLimitMiddleware != nil {
 				protected.Use(rateLimitMiddleware)
 			}

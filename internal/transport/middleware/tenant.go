@@ -103,7 +103,7 @@ func TenantScope(checker MembershipChecker) func(http.Handler) http.Handler {
 }
 
 // SharedTenantScope resolves the shared workspace headers to a local workspace UUID.
-func SharedTenantScope(resolver WorkspaceResolver) func(http.Handler) http.Handler {
+func SharedTenantScope(resolver WorkspaceResolver, checker MembershipChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := extractWorkspaceRef(r)
@@ -124,6 +124,32 @@ func SharedTenantScope(resolver WorkspaceResolver) func(http.Handler) http.Handl
 				}
 				ctx := context.WithValue(r.Context(), WorkspaceIDKey, *claims.WorkspaceID)
 				ctx = context.WithValue(ctx, MemberRoleKey, domain.RoleViewer)
+				ctx = context.WithValue(ctx, WorkspaceRefKey, raw)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			// Locally-issued access token (not a Sellico principal): resolve
+			// membership against the local DB instead of the Sellico resolver,
+			// which would otherwise 401 every local account on workspace routes.
+			if claims, ok := TokenClaimsFromContext(r.Context()); ok && claims.TokenType == "access" && checker != nil {
+				workspaceID, err := uuid.Parse(raw)
+				if err != nil {
+					writeBadRequest(w, "invalid workspace id")
+					return
+				}
+				userID, ok := UserIDFromContext(r.Context())
+				if !ok {
+					writeUnauthorized(w, "authentication required")
+					return
+				}
+				member, err := checker.GetWorkspaceMember(r.Context(), workspaceID, userID)
+				if err != nil || member == nil {
+					writeForbidden(w, "access denied")
+					return
+				}
+				ctx := context.WithValue(r.Context(), WorkspaceIDKey, workspaceID)
+				ctx = context.WithValue(ctx, MemberRoleKey, member.Role)
 				ctx = context.WithValue(ctx, WorkspaceRefKey, raw)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
