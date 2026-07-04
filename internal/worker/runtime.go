@@ -67,6 +67,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepPollPriceTasks, processor.HandleSweepPollPriceTasks)
 	mux.HandleFunc(TaskExecutePriceSchedule, processor.HandleExecutePriceSchedules)
 	mux.HandleFunc(TaskSyncPrices, processor.HandleSyncPrices)
+	mux.HandleFunc(TaskSweepSyncPrices, processor.HandleSweepSyncPrices)
 	mux.HandleFunc(TaskCollectKeywords, processor.HandleCollectKeywords)
 	mux.HandleFunc(TaskSweepCollectKeywords, processor.HandleSweepCollectKeywords)
 	mux.HandleFunc(TaskExtractCompetitors, processor.HandleExtractCompetitors)
@@ -125,6 +126,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		// Individual sweeps REMOVED — they caused 5x redundant sync (audit CRITICAL #3)
 		{recInterval, TaskSweepRecommendations, QueueRecommendations},
 		{bidInterval, TaskSweepBidAutomation, QueueBidAutomation},
+		{cfg.RepricerInterval, TaskSweepSyncPrices, QueueRepricer},
 		{cfg.RepricerInterval, TaskSweepRepricer, QueueRepricer},
 		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricer},
 		{cfg.RepricerScheduleInterval, TaskExecutePriceSchedule, QueueRepricer},

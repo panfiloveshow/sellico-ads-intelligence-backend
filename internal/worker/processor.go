@@ -434,6 +434,12 @@ func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task
 	return p.runSweep(ctx, TaskSweepPollPriceTasks, TaskPollPriceTasks, QueueRepricer)
 }
 
+// HandleSweepSyncPrices refreshes the WB catalog (names/images) and prices for
+// all workspaces, so the repricer view stays populated without a manual click.
+func (p *Processor) HandleSweepSyncPrices(ctx context.Context, _ *asynq.Task) error {
+	return p.runSweep(ctx, TaskSweepSyncPrices, TaskSyncPrices, QueueRepricer)
+}
+
 // HandleSyncPrices refreshes WB prices for a workspace (async, user-triggered).
 func (p *Processor) HandleSyncPrices(ctx context.Context, task *asynq.Task) error {
 	_, workspaceID, err := parseWorkspacePayload(task.Payload())
