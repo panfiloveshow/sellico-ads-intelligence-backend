@@ -255,6 +255,7 @@ func (s *RepricerService) SyncQuarantine(ctx context.Context, workspaceID uuid.U
 			continue
 		}
 		present := make([]int64, 0, len(goods))
+		var newNms []int64
 		for _, g := range goods {
 			present = append(present, g.NmID)
 			row, upErr := s.queries.UpsertQuarantineGood(ctx, sqlcgen.UpsertQuarantineGoodParams{
@@ -272,6 +273,7 @@ func (s *RepricerService) SyncQuarantine(ctx context.Context, workspaceID uuid.U
 				continue
 			}
 			newlyDetected++
+			newNms = append(newNms, g.NmID)
 			s.logger.Warn().
 				Str("workspace_id", workspaceID.String()).
 				Int64("wb_product_id", g.NmID).
@@ -279,6 +281,13 @@ func (s *RepricerService) SyncQuarantine(ctx context.Context, workspaceID uuid.U
 			if err := s.queries.MarkQuarantineNotified(ctx, row.ID); err != nil {
 				s.logger.Warn().Err(err).Msg("failed to mark quarantine notified")
 			}
+		}
+		if len(newNms) > 0 && s.notifications != nil {
+			sample := newNms
+			if len(sample) > 10 {
+				sample = sample[:10]
+			}
+			s.notifications.NotifyPriceQuarantine(ctx, workspaceID, len(newNms), sample)
 		}
 		if err := s.queries.ResolveQuarantineGoodsExcept(ctx, uuidToPgtype(cabinetID), present); err != nil {
 			s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("failed to resolve cleared quarantine goods")

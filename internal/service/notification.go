@@ -133,6 +133,49 @@ func (s *NotificationService) NotifySyncComplete(ctx context.Context, workspaceI
 	}
 }
 
+// NotifyPriceQuarantine alerts when products enter WB price quarantine (release
+// is cabinet-UI-only). sampleNms are a few affected nmIDs for the message.
+func (s *NotificationService) NotifyPriceQuarantine(ctx context.Context, workspaceID uuid.UUID, count int, sampleNms []int64) {
+	if count <= 0 {
+		return
+	}
+	settings := s.loadSettings(ctx, workspaceID)
+	if settings == nil {
+		return
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[WARN] Товары в карантине цен WB: %d\n\nПродаются по старой цене. Снять карантин можно только вручную в кабинете WB.", count)
+	if len(sampleNms) > 0 {
+		sb.WriteString("\n\nАртикулы: ")
+		for i, nm := range sampleNms {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, "%d", nm)
+		}
+	}
+	s.sendTelegramText(ctx, workspaceID, settings, sb.String(), "price quarantine")
+	s.sendEmailReport(ctx, workspaceID, settings, settings.Notifications != nil && settings.Notifications.Email != nil, "WB: товары в карантине цен", sb.String(), "price quarantine")
+}
+
+// NotifyPriceUploadResult alerts when a price upload batch fails or partially fails.
+func (s *NotificationService) NotifyPriceUploadResult(ctx context.Context, workspaceID uuid.UUID, itemsCount int, outcome string) {
+	if outcome != "failed" && outcome != "partial" {
+		return
+	}
+	settings := s.loadSettings(ctx, workspaceID)
+	if settings == nil {
+		return
+	}
+	label := "частично применена"
+	if outcome == "failed" {
+		label = "не применена"
+	}
+	text := fmt.Sprintf("[WARN] Загрузка цен в WB %s (позиций: %d). Проверьте раздел «Управление ценами → Задачи загрузки».", label, itemsCount)
+	s.sendTelegramText(ctx, workspaceID, settings, text, "price upload result")
+	s.sendEmailReport(ctx, workspaceID, settings, settings.Notifications != nil && settings.Notifications.Email != nil, "WB: результат загрузки цен", text, "price upload result")
+}
+
 // NotifyWeeklyDigest sends a period summary for owner/client reporting.
 func (s *NotificationService) NotifyWeeklyDigest(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, recommendations []domain.Recommendation, overviews ...*domain.AdsOverview) {
 	if len(recommendations) == 0 {

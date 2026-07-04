@@ -282,13 +282,15 @@ func (s *RepricerService) bumpPoll(ctx context.Context, task sqlcgen.PriceUpload
 }
 
 func (s *RepricerService) notifyPriceResult(ctx context.Context, workspaceID uuid.UUID, task sqlcgen.PriceUploadTask, outcome string) {
-	// ponytail: Phase 7 wires NotificationService (Telegram/email); for now log.
 	s.logger.Info().
 		Str("workspace_id", workspaceID.String()).
 		Int64("wb_task_id", task.WbTaskID).
 		Int("items", int(task.ItemsCount)).
 		Str("outcome", outcome).
 		Msg("price upload finished")
+	if s.notifications != nil {
+		s.notifications.NotifyPriceUploadResult(ctx, workspaceID, int(task.ItemsCount), outcome)
+	}
 }
 
 // Rollback reverts an applied price change by uploading the original price/discount.
