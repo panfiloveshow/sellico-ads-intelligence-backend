@@ -476,10 +476,12 @@ func NewRouter(deps RouterDeps) chi.Router {
 						prices.Get("/", deps.PriceHandler.List)
 						prices.With(middleware.RequireWriteAccess()).Post("/sync", deps.PriceHandler.TriggerSync)
 						prices.With(middleware.RequireWriteAccess()).Post("/bulk", deps.PriceHandler.Bulk)
+						prices.Get("/quarantine", deps.PriceHandler.ListQuarantine)
 					} else {
 						prices.Get("/", notImplemented)
 						prices.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
 						prices.With(middleware.RequireWriteAccess()).Post("/bulk", notImplemented)
+						prices.Get("/quarantine", notImplemented)
 					}
 				})
 				scoped.Route("/price-changes", func(pc chi.Router) {

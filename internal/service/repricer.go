@@ -227,6 +227,97 @@ func priceUploadTaskFromSqlc(row sqlcgen.PriceUploadTask) domain.PriceUploadTask
 	return t
 }
 
+// SyncQuarantine refreshes the price-quarantine list per cabinet: new detections
+// are persisted (and logged), and products no longer quarantined are resolved.
+// Returns the number of newly detected quarantined products.
+func (s *RepricerService) SyncQuarantine(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+	cabinets, err := s.queries.ListActiveSellerCabinetsByWorkspace(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return 0, err
+	}
+	newlyDetected := 0
+	for _, cabinet := range cabinets {
+		cabinetID := uuidFromPgtype(cabinet.ID)
+		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesQuarantine) {
+			continue
+		}
+		token, decErr := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
+		if decErr != nil {
+			continue
+		}
+		goods, listErr := s.wbClient.ListQuarantineGoods(ctx, token, priceListPageSize, 0)
+		if listErr != nil {
+			if errors.Is(listErr, wb.ErrPricesScopeMissing) {
+				s.markCabinetScope(ctx, cabinetID, domain.PricesScopeMissing)
+				continue
+			}
+			s.recordPricesRateLimit(ctx, cabinetID, wbEndpointPricesQuarantine, listErr)
+			continue
+		}
+		present := make([]int64, 0, len(goods))
+		for _, g := range goods {
+			present = append(present, g.NmID)
+			row, upErr := s.queries.UpsertQuarantineGood(ctx, sqlcgen.UpsertQuarantineGoodParams{
+				WorkspaceID:     uuidToPgtype(workspaceID),
+				SellerCabinetID: uuidToPgtype(cabinetID),
+				WbProductID:     g.NmID,
+				OldPriceRub:     pgtype.Int8{Int64: g.OldPrice, Valid: g.OldPrice > 0},
+				NewPriceRub:     pgtype.Int8{Int64: g.NewPrice, Valid: g.NewPrice > 0},
+			})
+			if errors.Is(upErr, pgx.ErrNoRows) {
+				continue // already active in quarantine
+			}
+			if upErr != nil {
+				s.logger.Warn().Err(upErr).Int64("wb_product_id", g.NmID).Msg("failed to upsert quarantine good")
+				continue
+			}
+			newlyDetected++
+			s.logger.Warn().
+				Str("workspace_id", workspaceID.String()).
+				Int64("wb_product_id", g.NmID).
+				Msg("product entered WB price quarantine (release is cabinet-UI-only)")
+			if err := s.queries.MarkQuarantineNotified(ctx, row.ID); err != nil {
+				s.logger.Warn().Err(err).Msg("failed to mark quarantine notified")
+			}
+		}
+		if err := s.queries.ResolveQuarantineGoodsExcept(ctx, uuidToPgtype(cabinetID), present); err != nil {
+			s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("failed to resolve cleared quarantine goods")
+		}
+	}
+	return newlyDetected, nil
+}
+
+// ListQuarantine returns active quarantine goods for a workspace.
+func (s *RepricerService) ListQuarantine(ctx context.Context, workspaceID uuid.UUID) ([]domain.PriceQuarantineGood, error) {
+	rows, err := s.queries.ListActiveQuarantineGoods(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.PriceQuarantineGood, len(rows))
+	for i, row := range rows {
+		g := domain.PriceQuarantineGood{
+			ID:              uuidFromPgtype(row.ID),
+			WorkspaceID:     uuidFromPgtype(row.WorkspaceID),
+			SellerCabinetID: uuidFromPgtype(row.SellerCabinetID),
+			WBProductID:     row.WbProductID,
+			Notified:        row.Notified,
+		}
+		if row.OldPriceRub.Valid {
+			v := row.OldPriceRub.Int64
+			g.OldPriceRub = &v
+		}
+		if row.NewPriceRub.Valid {
+			v := row.NewPriceRub.Int64
+			g.NewPriceRub = &v
+		}
+		if row.DetectedAt.Valid {
+			g.DetectedAt = row.DetectedAt.Time
+		}
+		out[i] = g
+	}
+	return out, nil
+}
+
 func (s *RepricerService) markCabinetScope(ctx context.Context, cabinetID uuid.UUID, status string) {
 	if err := s.queries.SetCabinetPricesScopeStatus(ctx, uuidToPgtype(cabinetID), status); err != nil {
 		s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("failed to set cabinet prices scope status")

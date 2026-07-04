@@ -88,6 +88,7 @@ type repricerRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	PollUploadTasks(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	ExecuteDueSchedules(ctx context.Context, now time.Time) (int, error)
+	SyncQuarantine(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
 type semanticsCollector interface {
@@ -414,6 +415,10 @@ func (p *Processor) HandleRepricer(ctx context.Context, task *asynq.Task) error 
 	if p.repricer == nil {
 		p.logger.Debug().Msg("repricer not configured, skipping")
 		return nil
+	}
+	// Refresh price quarantine before deciding (also runs when no strategies exist).
+	if _, qErr := p.repricer.SyncQuarantine(ctx, workspaceID); qErr != nil {
+		p.logger.Warn().Err(qErr).Str("workspace_id", workspaceID.String()).Msg("quarantine sync failed")
 	}
 	changes, err := p.repricer.RunForWorkspace(ctx, workspaceID)
 	if err != nil {

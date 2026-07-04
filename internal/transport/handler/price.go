@@ -26,6 +26,7 @@ type priceServicer interface {
 	CreateSchedule(ctx context.Context, actorID, workspaceID uuid.UUID, in domain.PriceScheduleInput) (*domain.PriceScheduleEntry, error)
 	ListSchedules(ctx context.Context, workspaceID uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error)
 	CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error
+	ListQuarantine(ctx context.Context, workspaceID uuid.UUID) ([]domain.PriceQuarantineGood, error)
 }
 
 // repricerEnqueuer enqueues an async repricer run for a workspace.
@@ -209,6 +210,21 @@ func (h *PriceHandler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, map[string]string{"status": "canceled"})
+}
+
+// ListQuarantine returns products currently held in WB price quarantine.
+func (h *PriceHandler) ListQuarantine(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	items, err := h.service.ListQuarantine(r.Context(), workspaceID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, items)
 }
 
 // Run enqueues an async repricer automation run for the workspace.
