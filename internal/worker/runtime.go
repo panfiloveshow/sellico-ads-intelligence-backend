@@ -106,6 +106,10 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		Concurrency:     1,
 		ShutdownTimeout: 30 * time.Second,
 		Queues:          queueWeights,
+		// Strict priority so the highest-weight non-empty queue is always drained
+		// first — otherwise the default weighted-random pick lets a large WB-sync
+		// backlog starve the interactive repricer queue (weight 6).
+		StrictPriority: true,
 	})
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
