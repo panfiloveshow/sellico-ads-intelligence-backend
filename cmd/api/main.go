@@ -134,6 +134,10 @@ func main() {
 	deliveryService := service.NewDeliveryService(deps.Queries, wbClient, deps.Logger)
 	productEventService := service.NewProductEventService(deps.Queries, deps.Logger)
 	productEconomicsService := service.NewProductEconomicsService(deps.Queries)
+	repricerService := service.NewRepricerService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
+		service.WithRepricerStrategyService(strategyService),
+		service.WithRepricerEngine(service.NewPriceEngine(deps.Logger)),
+	)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)
@@ -236,6 +240,7 @@ func main() {
 		SEOHandler:               handler.NewSEOHandler(seoAnalyzerService),
 		ProductEventHandler:      handler.NewProductEventHandler(productEventService),
 		ProductEconomicsHandler:  handler.NewProductEconomicsHandler(productEconomicsService),
+		PriceHandler:             handler.NewPriceHandler(repricerService),
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)

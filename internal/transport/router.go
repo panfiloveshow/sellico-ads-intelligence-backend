@@ -51,6 +51,7 @@ type RouterDeps struct {
 	SEOHandler               *handler.SEOHandler
 	ProductEventHandler      *handler.ProductEventHandler
 	ProductEconomicsHandler  *handler.ProductEconomicsHandler
+	PriceHandler             *handler.PriceHandler
 }
 
 // notImplemented is a placeholder handler returning 501 Not Implemented.
@@ -466,6 +467,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 					} else {
 						economics.Get("/", notImplemented)
 						economics.With(middleware.RequireWriteAccess()).Post("/import", notImplemented)
+					}
+				})
+
+				// Repricer — WB product prices
+				scoped.Route("/prices", func(prices chi.Router) {
+					if deps.PriceHandler != nil {
+						prices.Get("/", deps.PriceHandler.List)
+						prices.With(middleware.RequireWriteAccess()).Post("/sync", deps.PriceHandler.TriggerSync)
+					} else {
+						prices.Get("/", notImplemented)
+						prices.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
 					}
 				})
 
