@@ -43,6 +43,7 @@ const (
 	TaskPollPriceTasks       = "price:poll_tasks"
 	TaskSweepPollPriceTasks  = "price:sweep_poll_tasks"
 	TaskExecutePriceSchedule = "price:execute_schedules"
+	TaskSyncPrices           = "price:sync"
 
 	QueueBidAutomation = "bid-automation"
 	QueueSemantics     = "semantics"

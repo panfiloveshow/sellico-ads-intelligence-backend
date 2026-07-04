@@ -17,7 +17,7 @@ import (
 )
 
 type priceServicer interface {
-	ListPrices(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.ProductPrice, error)
+	ListPrices(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.ProductPrice, error)
 	SyncPrices(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	ApplyManualBulk(ctx context.Context, actorID, workspaceID uuid.UUID, req domain.ManualPriceBulkRequest) (*domain.PriceBulkResult, error)
 	ListChanges(ctx context.Context, workspaceID uuid.UUID, f domain.PriceChangeFilter) ([]domain.PriceChange, error)
@@ -33,12 +33,13 @@ type priceServicer interface {
 type repricerEnqueuer func(workspaceID uuid.UUID) error
 
 type PriceHandler struct {
-	service    priceServicer
-	enqueueRun repricerEnqueuer
+	service     priceServicer
+	enqueueRun  repricerEnqueuer
+	enqueueSync repricerEnqueuer
 }
 
-func NewPriceHandler(service priceServicer, enqueueRun repricerEnqueuer) *PriceHandler {
-	return &PriceHandler{service: service, enqueueRun: enqueueRun}
+func NewPriceHandler(service priceServicer, enqueueRun, enqueueSync repricerEnqueuer) *PriceHandler {
+	return &PriceHandler{service: service, enqueueRun: enqueueRun, enqueueSync: enqueueSync}
 }
 
 func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +49,13 @@ func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	items, err := h.service.ListPrices(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	var cabinetID *uuid.UUID
+	if raw := r.URL.Query().Get("seller_cabinet_id"); raw != "" {
+		if id, err := uuid.Parse(raw); err == nil {
+			cabinetID = &id
+		}
+	}
+	items, err := h.service.ListPrices(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -56,19 +63,28 @@ func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items))})
 }
 
-// TriggerSync refreshes current WB prices for the workspace (inline for v1).
+// TriggerSync enqueues an async WB price refresh (respects rate limits; avoids
+// the request timeout that inline syncing hit for large cabinets).
 func (h *PriceHandler) TriggerSync(w http.ResponseWriter, r *http.Request) {
 	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
 	if !ok {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
 		return
 	}
-	count, err := h.service.SyncPrices(r.Context(), workspaceID)
-	if err != nil {
+	if h.enqueueSync == nil {
+		count, err := h.service.SyncPrices(r.Context(), workspaceID)
+		if err != nil {
+			writeAppError(w, err)
+			return
+		}
+		dto.WriteJSON(w, http.StatusOK, map[string]int{"synced": count})
+		return
+	}
+	if err := h.enqueueSync(workspaceID); err != nil {
 		writeAppError(w, err)
 		return
 	}
-	dto.WriteJSON(w, http.StatusOK, map[string]int{"synced": count})
+	dto.WriteJSON(w, http.StatusAccepted, map[string]string{"status": "enqueued"})
 }
 
 // Bulk applies a manual bulk price change (explicit items or scope+adjustment).

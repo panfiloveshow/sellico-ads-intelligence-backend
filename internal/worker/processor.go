@@ -89,6 +89,7 @@ type repricerRunner interface {
 	PollUploadTasks(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	ExecuteDueSchedules(ctx context.Context, now time.Time) (int, error)
 	SyncQuarantine(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	SyncPrices(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
 type semanticsCollector interface {
@@ -431,6 +432,24 @@ func (p *Processor) HandleRepricer(ctx context.Context, task *asynq.Task) error 
 
 func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task) error {
 	return p.runSweep(ctx, TaskSweepPollPriceTasks, TaskPollPriceTasks, QueueRepricer)
+}
+
+// HandleSyncPrices refreshes WB prices for a workspace (async, user-triggered).
+func (p *Processor) HandleSyncPrices(ctx context.Context, task *asynq.Task) error {
+	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	if err != nil {
+		return err
+	}
+	if p.repricer == nil {
+		return nil
+	}
+	synced, err := p.repricer.SyncPrices(ctx, workspaceID)
+	if err != nil {
+		p.logger.Error().Err(err).Str("workspace_id", workspaceID.String()).Msg("price sync failed")
+		return err
+	}
+	p.logger.Info().Str("workspace_id", workspaceID.String()).Int("synced", synced).Msg("price sync completed")
+	return nil
 }
 
 // HandleExecutePriceSchedules runs all due schedule entries (global, not per-workspace).

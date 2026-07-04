@@ -240,14 +240,23 @@ func main() {
 		SEOHandler:               handler.NewSEOHandler(seoAnalyzerService),
 		ProductEventHandler:      handler.NewProductEventHandler(productEventService),
 		ProductEconomicsHandler:  handler.NewProductEconomicsHandler(productEconomicsService),
-		PriceHandler: handler.NewPriceHandler(repricerService, func(workspaceID uuid.UUID) error {
-			task, taskErr := worker.NewWorkspaceTask(worker.TaskRepricer, workspaceID)
-			if taskErr != nil {
+		PriceHandler: handler.NewPriceHandler(repricerService,
+			func(workspaceID uuid.UUID) error {
+				task, taskErr := worker.NewWorkspaceTask(worker.TaskRepricer, workspaceID)
+				if taskErr != nil {
+					return taskErr
+				}
+				_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueRepricer), asynq.MaxRetry(5), asynq.Timeout(30*time.Minute), asynq.Unique(5*time.Minute))
 				return taskErr
-			}
-			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueRepricer), asynq.MaxRetry(5), asynq.Timeout(30*time.Minute), asynq.Unique(5*time.Minute))
-			return taskErr
-		}),
+			},
+			func(workspaceID uuid.UUID) error {
+				task, taskErr := worker.NewWorkspaceTask(worker.TaskSyncPrices, workspaceID)
+				if taskErr != nil {
+					return taskErr
+				}
+				_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueRepricer), asynq.MaxRetry(3), asynq.Timeout(15*time.Minute), asynq.Unique(2*time.Minute))
+				return taskErr
+			}),
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
