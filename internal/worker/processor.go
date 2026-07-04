@@ -84,6 +84,11 @@ type bidAutomationRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
+type repricerRunner interface {
+	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	PollUploadTasks(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
 type semanticsCollector interface {
 	CollectFromPhrases(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
@@ -119,6 +124,7 @@ type Processor struct {
 	recommendations      reportRecommendationLister
 	integrationRefresher integrationRefresher
 	bidRunner            bidAutomationRunner
+	repricer             repricerRunner
 	semantics            semanticsCollector
 	competitors          competitorExtractor
 	delivery             deliveryCollector
@@ -162,6 +168,11 @@ func (p *Processor) WithIntegrationRefresher(r integrationRefresher) *Processor 
 // WithBidRunner sets the bid automation runner.
 func (p *Processor) WithBidRunner(r bidAutomationRunner) *Processor {
 	p.bidRunner = r
+	return p
+}
+
+func (p *Processor) WithRepricer(r repricerRunner) *Processor {
+	p.repricer = r
 	return p
 }
 
@@ -388,6 +399,49 @@ func (p *Processor) HandleSweepExtractCompetitors(ctx context.Context, _ *asynq.
 // HandleSweepBidAutomation runs bid automation for all workspaces with active strategies.
 func (p *Processor) HandleSweepBidAutomation(ctx context.Context, _ *asynq.Task) error {
 	return p.runSweep(ctx, TaskSweepBidAutomation, TaskBidAutomation, QueueBidAutomation)
+}
+
+func (p *Processor) HandleSweepRepricer(ctx context.Context, _ *asynq.Task) error {
+	return p.runSweep(ctx, TaskSweepRepricer, TaskRepricer, QueueRepricer)
+}
+
+func (p *Processor) HandleRepricer(ctx context.Context, task *asynq.Task) error {
+	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	if err != nil {
+		return err
+	}
+	if p.repricer == nil {
+		p.logger.Debug().Msg("repricer not configured, skipping")
+		return nil
+	}
+	changes, err := p.repricer.RunForWorkspace(ctx, workspaceID)
+	if err != nil {
+		p.logger.Error().Err(err).Str("workspace_id", workspaceID.String()).Msg("repricer run failed")
+		return err
+	}
+	p.logger.Info().Str("workspace_id", workspaceID.String()).Int("changes", changes).Msg("repricer run completed")
+	return nil
+}
+
+func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task) error {
+	return p.runSweep(ctx, TaskSweepPollPriceTasks, TaskPollPriceTasks, QueueRepricer)
+}
+
+func (p *Processor) HandlePollPriceTasks(ctx context.Context, task *asynq.Task) error {
+	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	if err != nil {
+		return err
+	}
+	if p.repricer == nil {
+		return nil
+	}
+	terminal, err := p.repricer.PollUploadTasks(ctx, workspaceID)
+	if err != nil {
+		p.logger.Error().Err(err).Str("workspace_id", workspaceID.String()).Msg("price task poll failed")
+		return err
+	}
+	p.logger.Debug().Str("workspace_id", workspaceID.String()).Int("terminal", terminal).Msg("price task poll completed")
+	return nil
 }
 
 // HandleSweepRefreshIntegrations auto-discovers new WB integrations from Sellico.

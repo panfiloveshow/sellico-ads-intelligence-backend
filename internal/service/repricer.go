@@ -157,6 +157,76 @@ func (s *RepricerService) ListPrices(ctx context.Context, workspaceID uuid.UUID,
 	return out, nil
 }
 
+// ListChanges returns price changes for a workspace matching the filter.
+func (s *RepricerService) ListChanges(ctx context.Context, workspaceID uuid.UUID, f domain.PriceChangeFilter) ([]domain.PriceChange, error) {
+	arg := sqlcgen.ListPriceChangesParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		Limit:       f.Limit,
+		Offset:      f.Offset,
+	}
+	if f.WBProductID != nil {
+		arg.WbProductID = pgtype.Int8{Int64: *f.WBProductID, Valid: true}
+	}
+	if f.Source != "" {
+		arg.Source = pgtype.Text{String: f.Source, Valid: true}
+	}
+	if f.Status != "" {
+		arg.WbStatus = pgtype.Text{String: f.Status, Valid: true}
+	}
+	rows, err := s.queries.ListPriceChanges(ctx, arg)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.PriceChange, len(rows))
+	for i, row := range rows {
+		out[i] = priceChangeFromSqlc(row)
+	}
+	return out, nil
+}
+
+// ListUploadTasks returns recent upload tasks for a workspace.
+func (s *RepricerService) ListUploadTasks(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.PriceUploadTask, error) {
+	rows, err := s.queries.ListPriceUploadTasksByWorkspace(ctx, uuidToPgtype(workspaceID), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.PriceUploadTask, len(rows))
+	for i, row := range rows {
+		out[i] = priceUploadTaskFromSqlc(row)
+	}
+	return out, nil
+}
+
+func priceUploadTaskFromSqlc(row sqlcgen.PriceUploadTask) domain.PriceUploadTask {
+	t := domain.PriceUploadTask{
+		ID:              uuidFromPgtype(row.ID),
+		WorkspaceID:     uuidFromPgtype(row.WorkspaceID),
+		SellerCabinetID: uuidFromPgtype(row.SellerCabinetID),
+		WBTaskID:        row.WbTaskID,
+		Status:          row.Status,
+		ItemsCount:      int(row.ItemsCount),
+		PollCount:       int(row.PollCount),
+	}
+	if row.LastPolledAt.Valid {
+		v := row.LastPolledAt.Time
+		t.LastPolledAt = &v
+	}
+	if row.CompletedAt.Valid {
+		v := row.CompletedAt.Time
+		t.CompletedAt = &v
+	}
+	if row.Error.Valid {
+		t.Error = &row.Error.String
+	}
+	if row.CreatedAt.Valid {
+		t.CreatedAt = row.CreatedAt.Time
+	}
+	if row.UpdatedAt.Valid {
+		t.UpdatedAt = row.UpdatedAt.Time
+	}
+	return t
+}
+
 func (s *RepricerService) markCabinetScope(ctx context.Context, cabinetID uuid.UUID, status string) {
 	if err := s.queries.SetCabinetPricesScopeStatus(ctx, uuidToPgtype(cabinetID), status); err != nil {
 		s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("failed to set cabinet prices scope status")

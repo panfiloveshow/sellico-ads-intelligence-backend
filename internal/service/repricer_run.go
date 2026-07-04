@@ -66,11 +66,18 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 	}
 
 	written := 0
+	var autoIntents []priceChangeIntent
 	for _, st := range priceStrategies {
 		params := st.Params.MergedPriceParams()
+		auto := params.PriceApplyMode == domain.PriceApplyModeAuto
 		for _, nm := range s.targetNmIDs(st, data) {
 			decision, ctxInfo, ok := s.evaluateProduct(ctx, workspaceID, st, params, nm, data)
 			if !ok {
+				continue
+			}
+			if auto {
+				autoIntents = append(autoIntents, s.intentFromDecision(st, nm, decision, ctxInfo, data))
+				written++
 				continue
 			}
 			if err := s.recordRecommendation(ctx, workspaceID, st, nm, decision, ctxInfo, data); err != nil {
@@ -80,7 +87,31 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 			written++
 		}
 	}
+	if len(autoIntents) > 0 {
+		if _, err := s.applyIntents(ctx, workspaceID, autoIntents); err != nil {
+			return written, err
+		}
+	}
 	return written, nil
+}
+
+// intentFromDecision builds an apply intent for an auto-mode strategy decision.
+func (s *RepricerService) intentFromDecision(st domain.Strategy, nm int64, decision PriceDecision, dctx *domain.PriceChangeDecisionContext, data *repricerData) priceChangeIntent {
+	price := data.pricesByNm[nm]
+	strategyID := st.ID
+	return priceChangeIntent{
+		CabinetID:       st.SellerCabinetID,
+		NmID:            nm,
+		OldPriceRub:     price.PriceRub,
+		NewPriceRub:     decision.NewPriceRub,
+		OldDiscount:     price.DiscountPercent,
+		NewDiscount:     decision.NewDiscountPercent,
+		MinPriceRub:     decision.MinPriceRub,
+		Reason:          decision.Reason,
+		Source:          domain.PriceSourceStrategy,
+		StrategyID:      &strategyID,
+		DecisionContext: dctx,
+	}
 }
 
 // targetNmIDs resolves the nmIDs a strategy applies to: its product bindings, or

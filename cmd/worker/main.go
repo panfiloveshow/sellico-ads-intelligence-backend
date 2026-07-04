@@ -86,8 +86,13 @@ func main() {
 		deps.Logger.Info().Msg("sellico unit-economics readiness NOT configured; bid automation will not increase bids")
 	}
 	bidAutomationService := service.NewBidAutomationService(deps.Queries, strategyService, bidEngine, wbClient, []byte(cfg.EncryptionKey), deps.Logger, bidAutomationOpts...)
+	repricerService := service.NewRepricerService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
+		service.WithRepricerStrategyService(strategyService),
+		service.WithRepricerEngine(service.NewPriceEngine(deps.Logger)),
+		service.WithRepricerNotifications(notificationService),
+	)
 	exportGenerator := service.NewExportGenerator(deps.Queries, cfg.ExportStoragePath)
-	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
+	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap worker runtime: %v\n", err)
 		os.Exit(1)

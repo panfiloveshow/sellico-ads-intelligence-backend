@@ -89,6 +89,8 @@ type Config struct {
 	SyncInterval           string // env: SYNC_INTERVAL, default: "@every 1h"
 	RecommendationInterval string // env: RECOMMENDATION_INTERVAL, default: "@every 2h"
 	BidAutomationInterval  string // env: BID_AUTOMATION_INTERVAL, default: "@every 15m"
+	RepricerInterval       string // env: REPRICER_INTERVAL, default: "@every 1h"
+	RepricerPollInterval   string // env: REPRICER_POLL_INTERVAL, default: "@every 5m"
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -133,6 +135,8 @@ func Load() *Config {
 		SyncInterval:                      getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
 		RecommendationInterval:            getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
 		BidAutomationInterval:             getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),
+		RepricerInterval:                  getEnvOrDefault("REPRICER_INTERVAL", "@every 1h"),
+		RepricerPollInterval:              getEnvOrDefault("REPRICER_POLL_INTERVAL", "@every 5m"),
 		CORSAllowOrigins:                  getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                      getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                    getEnvAsInt("RATE_LIMIT_BURST", 40),

@@ -38,6 +38,11 @@ const (
 	TaskExtendedRecommendations      = "recommendation:extended"
 	TaskSweepExtendedRecommendations = "recommendation:sweep_extended"
 
+	TaskRepricer            = "price:automation"
+	TaskSweepRepricer       = "price:sweep_automation"
+	TaskPollPriceTasks      = "price:poll_tasks"
+	TaskSweepPollPriceTasks = "price:sweep_poll_tasks"
+
 	QueueBidAutomation = "bid-automation"
 	QueueSemantics     = "semantics"
 	QueueCompetitors   = "competitors"
@@ -51,6 +56,7 @@ const (
 	QueueWBProducts      = "wb-import-products"
 	QueueRecommendations = "recommendation-generation"
 	QueueExports         = "export-generation"
+	QueueRepricer        = "repricer"
 )
 
 type WorkspaceTaskPayload struct {

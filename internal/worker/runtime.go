@@ -26,7 +26,7 @@ type Runtime struct {
 	mux           *asynq.ServeMux
 }
 
-func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
+func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, repricer *service.RepricerService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
 	redisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis uri for worker: %w", err)
@@ -37,6 +37,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		WithNotifier(notifier).
 		WithIntegrationRefresher(integrationRefresher).
 		WithBidRunner(bidRunner).
+		WithRepricer(repricer).
 		WithSemanticsCollector(semantics).
 		WithCompetitorExtractor(competitors).
 		WithDeliveryCollector(delivery).
@@ -60,6 +61,10 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepRefreshIntegrations, processor.HandleSweepRefreshIntegrations)
 	mux.HandleFunc(TaskBidAutomation, processor.HandleBidAutomation)
 	mux.HandleFunc(TaskSweepBidAutomation, processor.HandleSweepBidAutomation)
+	mux.HandleFunc(TaskRepricer, processor.HandleRepricer)
+	mux.HandleFunc(TaskSweepRepricer, processor.HandleSweepRepricer)
+	mux.HandleFunc(TaskPollPriceTasks, processor.HandlePollPriceTasks)
+	mux.HandleFunc(TaskSweepPollPriceTasks, processor.HandleSweepPollPriceTasks)
 	mux.HandleFunc(TaskCollectKeywords, processor.HandleCollectKeywords)
 	mux.HandleFunc(TaskSweepCollectKeywords, processor.HandleSweepCollectKeywords)
 	mux.HandleFunc(TaskExtractCompetitors, processor.HandleExtractCompetitors)
@@ -84,6 +89,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		QueueRecommendations: 4,
 		QueueExports:         2,
 		QueueBidAutomation:   3,
+		QueueRepricer:        1,
 		QueueSemantics:       2,
 		QueueCompetitors:     2,
 		QueueDelivery:        2,
@@ -117,6 +123,8 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		// Individual sweeps REMOVED — they caused 5x redundant sync (audit CRITICAL #3)
 		{recInterval, TaskSweepRecommendations, QueueRecommendations},
 		{bidInterval, TaskSweepBidAutomation, QueueBidAutomation},
+		{cfg.RepricerInterval, TaskSweepRepricer, QueueRepricer},
+		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricer},
 		{syncInterval, TaskSweepCollectKeywords, QueueSemantics},
 		{syncInterval, TaskSweepExtractCompetitors, QueueCompetitors},
 		{syncInterval, TaskSweepCollectDelivery, QueueDelivery},

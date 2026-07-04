@@ -475,11 +475,26 @@ func NewRouter(deps RouterDeps) chi.Router {
 					if deps.PriceHandler != nil {
 						prices.Get("/", deps.PriceHandler.List)
 						prices.With(middleware.RequireWriteAccess()).Post("/sync", deps.PriceHandler.TriggerSync)
+						prices.With(middleware.RequireWriteAccess()).Post("/bulk", deps.PriceHandler.Bulk)
 					} else {
 						prices.Get("/", notImplemented)
 						prices.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
+						prices.With(middleware.RequireWriteAccess()).Post("/bulk", notImplemented)
 					}
 				})
+				scoped.Route("/price-changes", func(pc chi.Router) {
+					if deps.PriceHandler != nil {
+						pc.Get("/", deps.PriceHandler.ListChanges)
+						pc.With(middleware.RequireWriteAccess()).Post("/{changeId}/rollback", deps.PriceHandler.Rollback)
+					} else {
+						pc.Get("/", notImplemented)
+						pc.With(middleware.RequireWriteAccess()).Post("/{changeId}/rollback", notImplemented)
+					}
+				})
+				if deps.PriceHandler != nil {
+					scoped.Get("/price-upload-tasks", deps.PriceHandler.ListUploadTasks)
+					scoped.With(middleware.RequireWriteAccess()).Post("/repricer/run", deps.PriceHandler.Run)
+				}
 
 				// SEO Analysis
 				if deps.SEOHandler != nil {

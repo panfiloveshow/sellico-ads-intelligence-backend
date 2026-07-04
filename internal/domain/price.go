@@ -147,6 +147,56 @@ type PriceQuarantineGood struct {
 	Notified        bool       `json:"notified"`
 }
 
+// Manual bulk price adjustment types (PriceAdjustTargetRub is shared with schedules).
+const (
+	PriceAdjustPercent  = "percent"  // value = signed percent applied to base price
+	PriceAdjustAbsolute = "absolute" // value = signed rubles applied to base price
+)
+
+// ManualPriceBulkItem is one explicit product change in a manual bulk request.
+type ManualPriceBulkItem struct {
+	WBProductID     int64  `json:"wb_product_id"`
+	TargetPriceRub  *int64 `json:"target_price_rub,omitempty"`
+	DiscountPercent *int   `json:"discount_percent,omitempty"`
+}
+
+// ManualPriceBulkScope selects all products (optionally of one cabinet).
+type ManualPriceBulkScope struct {
+	All             bool       `json:"all"`
+	SellerCabinetID *uuid.UUID `json:"seller_cabinet_id,omitempty"`
+}
+
+// ManualPriceAdjustment is applied to every product in a scope.
+type ManualPriceAdjustment struct {
+	Type  string  `json:"type"`  // percent|absolute|target_rub
+	Value float64 `json:"value"`
+}
+
+// ManualPriceBulkRequest is either an explicit item list, or a scope + adjustment.
+type ManualPriceBulkRequest struct {
+	Items      []ManualPriceBulkItem  `json:"items,omitempty"`
+	Scope      *ManualPriceBulkScope  `json:"scope,omitempty"`
+	Adjustment *ManualPriceAdjustment `json:"adjustment,omitempty"`
+	Comment    string                 `json:"comment,omitempty"`
+	Force      bool                   `json:"force,omitempty"`
+}
+
+// PriceChangeFilter narrows a price-change listing.
+type PriceChangeFilter struct {
+	WBProductID *int64
+	Source      string
+	Status      string
+	Limit       int32
+	Offset      int32
+}
+
+// PriceBulkResult summarizes a manual bulk apply.
+type PriceBulkResult struct {
+	Accepted int         `json:"accepted"`
+	Skipped  int         `json:"skipped"`
+	TaskIDs  []uuid.UUID `json:"task_ids"`
+}
+
 // PriceScheduleEntry is a planned (calendar) price change.
 type PriceScheduleEntry struct {
 	ID               uuid.UUID   `json:"id"`

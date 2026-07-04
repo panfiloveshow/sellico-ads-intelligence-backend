@@ -15,9 +15,11 @@ func TestNewRuntime_BuildsWithoutStarting(t *testing.T) {
 		SyncInterval:           "@every 1h",
 		RecommendationInterval: "@every 2h",
 		BidAutomationInterval:  "@every 15m",
+		RepricerInterval:       "@every 1h",
+		RepricerPollInterval:   "@every 5m",
 	}
 
-	runtime, err := NewRuntime(cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zerolog.Nop())
+	runtime, err := NewRuntime(cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, runtime)
 }
