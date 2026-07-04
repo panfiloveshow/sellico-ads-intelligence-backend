@@ -13,6 +13,26 @@ const (
 	StrategyTypeAntiSliv       = "anti_sliv"
 	StrategyTypeDayparting     = "dayparting"
 	StrategyTypeRecommendation = "recommendation"
+
+	// Repricer strategy types (price_* prefix — bid automation skips these).
+	StrategyTypePriceMarginFloor     = "price_margin_floor"
+	StrategyTypePriceInventoryDemand = "price_inventory_demand"
+	StrategyTypePriceAdLinked        = "price_ad_linked"
+)
+
+// IsPriceStrategy reports whether a strategy type is a repricer strategy.
+func IsPriceStrategy(strategyType string) bool {
+	switch strategyType {
+	case StrategyTypePriceMarginFloor, StrategyTypePriceInventoryDemand, StrategyTypePriceAdLinked:
+		return true
+	}
+	return false
+}
+
+// Price apply modes.
+const (
+	PriceApplyModeDryRun = "dry_run"
+	PriceApplyModeAuto   = "auto"
 )
 
 // Strategy represents an automated bidding strategy.
@@ -59,6 +79,63 @@ type StrategyParams struct {
 	MaxChangesPerDay          int     `json:"max_changes_per_day,omitempty"`          // default: 3
 	MaxDataAgeHours           int     `json:"max_data_age_hours,omitempty"`           // default: 36
 	AllowIncreaseWithoutStock bool    `json:"allow_increase_without_stock,omitempty"` // default: false
+
+	// Repricer (price_* strategies). All *Rub values are integer rubles.
+	MinPriceRub           *int64  `json:"min_price_rub,omitempty"`             // hard floor override (on top of margin floor)
+	MaxPriceRub           *int64  `json:"max_price_rub,omitempty"`             // required for upward moves
+	StepPercent           float64 `json:"step_percent,omitempty"`              // default: 3, cap 10
+	OverstockDays         int     `json:"overstock_days,omitempty"`            // default: 60
+	LowStockDays          int     `json:"low_stock_days,omitempty"`            // default: 14
+	SlowVelocityPerDay    float64 `json:"slow_velocity_per_day,omitempty"`     // units/day below which "slow"
+	PriceCooldownHours    int     `json:"price_cooldown_hours,omitempty"`      // default: 24
+	MaxPriceChangesPerDay int     `json:"max_price_changes_per_day,omitempty"` // default: 2
+	PriceApplyMode        string  `json:"price_apply_mode,omitempty"`          // dry_run|auto, default dry_run
+	AdLookbackDays         int  `json:"ad_lookback_days,omitempty"`          // default: 7 (price_ad_linked)
+	RevertWhenAdsPaused    bool `json:"revert_when_ads_paused,omitempty"`    // price_ad_linked, opt-in
+	DisableBidCoordination bool `json:"disable_bid_coordination,omitempty"`  // price_ad_linked; zero = coordinate with bids (safe default)
+}
+
+// DefaultPriceParams returns sensible defaults for repricer strategy parameters.
+func DefaultPriceParams() StrategyParams {
+	return StrategyParams{
+		StepPercent:           3,
+		OverstockDays:         60,
+		LowStockDays:          14,
+		PriceCooldownHours:    24,
+		MaxPriceChangesPerDay: 2,
+		PriceApplyMode:        PriceApplyModeDryRun,
+		AdLookbackDays:        7,
+	}
+}
+
+// MergedPriceParams applies repricer defaults for any zero values and caps step.
+func (p StrategyParams) MergedPriceParams() StrategyParams {
+	d := DefaultPriceParams()
+	if p.StepPercent == 0 {
+		p.StepPercent = d.StepPercent
+	}
+	if p.StepPercent > 10 {
+		p.StepPercent = 10
+	}
+	if p.OverstockDays == 0 {
+		p.OverstockDays = d.OverstockDays
+	}
+	if p.LowStockDays == 0 {
+		p.LowStockDays = d.LowStockDays
+	}
+	if p.PriceCooldownHours == 0 {
+		p.PriceCooldownHours = d.PriceCooldownHours
+	}
+	if p.MaxPriceChangesPerDay == 0 {
+		p.MaxPriceChangesPerDay = d.MaxPriceChangesPerDay
+	}
+	if p.PriceApplyMode == "" {
+		p.PriceApplyMode = d.PriceApplyMode
+	}
+	if p.AdLookbackDays == 0 {
+		p.AdLookbackDays = d.AdLookbackDays
+	}
+	return p
 }
 
 // StrategyBinding links a strategy to a campaign or product.
