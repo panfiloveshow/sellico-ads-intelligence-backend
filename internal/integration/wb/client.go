@@ -47,6 +47,7 @@ type Client struct {
 	analyticsURL             string
 	commonURL                string
 	feedbacksURL             string
+	pricesURL                string
 	rateLimit                int
 	fullStatsInterBatchDelay time.Duration
 	normQueryInterBatchDelay time.Duration
@@ -63,12 +64,14 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 	analyticsURL := "https://seller-analytics-api.wildberries.ru"
 	commonURL := "https://common-api.wildberries.ru"
 	feedbacksURL := "https://feedbacks-api.wildberries.ru"
+	pricesURL := "https://discounts-prices-api.wildberries.ru"
 	if strings.Contains(cfg.WBAPIBaseURL, "localhost") || strings.Contains(cfg.WBAPIBaseURL, "127.0.0.1") {
 		contentURL = cfg.WBAPIBaseURL
 		statisticsURL = cfg.WBAPIBaseURL
 		analyticsURL = cfg.WBAPIBaseURL
 		commonURL = cfg.WBAPIBaseURL
 		feedbacksURL = cfg.WBAPIBaseURL
+		pricesURL = cfg.WBAPIBaseURL
 	}
 
 	return &Client{
@@ -79,6 +82,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		analyticsURL:             analyticsURL,
 		commonURL:                commonURL,
 		feedbacksURL:             feedbacksURL,
+		pricesURL:                pricesURL,
 		rateLimit:                cfg.WBAPIRateLimit,
 		fullStatsInterBatchDelay: 20 * time.Second,
 		normQueryInterBatchDelay: 7 * time.Second,
@@ -239,6 +243,40 @@ func (c *Client) doContentRequest(ctx context.Context, method, path, token strin
 	cb := c.breakerForToken(token)
 	result, err := cb.Execute(func() ([]byte, error) {
 		r, b, e := c.doRequestInnerURL(ctx, method, c.contentURL+path, token, body)
+		resp = r
+		return b, e
+	})
+
+	duration := time.Since(start).Seconds()
+	metrics.WBAPILatency.WithLabelValues(path).Observe(duration)
+
+	if err != nil {
+		metrics.WBAPIRequests.WithLabelValues(path, "error").Inc()
+		if resp != nil {
+			return resp, result, err
+		}
+		return nil, nil, err
+	}
+
+	status := "ok"
+	if resp != nil && resp.StatusCode >= 400 {
+		status = fmt.Sprintf("%d", resp.StatusCode)
+	}
+	metrics.WBAPIRequests.WithLabelValues(path, status).Inc()
+
+	return resp, result, nil
+}
+
+// doPricesRequest executes requests against the WB Discounts & Prices API
+// (pricesURL) with the same circuit breaker, retry, rate-limiting, and metrics
+// as doRequest.
+func (c *Client) doPricesRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
+	var resp *http.Response
+	start := time.Now()
+
+	cb := c.breakerForToken(token)
+	result, err := cb.Execute(func() ([]byte, error) {
+		r, b, e := c.doRequestInnerURL(ctx, method, c.pricesURL+path, token, body)
 		resp = r
 		return b, e
 	})

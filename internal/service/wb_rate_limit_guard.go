@@ -16,14 +16,18 @@ import (
 )
 
 const (
-	wbEndpointAdverts         = "adv_adverts"
-	wbEndpointFullstats       = "adv_fullstats"
-	wbEndpointNormQueryStats  = "adv_normquery_stats"
-	wbEndpointBudget          = "adv_budget"
-	wbEndpointAdFinance       = "adv_finance"
-	wbEndpointAnalyticsFunnel = "analytics_sales_funnel"
-	wbEndpointTariffs         = "wb_tariffs"
-	wbEndpointCampaignActions = "adv_campaign_actions"
+	wbEndpointAdverts          = "adv_adverts"
+	wbEndpointFullstats        = "adv_fullstats"
+	wbEndpointNormQueryStats   = "adv_normquery_stats"
+	wbEndpointBudget           = "adv_budget"
+	wbEndpointAdFinance        = "adv_finance"
+	wbEndpointAnalyticsFunnel  = "analytics_sales_funnel"
+	wbEndpointTariffs          = "wb_tariffs"
+	wbEndpointCampaignActions  = "adv_campaign_actions"
+	wbEndpointPricesList       = "prices_list"
+	wbEndpointPricesUpload     = "prices_upload"
+	wbEndpointPricesPoll       = "prices_poll"
+	wbEndpointPricesQuarantine = "prices_quarantine"
 )
 
 func wbEndpointFallbackDelay(endpoint string) time.Duration {
@@ -32,6 +36,9 @@ func wbEndpointFallbackDelay(endpoint string) time.Duration {
 		return 20 * time.Second
 	case wbEndpointNormQueryStats:
 		return 7 * time.Second
+	case wbEndpointPricesList, wbEndpointPricesUpload, wbEndpointPricesPoll, wbEndpointPricesQuarantine:
+		// WB Prices & Discounts share one 10 req / 6 s bucket per account.
+		return 6 * time.Second
 	default:
 		return 60 * time.Second
 	}
