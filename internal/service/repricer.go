@@ -105,8 +105,46 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 		}
 		s.markCabinetScope(ctx, cabinetID, domain.PricesScopeOK)
 		total += count
+		// Enrich product names/images from WB content cards so the priced
+		// products show titles and photos. Best-effort — failures (e.g. no
+		// content scope) don't fail the price sync.
+		s.enrichCabinetProducts(ctx, workspaceID, cabinetID, token)
 	}
 	return total, nil
+}
+
+// enrichCabinetProducts refreshes products (title, brand, image) from WB content
+// cards for a cabinet, so repriced products display names and photos.
+func (s *RepricerService) enrichCabinetProducts(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) {
+	cards, err := s.wbClient.ListProducts(ctx, token)
+	if err != nil {
+		s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("product enrichment (content cards) skipped")
+		return
+	}
+	enriched := 0
+	for _, c := range cards {
+		var price pgtype.Int8
+		if c.Price != nil {
+			price = pgtype.Int8{Int64: *c.Price, Valid: true}
+		}
+		if _, err := s.queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			WbProductID:     c.NmID,
+			Title:           c.Title,
+			Brand:           textToPgtype(c.Brand),
+			Category:        textToPgtype(c.Category),
+			ImageUrl:        textToPgtype(c.ImageURL),
+			Price:           price,
+		}); err != nil {
+			s.logger.Warn().Err(err).Int64("wb_product_id", c.NmID).Msg("failed to upsert enriched product")
+			continue
+		}
+		enriched++
+	}
+	if enriched > 0 {
+		s.logger.Info().Str("cabinet_id", cabinetID.String()).Int("enriched", enriched).Msg("product names/images enriched from content cards")
+	}
 }
 
 func (s *RepricerService) syncCabinetPrices(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) (int, error) {

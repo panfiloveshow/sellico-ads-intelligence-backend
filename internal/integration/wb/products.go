@@ -40,16 +40,33 @@ type wbContentCursorOut struct {
 	Total     int    `json:"total"`
 }
 
+type wbContentPhoto struct {
+	Big      string `json:"big"`
+	C246x328 string `json:"c246x328"`
+	Square   string `json:"square"`
+	Tm       string `json:"tm"`
+}
+
 type wbContentCard struct {
-	NmID       int64    `json:"nmID"`
-	VendorCode string   `json:"vendorCode"`
-	Title      string   `json:"title"`
-	Brand      string   `json:"brand"`
-	Object     string   `json:"object"`
-	MediaFiles []string `json:"mediaFiles"`
+	NmID       int64            `json:"nmID"`
+	VendorCode string           `json:"vendorCode"`
+	Title      string           `json:"title"`
+	Brand      string           `json:"brand"`
+	Object     string           `json:"object"`
+	Photos     []wbContentPhoto `json:"photos"`     // WB content API returns photos here
+	MediaFiles []string         `json:"mediaFiles"` // legacy/alt field, kept as fallback
 	Sizes      []struct {
 		Price int `json:"price"`
 	} `json:"sizes"`
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ListProducts fetches ALL product cards from the WB Content API with cursor pagination.
@@ -93,7 +110,9 @@ func (c *Client) ListProducts(ctx context.Context, token string) ([]WBProductDTO
 				Brand:      card.Brand,
 				Category:   card.Object,
 			}
-			if len(card.MediaFiles) > 0 {
+			if len(card.Photos) > 0 {
+				product.ImageURL = firstNonEmpty(card.Photos[0].C246x328, card.Photos[0].Big, card.Photos[0].Square, card.Photos[0].Tm)
+			} else if len(card.MediaFiles) > 0 {
 				product.ImageURL = card.MediaFiles[0]
 			}
 			if len(card.Sizes) > 0 && card.Sizes[0].Price > 0 {

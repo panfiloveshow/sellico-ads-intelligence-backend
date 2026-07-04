@@ -16,10 +16,10 @@ INSERT INTO products (workspace_id, seller_cabinet_id, wb_product_id, title, bra
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (wb_product_id, seller_cabinet_id) DO UPDATE SET
     title = COALESCE(NULLIF(EXCLUDED.title, ''), products.title),
-    brand = EXCLUDED.brand,
-    category = EXCLUDED.category,
-    image_url = EXCLUDED.image_url,
-    price = EXCLUDED.price,
+    brand = COALESCE(NULLIF(EXCLUDED.brand, ''), products.brand),
+    category = COALESCE(NULLIF(EXCLUDED.category, ''), products.category),
+    image_url = COALESCE(NULLIF(EXCLUDED.image_url, ''), products.image_url),
+    price = COALESCE(EXCLUDED.price, products.price),
     updated_at = now()
 RETURNING *;
 
