@@ -22,3 +22,17 @@ func TestEffectiveOfAndClampDiscount(t *testing.T) {
 	assert.Equal(t, 95, clampDiscount(120))
 	assert.Equal(t, 30, clampDiscount(30))
 }
+
+func TestInverseDeltaPercentRestoresBase(t *testing.T) {
+	for _, v := range []float64{-20, -10, 10, 25} {
+		inv := inverseDeltaPercent(v)
+		// applying v then inv should return to ~1.0
+		got := (1 + v/100) * (1 + inv/100)
+		assert.InDelta(t, 1.0, got, 1e-9)
+	}
+}
+
+func TestApplyAdjustmentDeltaPercent(t *testing.T) {
+	// schedules use delta_percent — must behave like percent
+	assert.Equal(t, int64(800), applyAdjustment(1000, domain.ManualPriceAdjustment{Type: domain.PriceAdjustDeltaPercent, Value: -20}))
+}

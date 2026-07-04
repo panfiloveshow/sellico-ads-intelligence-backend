@@ -130,7 +130,7 @@ func (s *RepricerService) marginFloors(ctx context.Context, workspaceID uuid.UUI
 
 func applyAdjustment(base int64, adj domain.ManualPriceAdjustment) int64 {
 	switch adj.Type {
-	case domain.PriceAdjustPercent:
+	case domain.PriceAdjustPercent, domain.PriceAdjustDeltaPercent:
 		return int64(math.Round(float64(base) * (1 + adj.Value/100)))
 	case domain.PriceAdjustAbsolute:
 		return base + int64(math.Round(adj.Value))

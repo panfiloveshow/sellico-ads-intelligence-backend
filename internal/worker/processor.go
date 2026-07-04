@@ -87,6 +87,7 @@ type bidAutomationRunner interface {
 type repricerRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	PollUploadTasks(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	ExecuteDueSchedules(ctx context.Context, now time.Time) (int, error)
 }
 
 type semanticsCollector interface {
@@ -425,6 +426,22 @@ func (p *Processor) HandleRepricer(ctx context.Context, task *asynq.Task) error 
 
 func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task) error {
 	return p.runSweep(ctx, TaskSweepPollPriceTasks, TaskPollPriceTasks, QueueRepricer)
+}
+
+// HandleExecutePriceSchedules runs all due schedule entries (global, not per-workspace).
+func (p *Processor) HandleExecutePriceSchedules(ctx context.Context, _ *asynq.Task) error {
+	if p.repricer == nil {
+		return nil
+	}
+	executed, err := p.repricer.ExecuteDueSchedules(ctx, time.Now().UTC())
+	if err != nil {
+		p.logger.Error().Err(err).Msg("execute due price schedules failed")
+		return err
+	}
+	if executed > 0 {
+		p.logger.Info().Int("executed", executed).Msg("executed due price schedules")
+	}
+	return nil
 }
 
 func (p *Processor) HandlePollPriceTasks(ctx context.Context, task *asynq.Task) error {

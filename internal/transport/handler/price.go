@@ -23,6 +23,9 @@ type priceServicer interface {
 	ListChanges(ctx context.Context, workspaceID uuid.UUID, f domain.PriceChangeFilter) ([]domain.PriceChange, error)
 	Rollback(ctx context.Context, actorID, workspaceID, changeID uuid.UUID) (*domain.PriceChange, error)
 	ListUploadTasks(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.PriceUploadTask, error)
+	CreateSchedule(ctx context.Context, actorID, workspaceID uuid.UUID, in domain.PriceScheduleInput) (*domain.PriceScheduleEntry, error)
+	ListSchedules(ctx context.Context, workspaceID uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error)
+	CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error
 }
 
 // repricerEnqueuer enqueues an async repricer run for a workspace.
@@ -150,6 +153,62 @@ func (h *PriceHandler) ListUploadTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items))})
+}
+
+// CreateSchedule plans a future price change (optionally with auto-revert).
+func (h *PriceHandler) CreateSchedule(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	actorID, _ := middleware.UserIDFromContext(r.Context())
+	var in domain.PriceScheduleInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	entry, err := h.service.CreateSchedule(r.Context(), actorID, workspaceID, in)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusCreated, entry)
+}
+
+// ListSchedules returns planned/executed schedule entries (calendar feed).
+func (h *PriceHandler) ListSchedules(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	pg := pagination.Parse(r)
+	items, err := h.service.ListSchedules(r.Context(), workspaceID, r.URL.Query().Get("status"), int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items))})
+}
+
+// CancelSchedule cancels a planned schedule entry.
+func (h *PriceHandler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	entryID, err := uuid.Parse(chi.URLParam(r, "scheduleId"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid schedule id")
+		return
+	}
+	if err := h.service.CancelSchedule(r.Context(), workspaceID, entryID); err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, map[string]string{"status": "canceled"})
 }
 
 // Run enqueues an async repricer automation run for the workspace.

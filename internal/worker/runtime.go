@@ -65,6 +65,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepRepricer, processor.HandleSweepRepricer)
 	mux.HandleFunc(TaskPollPriceTasks, processor.HandlePollPriceTasks)
 	mux.HandleFunc(TaskSweepPollPriceTasks, processor.HandleSweepPollPriceTasks)
+	mux.HandleFunc(TaskExecutePriceSchedule, processor.HandleExecutePriceSchedules)
 	mux.HandleFunc(TaskCollectKeywords, processor.HandleCollectKeywords)
 	mux.HandleFunc(TaskSweepCollectKeywords, processor.HandleSweepCollectKeywords)
 	mux.HandleFunc(TaskExtractCompetitors, processor.HandleExtractCompetitors)
@@ -125,6 +126,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		{bidInterval, TaskSweepBidAutomation, QueueBidAutomation},
 		{cfg.RepricerInterval, TaskSweepRepricer, QueueRepricer},
 		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricer},
+		{cfg.RepricerScheduleInterval, TaskExecutePriceSchedule, QueueRepricer},
 		{syncInterval, TaskSweepCollectKeywords, QueueSemantics},
 		{syncInterval, TaskSweepExtractCompetitors, QueueCompetitors},
 		{syncInterval, TaskSweepCollectDelivery, QueueDelivery},

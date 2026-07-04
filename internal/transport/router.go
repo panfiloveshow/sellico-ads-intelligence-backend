@@ -495,6 +495,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 					scoped.Get("/price-upload-tasks", deps.PriceHandler.ListUploadTasks)
 					scoped.With(middleware.RequireWriteAccess()).Post("/repricer/run", deps.PriceHandler.Run)
 				}
+				scoped.Route("/price-schedules", func(ps chi.Router) {
+					if deps.PriceHandler != nil {
+						ps.Get("/", deps.PriceHandler.ListSchedules)
+						ps.With(middleware.RequireWriteAccess()).Post("/", deps.PriceHandler.CreateSchedule)
+						ps.With(middleware.RequireWriteAccess()).Delete("/{scheduleId}", deps.PriceHandler.CancelSchedule)
+					} else {
+						ps.Get("/", notImplemented)
+						ps.With(middleware.RequireWriteAccess()).Post("/", notImplemented)
+						ps.With(middleware.RequireWriteAccess()).Delete("/{scheduleId}", notImplemented)
+					}
+				})
 
 				// SEO Analysis
 				if deps.SEOHandler != nil {

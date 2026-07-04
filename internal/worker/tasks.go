@@ -38,10 +38,11 @@ const (
 	TaskExtendedRecommendations      = "recommendation:extended"
 	TaskSweepExtendedRecommendations = "recommendation:sweep_extended"
 
-	TaskRepricer            = "price:automation"
-	TaskSweepRepricer       = "price:sweep_automation"
-	TaskPollPriceTasks      = "price:poll_tasks"
-	TaskSweepPollPriceTasks = "price:sweep_poll_tasks"
+	TaskRepricer             = "price:automation"
+	TaskSweepRepricer        = "price:sweep_automation"
+	TaskPollPriceTasks       = "price:poll_tasks"
+	TaskSweepPollPriceTasks  = "price:sweep_poll_tasks"
+	TaskExecutePriceSchedule = "price:execute_schedules"
 
 	QueueBidAutomation = "bid-automation"
 	QueueSemantics     = "semantics"

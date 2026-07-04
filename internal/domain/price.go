@@ -168,7 +168,7 @@ type ManualPriceBulkScope struct {
 
 // ManualPriceAdjustment is applied to every product in a scope.
 type ManualPriceAdjustment struct {
-	Type  string  `json:"type"`  // percent|absolute|target_rub
+	Type  string  `json:"type"` // percent|absolute|target_rub
 	Value float64 `json:"value"`
 }
 
@@ -195,6 +195,20 @@ type PriceBulkResult struct {
 	Accepted int         `json:"accepted"`
 	Skipped  int         `json:"skipped"`
 	TaskIDs  []uuid.UUID `json:"task_ids"`
+}
+
+// PriceScheduleInput is the API input for a scheduled price change.
+type PriceScheduleInput struct {
+	SellerCabinetID  uuid.UUID  `json:"seller_cabinet_id"`
+	ScopeType        string     `json:"scope_type"`
+	ProductIDs       []int64    `json:"product_ids,omitempty"`
+	AdjustmentType   string     `json:"adjustment_type"`
+	AdjustmentValue  float64    `json:"adjustment_value"`
+	Direction        string     `json:"direction,omitempty"`
+	ScheduledAt      time.Time  `json:"scheduled_at"`
+	RevertAt         *time.Time `json:"revert_at,omitempty"`
+	RevertToPrevious bool       `json:"revert_to_previous,omitempty"`
+	Comment          string     `json:"comment,omitempty"`
 }
 
 // PriceScheduleEntry is a planned (calendar) price change.
