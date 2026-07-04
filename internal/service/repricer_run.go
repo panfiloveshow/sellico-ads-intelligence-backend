@@ -26,6 +26,7 @@ type repricerData struct {
 	nmByProductID     map[uuid.UUID]int64
 	activeQuarNm      map[int64]struct{}
 	hasActiveCampaign map[int64]bool
+	drrByNm           map[int64]float64 // ad DRR % over the lookback window
 }
 
 type stockInfo struct {
@@ -176,6 +177,9 @@ func (s *RepricerService) evaluateProduct(ctx context.Context, workspaceID uuid.
 		SalesUnitsPerDay:   data.velocityByNm[nm],
 		HasActiveCampaigns: data.hasActiveCampaign[nm],
 	}
+	if drr, ok := data.drrByNm[nm]; ok {
+		in.DRR = &drr
+	}
 
 	var decision PriceDecision
 	switch st.Type {
@@ -240,6 +244,7 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 		nmByProductID:     map[uuid.UUID]int64{},
 		activeQuarNm:      map[int64]struct{}{},
 		hasActiveCampaign: map[int64]bool{},
+		drrByNm:           map[int64]float64{},
 	}
 
 	// Cabinets referenced by the strategies.
@@ -299,17 +304,46 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 		return nil, err
 	}
 	unitsByNm := map[int64]int64{}
+	soldRevenueKopecksByNm := map[int64]int64{}
 	for _, row := range salesRows {
 		unitsByNm[row.WbProductID] += row.Sales
+		soldRevenueKopecksByNm[row.WbProductID] += row.SoldRevenue
 	}
 	for nm, units := range unitsByNm {
 		data.velocityByNm[nm] = float64(units) / float64(priceVelocityLookbackDays)
 	}
 
-	// ponytail: hasActiveCampaign / DRR ad-signals are not loaded yet, so
-	// price_ad_linked yields no changes until the ad-signal load is wired
-	// (campaign_products + product_stats + bid_changes over AdLookbackDays).
-	// margin_floor and inventory_demand are fully functional without it.
+	// Ad signals for price_ad_linked: sum ad spend per product over the same
+	// window and derive DRR against sold revenue. Spend is rubles (roundRubles);
+	// SoldRevenue is kopecks (rubToKopecks) — convert before dividing.
+	// ponytail: uses the shared velocity window, not each strategy's AdLookbackDays;
+	// per-strategy windows can be added if needed.
+	statRows, err := s.queries.ListProductStatsByWorkspaceDateRange(ctx, sqlcgen.ListProductStatsByWorkspaceDateRangeParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		DateFrom:    pgtype.Date{Time: from, Valid: true},
+		DateTo:      pgtype.Date{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	adSpendRubByNm := map[int64]int64{}
+	for _, row := range statRows {
+		nm, ok := data.nmByProductID[uuidFromPgtype(row.ProductID)]
+		if !ok {
+			continue
+		}
+		adSpendRubByNm[nm] += row.Spend
+	}
+	for nm, spendRub := range adSpendRubByNm {
+		if spendRub <= 0 {
+			continue
+		}
+		data.hasActiveCampaign[nm] = true
+		if revKopecks := soldRevenueKopecksByNm[nm]; revKopecks > 0 {
+			revRub := float64(revKopecks) / 100.0
+			data.drrByNm[nm] = float64(spendRub) / revRub * 100
+		}
+	}
 
 	// Active quarantine.
 	quar, err := s.queries.ListActiveQuarantineGoods(ctx, uuidToPgtype(workspaceID))
