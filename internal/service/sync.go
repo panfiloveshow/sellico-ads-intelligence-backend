@@ -100,7 +100,12 @@ func (s *SyncSummary) addIssue(stage, entityID, format string, args ...any) {
 		EntityID: entityID,
 		Message:  message,
 	})
-	if isWBSyncIssue(message) {
+	// Only count as a WB API error when it isn't a local persistence/parse failure —
+	// otherwise a "campaigns.upsert"/"stats.map" DB error trips the WB-error guardrail
+	// and disables bid automation for the whole workspace.
+	// ponytail: stage-suffix heuristic; replace with a typed wb.APIError{StatusCode} when
+	// the WB client stops flattening status codes into message strings.
+	if isWBSyncIssue(message) && !isLocalPersistenceStage(stage) {
 		s.WBErrors++
 	}
 	if isRateLimitIssue(message) {
@@ -194,6 +199,21 @@ func (s SyncSummary) Error() error {
 		message = fmt.Sprintf("%s; and %d more issues", message, len(s.Issues)-5)
 	}
 	return errors.New(message)
+}
+
+// isLocalPersistenceStage reports whether a sync stage is a write/parse into our own
+// storage (not a WB API call), so its failures must not be classified as WB errors.
+func isLocalPersistenceStage(stage string) bool {
+	seg := stage
+	if i := strings.LastIndex(stage, "."); i >= 0 {
+		seg = stage[i+1:]
+	}
+	switch seg {
+	case "upsert", "map", "parse", "identity", "date", "skipped",
+		"cleanup", "stale_cleanup", "sync_mark", "fallback":
+		return true
+	}
+	return false
 }
 
 func isWBSyncIssue(message string) bool {

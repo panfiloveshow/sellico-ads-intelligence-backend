@@ -157,7 +157,10 @@ func aggregateProductBusiness(rows []domain.ProductBusinessSummary, adSpend int6
 		result.ReturnRate = float64(result.Returns) / float64(result.Sales+result.Returns)
 	}
 	if result.SoldRevenue > 0 {
-		result.AdToSoldRevenue = float64(adSpend) / float64(result.SoldRevenue) * 100
+		// adSpend is in rubles (roundRubles), SoldRevenue is in kopecks (rubToKopecks) —
+		// convert revenue to rubles before dividing so DRR comes out as a real percent.
+		soldRevenueRubles := float64(result.SoldRevenue) / 100.0
+		result.AdToSoldRevenue = float64(adSpend) / soldRevenueRubles * 100
 	}
 	return result
 }
