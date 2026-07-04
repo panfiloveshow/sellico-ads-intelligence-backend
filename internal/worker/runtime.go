@@ -188,6 +188,15 @@ func (r *Runtime) Start() error {
 		return err
 	}
 	r.logger.Info().Msg("worker runtime started")
+
+	// Kick off one catalog/price sync a few seconds after boot so the repricer
+	// view is populated without waiting for the first scheduled sweep — after a
+	// restart that sweep is a full REPRICER_INTERVAL away. Unique guards against
+	// piling up if the scheduler fires around the same time.
+	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepSyncPrices),
+		asynq.Queue(QueueRepricer), asynq.ProcessIn(15*time.Second), asynq.Unique(30*time.Minute)); err != nil {
+		r.logger.Warn().Err(err).Msg("failed to enqueue startup price sync")
+	}
 	return nil
 }
 
