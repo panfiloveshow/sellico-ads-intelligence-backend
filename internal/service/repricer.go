@@ -324,6 +324,10 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 		if items[i].Title == "" && sc.Name != "" {
 			items[i].Title = sc.Name
 		}
+		if (items[i].StockTotal == nil || *items[i].StockTotal == 0) && sc.Stock > 0 {
+			st := sc.Stock
+			items[i].StockTotal = &st
+		}
 		if sc.BuyerRub > 0 {
 			buyer := sc.BuyerRub
 			items[i].ShowcasePriceRub = &buyer

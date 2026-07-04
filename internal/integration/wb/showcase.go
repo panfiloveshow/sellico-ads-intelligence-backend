@@ -16,9 +16,10 @@ import (
 // from card.wb.ru. All *Rub fields are integer rubles.
 type Showcase struct {
 	Name       string
-	BasicRub   int64 // price after the seller's own discount (pre-СПП, struck-through)
-	BuyerRub   int64 // price the buyer actually pays (after СПП)
-	SppPercent int   // СПП = (1 - BuyerRub/BasicRub) * 100
+	BasicRub   int64 // base/struck price (before the seller discount)
+	BuyerRub   int64 // retail price after the seller discount (card.wb.ru product)
+	SppPercent int   // seller discount = (1 - BuyerRub/BasicRub) * 100
+	Stock      int   // total quantity in stock across warehouses
 }
 
 // showcaseDest is the RF geo (delivery point); prices are only returned for
@@ -28,9 +29,10 @@ const showcaseChunk = 100
 
 type wbShowcaseResponse struct {
 	Products []struct {
-		ID    int64  `json:"id"`
-		Name  string `json:"name"`
-		Sizes []struct {
+		ID            int64  `json:"id"`
+		Name          string `json:"name"`
+		TotalQuantity int    `json:"totalQuantity"`
+		Sizes         []struct {
 			Price struct {
 				Basic   int64 `json:"basic"`   // kopecks
 				Product int64 `json:"product"` // kopecks
@@ -89,28 +91,25 @@ func (c *Client) ShowcaseByNmIDs(ctx context.Context, nmIDs []int64) (map[int64]
 			continue
 		}
 		for _, p := range parsed.Products {
-			if p.ID == 0 || len(p.Sizes) == 0 {
+			if p.ID == 0 {
 				continue
 			}
-			basic := p.Sizes[0].Price.Basic
-			buyer := p.Sizes[0].Price.Product
-			if basic <= 0 || buyer <= 0 {
-				// Out of stock / no price — СПП unavailable, but keep the name.
-				if p.Name != "" {
-					out[p.ID] = Showcase{Name: p.Name}
+			// Name + stock are available even for out-of-stock items (no price).
+			sc := Showcase{Name: p.Name, Stock: p.TotalQuantity}
+			if len(p.Sizes) > 0 {
+				basic := p.Sizes[0].Price.Basic
+				buyer := p.Sizes[0].Price.Product
+				if basic > 0 && buyer > 0 {
+					spp := int(math.Round((1 - float64(buyer)/float64(basic)) * 100))
+					if spp < 0 {
+						spp = 0
+					}
+					sc.BasicRub = int64(math.Round(float64(basic) / 100))
+					sc.BuyerRub = int64(math.Round(float64(buyer) / 100))
+					sc.SppPercent = spp
 				}
-				continue
 			}
-			spp := int(math.Round((1 - float64(buyer)/float64(basic)) * 100))
-			if spp < 0 {
-				spp = 0
-			}
-			out[p.ID] = Showcase{
-				Name:       p.Name,
-				BasicRub:   int64(math.Round(float64(basic) / 100)),
-				BuyerRub:   int64(math.Round(float64(buyer) / 100)),
-				SppPercent: spp,
-			}
+			out[p.ID] = sc
 		}
 	}
 	return out, nil
