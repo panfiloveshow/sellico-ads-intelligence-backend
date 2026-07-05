@@ -487,7 +487,9 @@ func (p *Processor) HandlePollPriceTasks(ctx context.Context, task *asynq.Task) 
 		p.logger.Error().Err(err).Str("workspace_id", workspaceID.String()).Msg("price task poll failed")
 		return err
 	}
-	p.logger.Debug().Str("workspace_id", workspaceID.String()).Int("terminal", terminal).Msg("price task poll completed")
+	if terminal > 0 {
+		p.logger.Info().Str("workspace_id", workspaceID.String()).Int("terminal", terminal).Msg("price task poll completed")
+	}
 	return nil
 }
 

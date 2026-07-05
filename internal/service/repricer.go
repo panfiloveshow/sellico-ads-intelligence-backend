@@ -158,7 +158,12 @@ func (s *RepricerService) enrichCabinetProducts(ctx context.Context, workspaceID
 // products.stock_total. Best-effort: a missing Statistics scope or a rate limit
 // just leaves the storefront fallback in place.
 func (s *RepricerService) syncCabinetStocks(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) {
-	stocks, err := s.wbClient.ListSupplierStocks(ctx, token)
+	// Bound the stats call: WB statistics is 1 req/min, so a rate-limited cabinet
+	// would otherwise burn ~2 min of retries and starve the repricer queue (polls,
+	// other syncs). Cap it and let the next hourly sync retry.
+	stockCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	stocks, err := s.wbClient.ListSupplierStocks(stockCtx, token)
 	if err != nil {
 		if !errors.Is(err, wb.ErrStatsScopeMissing) {
 			s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("stock sync skipped")
