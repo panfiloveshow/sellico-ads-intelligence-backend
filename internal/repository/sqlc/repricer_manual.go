@@ -200,6 +200,20 @@ func (q *Queries) ListCatalogWithPrices(ctx context.Context, workspaceID, seller
 }
 
 // ---------------------------------------------------------------------------
+// product stock (real FBW stock from WB Statistics)
+// ---------------------------------------------------------------------------
+
+const setProductStock = `
+UPDATE products SET stock_total = $4, updated_at = now()
+WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3
+`
+
+func (q *Queries) SetProductStock(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64, stock int32) error {
+	_, err := q.db.Exec(ctx, setProductStock, workspaceID, sellerCabinetID, wbProductID, stock)
+	return err
+}
+
+// ---------------------------------------------------------------------------
 // cabinet prices-scope status (for the frontend)
 // ---------------------------------------------------------------------------
 

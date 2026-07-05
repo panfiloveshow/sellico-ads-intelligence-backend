@@ -94,6 +94,10 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 		// populate even for cabinets whose token can't read prices.
 		s.enrichCabinetProducts(ctx, workspaceID, cabinetID, token)
 
+		// Real FBW stock from WB Statistics (separate scope; falls back to the
+		// card.wb.ru storefront quantity at read time when unavailable).
+		s.syncCabinetStocks(ctx, workspaceID, cabinetID, token)
+
 		// Prices (scope-gated / rate-limited).
 		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesList) {
 			s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("prices list cooling down, skipping prices for cabinet")
@@ -147,6 +151,28 @@ func (s *RepricerService) enrichCabinetProducts(ctx context.Context, workspaceID
 	}
 	if enriched > 0 {
 		s.logger.Info().Str("cabinet_id", cabinetID.String()).Int("enriched", enriched).Msg("product names/images enriched from content cards")
+	}
+}
+
+// syncCabinetStocks pulls real FBW stock from WB Statistics and writes it to
+// products.stock_total. Best-effort: a missing Statistics scope or a rate limit
+// just leaves the storefront fallback in place.
+func (s *RepricerService) syncCabinetStocks(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) {
+	stocks, err := s.wbClient.ListSupplierStocks(ctx, token)
+	if err != nil {
+		if !errors.Is(err, wb.ErrStatsScopeMissing) {
+			s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("stock sync skipped")
+		}
+		return
+	}
+	updated := 0
+	for nm, qty := range stocks {
+		if err := s.queries.SetProductStock(ctx, uuidToPgtype(workspaceID), uuidToPgtype(cabinetID), nm, int32(qty)); err == nil {
+			updated++
+		}
+	}
+	if updated > 0 {
+		s.logger.Info().Str("cabinet_id", cabinetID.String()).Int("stocks", updated).Msg("real FBW stock synced")
 	}
 }
 
@@ -324,10 +350,9 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 		if items[i].Title == "" && sc.Name != "" {
 			items[i].Title = sc.Name
 		}
-		if (items[i].StockTotal == nil || *items[i].StockTotal == 0) && sc.Stock > 0 {
-			st := sc.Stock
-			items[i].StockTotal = &st
-		}
+		// Stock comes only from real WB Statistics (products.stock_total). The
+		// card.wb.ru storefront quantity is a capped, geo-limited number that
+		// misleads (shows ~44 when the cabinet has hundreds), so it's not used.
 		if sc.BuyerRub > 0 {
 			buyer := sc.BuyerRub
 			items[i].ShowcasePriceRub = &buyer
