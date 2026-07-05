@@ -90,8 +90,9 @@ type StrategyParams struct {
 	PriceCooldownHours    int     `json:"price_cooldown_hours,omitempty"`      // default: 24
 	MaxPriceChangesPerDay int     `json:"max_price_changes_per_day,omitempty"` // default: 2
 	PriceApplyMode        string  `json:"price_apply_mode,omitempty"`          // dry_run|auto, default dry_run
-	AdLookbackDays         int  `json:"ad_lookback_days,omitempty"`          // default: 7 (price_ad_linked)
-	RevertWhenAdsPaused    bool `json:"revert_when_ads_paused,omitempty"`    // price_ad_linked, opt-in
+	AdLookbackDays         int      `json:"ad_lookback_days,omitempty"`          // default: 7 (price_ad_linked)
+	MaxAllowedDRRPercent   *float64 `json:"max_allowed_drr_percent,omitempty"`   // price_ad_linked: DRR ceiling; falls back to product economics
+	RevertWhenAdsPaused    bool     `json:"revert_when_ads_paused,omitempty"`    // price_ad_linked, opt-in
 	DisableBidCoordination bool `json:"disable_bid_coordination,omitempty"`  // price_ad_linked; zero = coordinate with bids (safe default)
 }
 

@@ -199,10 +199,12 @@ func validatePriceStrategy(input domain.Strategy) error {
 	if p.MaxPriceChangesPerDay < 0 {
 		return apperror.New(apperror.ErrValidation, "max_price_changes_per_day must be non-negative")
 	}
-	// inventory_demand can move price up, which requires a ceiling.
-	if input.Type == domain.StrategyTypePriceInventoryDemand && p.MaxPriceRub == nil {
-		return apperror.New(apperror.ErrValidation, "max_price_rub is required for price_inventory_demand")
+	if p.MaxAllowedDRRPercent != nil && (*p.MaxAllowedDRRPercent < 0 || *p.MaxAllowedDRRPercent > 100) {
+		return apperror.New(apperror.ErrValidation, "max_allowed_drr_percent must be between 0 and 100")
 	}
+	// Upward moves need a ceiling, but the engine already skips them without one
+	// ("max_price_required_for_increase") — a down-only inventory strategy is
+	// valid, so max_price_rub stays optional.
 	return nil
 }
 

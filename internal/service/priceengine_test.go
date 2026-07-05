@@ -262,3 +262,55 @@ func TestStepDownNeverTriggersQuarantine(t *testing.T) {
 		assert.Greater(t, d.TargetEffectiveRub, int64(10000)/3)
 	}
 }
+
+// Without product economics, an explicit MinPriceRub on the strategy acts as
+// the floor (strategies work out of the box); with neither, skip.
+func TestResolveFloor_MinPriceFallback(t *testing.T) {
+	minPrice := int64(700)
+
+	t.Run("no economics + min_price_rub → floor works", func(t *testing.T) {
+		in := PriceEngineInputs{
+			Current:          price(2000, 0, 2000),
+			Economics:        domain.ProductEconomics{}, // cost price not filled in
+			Stock:            1000,
+			StockKnown:       true,
+			SalesUnitsPerDay: 0.1,
+		}
+		params := domain.StrategyParams{StepPercent: 5, SlowVelocityPerDay: 1, MinPriceRub: &minPrice}
+		d := DecideInventoryDemand(in, params)
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "down", d.Direction)
+		assert.Equal(t, int64(1900), d.TargetEffectiveRub)
+		assert.Equal(t, minPrice, d.MinPriceRub)
+	})
+
+	t.Run("no economics and no min price → skip", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(2000, 0, 2000), Economics: domain.ProductEconomics{}, StockKnown: true}
+		d := DecideInventoryDemand(in, domain.StrategyParams{})
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "missing_cost_price", d.SkipReason)
+	})
+
+	t.Run("margin floor raises to explicit min price", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(500, 0, 500), Economics: domain.ProductEconomics{}}
+		d := DecideMarginFloor(in, domain.StrategyParams{MinPriceRub: &minPrice})
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "up", d.Direction)
+		assert.Equal(t, minPrice, d.TargetEffectiveRub)
+	})
+
+	t.Run("ad linked uses strategy DRR ceiling without economics", func(t *testing.T) {
+		drr := 25.0
+		maxDRR := 15.0
+		in := PriceEngineInputs{
+			Current:            price(2000, 0, 2000),
+			Economics:          domain.ProductEconomics{},
+			HasActiveCampaigns: true,
+			DRR:                &drr,
+		}
+		params := domain.StrategyParams{StepPercent: 5, MinPriceRub: &minPrice, MaxAllowedDRRPercent: &maxDRR}
+		d := DecideAdLinked(in, params)
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "down", d.Direction)
+	})
+}

@@ -125,13 +125,27 @@ func effectiveMinFloor(marginFloor int64, params domain.StrategyParams) int64 {
 	return floor
 }
 
+// resolveFloor computes the effective price floor for a strategy. When product
+// economics isn't filled in (no cost price), an explicit MinPriceRub on the
+// strategy acts as the floor — so strategies work out of the box; with neither,
+// the product is skipped (never reprice without a safety floor).
+func resolveFloor(in PriceEngineInputs, params domain.StrategyParams) (int64, string) {
+	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	if reason == "" {
+		return effectiveMinFloor(marginFloor, params), ""
+	}
+	if params.MinPriceRub != nil && *params.MinPriceRub > 0 {
+		return *params.MinPriceRub, ""
+	}
+	return 0, reason
+}
+
 // DecideMarginFloor raises a product priced below its margin floor back up to it.
 func DecideMarginFloor(in PriceEngineInputs, params domain.StrategyParams) PriceDecision {
-	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	floor, reason := resolveFloor(in, params)
 	if reason != "" {
 		return skip(reason)
 	}
-	floor := effectiveMinFloor(marginFloor, params)
 	current := in.Current.EffectivePriceRub()
 	if current <= 0 {
 		return skip("invalid_current_price")
@@ -156,11 +170,10 @@ func DecideMarginFloor(in PriceEngineInputs, params domain.StrategyParams) Price
 // low-stock+fast sales, always clamped to the margin floor / max price.
 func DecideInventoryDemand(in PriceEngineInputs, params domain.StrategyParams) PriceDecision {
 	p := params.MergedPriceParams()
-	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	floor, reason := resolveFloor(in, p)
 	if reason != "" {
 		return skip(reason)
 	}
-	floor := effectiveMinFloor(marginFloor, p)
 	current := in.Current.EffectivePriceRub()
 	if current <= 0 {
 		return skip("invalid_current_price")
@@ -208,11 +221,10 @@ func DecideInventoryDemand(in PriceEngineInputs, params domain.StrategyParams) P
 // (a cheaper price lifts ad-traffic conversion and pulls DRR back down).
 func DecideAdLinked(in PriceEngineInputs, params domain.StrategyParams) PriceDecision {
 	p := params.MergedPriceParams()
-	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
+	floor, reason := resolveFloor(in, p)
 	if reason != "" {
 		return skip(reason)
 	}
-	floor := effectiveMinFloor(marginFloor, p)
 	current := in.Current.EffectivePriceRub()
 	if current <= 0 {
 		return skip("invalid_current_price")
@@ -220,10 +232,15 @@ func DecideAdLinked(in PriceEngineInputs, params domain.StrategyParams) PriceDec
 	if !in.HasActiveCampaigns {
 		return skip("no_active_campaigns")
 	}
-	if in.DRR == nil || in.Economics.MaxAllowedDRR == nil {
+	// DRR ceiling: strategy param first, product economics as fallback.
+	maxDRR := p.MaxAllowedDRRPercent
+	if maxDRR == nil {
+		maxDRR = in.Economics.MaxAllowedDRR
+	}
+	if in.DRR == nil || maxDRR == nil {
 		return skip("missing_ad_data")
 	}
-	if *in.DRR <= *in.Economics.MaxAllowedDRR {
+	if *in.DRR <= *maxDRR {
 		return noChange("drr_within_limit", floor)
 	}
 	// DRR too high: step down toward floor to improve ad-traffic conversion.
@@ -234,7 +251,7 @@ func DecideAdLinked(in PriceEngineInputs, params domain.StrategyParams) PriceDec
 	if target >= current {
 		return noChange("already_at_floor", floor)
 	}
-	return priceMove(in, "down", target, floor, fmt.Sprintf("DRR %.1f%% over allowed %.1f%%, stepping down", *in.DRR, *in.Economics.MaxAllowedDRR))
+	return priceMove(in, "down", target, floor, fmt.Sprintf("DRR %.1f%% over allowed %.1f%%, stepping down", *in.DRR, *maxDRR))
 }
 
 // priceMove builds a change decision for a target effective price.
