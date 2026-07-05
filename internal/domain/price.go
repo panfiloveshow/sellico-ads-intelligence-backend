@@ -204,6 +204,51 @@ type ProductCatalogItem struct {
 	SppPercent       *int   `json:"spp_percent,omitempty"`        // WB loyalty discount %
 }
 
+// Orders heatmap: 7×24 matrix (ISO day-of-week × MSK hour) of order activity,
+// used by the repricer to plan intraday price timers around demand peaks.
+const (
+	HeatmapMetricUnits   = "units"
+	HeatmapMetricOrders  = "orders"
+	HeatmapMetricRevenue = "revenue"
+)
+
+type HeatmapCell struct {
+	Hour       int     `json:"hour"`
+	Orders     int64   `json:"orders"`
+	Units      int64   `json:"units"`
+	RevenueRub int64   `json:"revenue_rub"`
+	Value      int64   `json:"value"`     // per selected metric
+	Intensity  float64 `json:"intensity"` // value / max over the whole matrix
+}
+
+type HeatmapDay struct {
+	DayOfWeek int           `json:"day_of_week"` // 1=Пн .. 7=Вс
+	DayLabel  string        `json:"day_label"`
+	Hours     []HeatmapCell `json:"hours"`
+}
+
+type HeatmapPeak struct {
+	DayOfWeek int    `json:"day_of_week"`
+	DayLabel  string `json:"day_label"`
+	Hour      int    `json:"hour"`
+	Value     int64  `json:"value"`
+}
+
+type HeatmapTotals struct {
+	Orders     int64 `json:"orders"`
+	Units      int64 `json:"units"`
+	RevenueRub int64 `json:"revenue_rub"`
+}
+
+type OrdersHeatmap struct {
+	DateFrom string        `json:"date_from"`
+	DateTo   string        `json:"date_to"`
+	Metric   string        `json:"metric"`
+	Days     []HeatmapDay  `json:"days"`
+	Totals   HeatmapTotals `json:"totals"`
+	Peak     *HeatmapPeak  `json:"peak,omitempty"`
+}
+
 // CabinetPricesScope reports whether a cabinet's WB token can read/write prices.
 type CabinetPricesScope struct {
 	SellerCabinetID   uuid.UUID  `json:"seller_cabinet_id"`

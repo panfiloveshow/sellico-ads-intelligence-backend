@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ type priceServicer interface {
 	ListSchedules(ctx context.Context, workspaceID uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error)
 	CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error
 	ListQuarantine(ctx context.Context, workspaceID uuid.UUID) ([]domain.PriceQuarantineGood, error)
+	OrdersHeatmap(ctx context.Context, workspaceID, cabinetID uuid.UUID, wbProductID int64, from, to time.Time, metric string) (*domain.OrdersHeatmap, error)
 }
 
 // repricerEnqueuer enqueues an async repricer run for a workspace.
@@ -62,6 +64,44 @@ func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items))})
+}
+
+// Heatmap returns the 7×24 orders matrix (day-of-week × MSK hour) for planning
+// intraday price timers. seller_cabinet_id is required; wb_product_id optional.
+func (h *PriceHandler) Heatmap(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	q := r.URL.Query()
+	cabinetID, err := uuid.Parse(q.Get("seller_cabinet_id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "seller_cabinet_id is required")
+		return
+	}
+	var nmID int64
+	if raw := q.Get("wb_product_id"); raw != "" {
+		nmID, _ = strconv.ParseInt(raw, 10, 64)
+	}
+	to := time.Now()
+	from := to.AddDate(0, 0, -30)
+	if raw := q.Get("date_from"); raw != "" {
+		if parsed, perr := time.Parse("2006-01-02", raw); perr == nil {
+			from = parsed
+		}
+	}
+	if raw := q.Get("date_to"); raw != "" {
+		if parsed, perr := time.Parse("2006-01-02", raw); perr == nil {
+			to = parsed
+		}
+	}
+	hm, err := h.service.OrdersHeatmap(r.Context(), workspaceID, cabinetID, nmID, from, to, q.Get("metric"))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, hm)
 }
 
 // CabinetsStatus returns each cabinet's prices-scope status so the UI can warn

@@ -1222,6 +1222,7 @@ func (s *SyncService) syncBusinessReportsForCabinet(ctx context.Context, workspa
 	dateFrom := time.Now().In(time.FixedZone("MSK", 3*60*60)).AddDate(0, 0, -30).Format("2006-01-02")
 	summary := SyncSummary{Cabinets: 1}
 	daily := make(map[string]*productBusinessDaily)
+	hourly := make(map[hourlyOrdersKey]*hourlyOrdersAgg)
 
 	ordersCtx, cancelOrders := context.WithTimeout(ctx, businessReportFetchTimeout)
 	orders, ordersErr := s.wbClient.GetSupplierOrders(ordersCtx, token, dateFrom, 0)
@@ -1242,11 +1243,27 @@ func (s *SyncService) syncBusinessReportsForCabinet(ctx context.Context, workspa
 				summary.addIssue("business_orders.parse", fmt.Sprintf("%d", row.NmID), "date %q: %v", row.Date, err)
 				continue
 			}
+			revenue := rubToKopecks(reportRevenue(row.FinishedPrice, row.PriceWithDisc, row.TotalPrice))
 			item := dailyBusinessItem(daily, row.NmID, date, row.SupplierArticle, row.Brand, reportCategory(row.Category, row.Subject))
 			item.orders++
-			item.orderedRevenue += rubToKopecks(reportRevenue(row.FinishedPrice, row.PriceWithDisc, row.TotalPrice))
+			item.orderedRevenue += revenue
 			if row.IsCancel {
 				item.canceledOrders++
+			}
+			// Heatmap: same rows re-aggregated by MSK hour. Cancelled orders and
+			// date-only rows (no time-of-day) are skipped.
+			if !row.IsCancel {
+				if ts, ok := parseReportDateTime(row.Date); ok {
+					k := hourlyOrdersKey{nmID: row.NmID, date: ts.Format("2006-01-02"), hour: int16(ts.Hour())}
+					agg := hourly[k]
+					if agg == nil {
+						agg = &hourlyOrdersAgg{}
+						hourly[k] = agg
+					}
+					agg.orders++
+					agg.units++
+					agg.revenueKopecks += revenue
+				}
 			}
 		}
 	}
@@ -1317,7 +1334,45 @@ func (s *SyncService) syncBusinessReportsForCabinet(ctx context.Context, workspa
 		}
 	}
 
+	for k, agg := range hourly {
+		date, err := time.Parse("2006-01-02", k.date)
+		if err != nil {
+			continue
+		}
+		if err := s.queries.UpsertProductOrdersHourly(ctx, sqlcgen.UpsertProductOrdersHourlyParams{
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			WbProductID:     k.nmID,
+			Date:            pgDate(date),
+			Hour:            k.hour,
+			Orders:          agg.orders,
+			Units:           agg.units,
+			RevenueKopecks:  agg.revenueKopecks,
+		}); err != nil {
+			summary.addIssue("business_reports.hourly", fmt.Sprintf("%d", k.nmID), "upsert hourly orders: %v", err)
+		}
+	}
+	if len(hourly) > 0 {
+		if err := s.queries.DeleteOldProductOrdersHourly(ctx, uuidToPgtype(cabinetID)); err != nil {
+			s.logger.Warn().Err(err).Msg("hourly orders retention cleanup failed")
+		}
+	}
+
 	return summary, summary.Error()
+}
+
+// hourlyOrdersKey/hourlyOrdersAgg aggregate WB order rows into MSK hour buckets
+// for the repricer orders heatmap.
+type hourlyOrdersKey struct {
+	nmID int64
+	date string // 2006-01-02 (MSK)
+	hour int16
+}
+
+type hourlyOrdersAgg struct {
+	orders         int32
+	units          int32
+	revenueKopecks int64
 }
 
 func dailyBusinessItem(items map[string]*productBusinessDaily, nmID int64, date time.Time, title, brand, category string) *productBusinessDaily {
@@ -1343,6 +1398,29 @@ func dailyBusinessItem(items map[string]*productBusinessDaily, nmID int64, date 
 	}
 	items[key] = item
 	return item
+}
+
+// mskLocation is the WB statistics timezone: order timestamps come as
+// "2006-01-02T15:04:05" in Moscow time without a zone suffix.
+var mskLocation = time.FixedZone("MSK", 3*60*60)
+
+// parseReportDateTime extracts the full order timestamp (MSK). ok=false means
+// the row has no time-of-day (date-only) — heatmap aggregation must skip it,
+// otherwise every such order lands in a fake 00:00 peak.
+func parseReportDateTime(value string) (t time.Time, ok bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	if parsed, err := time.Parse("2006-01-02T15:04:05", value); err == nil {
+		return parsed, true // already wall-clock MSK
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.In(mskLocation), true
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.In(mskLocation), true
+	}
+	return time.Time{}, false
 }
 
 func parseReportDate(value string) (time.Time, error) {

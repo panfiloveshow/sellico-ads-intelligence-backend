@@ -214,6 +214,82 @@ func (q *Queries) SetProductStock(ctx context.Context, workspaceID, sellerCabine
 }
 
 // ---------------------------------------------------------------------------
+// hourly orders (heatmap source)
+// ---------------------------------------------------------------------------
+
+const upsertProductOrdersHourly = `
+INSERT INTO product_orders_hourly (workspace_id, seller_cabinet_id, wb_product_id, date, hour, orders, units, revenue_kopecks)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (seller_cabinet_id, wb_product_id, date, hour) DO UPDATE SET
+    orders = EXCLUDED.orders,
+    units = EXCLUDED.units,
+    revenue_kopecks = EXCLUDED.revenue_kopecks,
+    updated_at = now()
+`
+
+type UpsertProductOrdersHourlyParams struct {
+	WorkspaceID     pgtype.UUID
+	SellerCabinetID pgtype.UUID
+	WbProductID     int64
+	Date            pgtype.Date
+	Hour            int16
+	Orders          int32
+	Units           int32
+	RevenueKopecks  int64
+}
+
+func (q *Queries) UpsertProductOrdersHourly(ctx context.Context, p UpsertProductOrdersHourlyParams) error {
+	_, err := q.db.Exec(ctx, upsertProductOrdersHourly,
+		p.WorkspaceID, p.SellerCabinetID, p.WbProductID, p.Date, p.Hour, p.Orders, p.Units, p.RevenueKopecks)
+	return err
+}
+
+const deleteOldProductOrdersHourly = `
+DELETE FROM product_orders_hourly WHERE seller_cabinet_id = $1 AND date < now() - interval '60 days'
+`
+
+func (q *Queries) DeleteOldProductOrdersHourly(ctx context.Context, sellerCabinetID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteOldProductOrdersHourly, sellerCabinetID)
+	return err
+}
+
+// OrdersHeatmapCell is one aggregated (ISO day-of-week, hour) bucket.
+type OrdersHeatmapCell struct {
+	DayOfWeek int16 // 1=Mon .. 7=Sun
+	Hour      int16 // 0..23
+	Orders    int64
+	Units     int64
+	RevenueK  int64
+}
+
+const ordersHeatmap = `
+SELECT EXTRACT(ISODOW FROM date)::smallint AS dow, hour,
+    COALESCE(SUM(orders),0), COALESCE(SUM(units),0), COALESCE(SUM(revenue_kopecks),0)
+FROM product_orders_hourly
+WHERE workspace_id = $1 AND seller_cabinet_id = $2
+  AND ($3::bigint = 0 OR wb_product_id = $3)
+  AND date >= $4 AND date <= $5
+GROUP BY 1, 2
+`
+
+func (q *Queries) OrdersHeatmap(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64, from, to pgtype.Date) ([]OrdersHeatmapCell, error) {
+	rows, err := q.db.Query(ctx, ordersHeatmap, workspaceID, sellerCabinetID, wbProductID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OrdersHeatmapCell
+	for rows.Next() {
+		var c OrdersHeatmapCell
+		if err := rows.Scan(&c.DayOfWeek, &c.Hour, &c.Orders, &c.Units, &c.RevenueK); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
 // cabinet prices-scope status (for the frontend)
 // ---------------------------------------------------------------------------
 
