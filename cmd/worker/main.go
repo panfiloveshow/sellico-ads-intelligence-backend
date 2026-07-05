@@ -92,15 +92,17 @@ func main() {
 		service.WithRepricerNotifications(notificationService),
 	)
 	exportGenerator := service.NewExportGenerator(deps.Queries, cfg.ExportStoragePath)
-	// Sellico → product_economics cost bridge (feeds the margin-floor strategy).
+	// products-backend → product_economics cost bridge (feeds the margin-floor
+	// strategy). Separate host + shared service token, not the CRM token flow.
 	var economicsSyncService *service.SellicoEconomicsSyncService
-	if sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsExportPath != "" {
+	if cfg.ProductsAPIBaseURL != "" && cfg.ProductsAPIToken != "" && cfg.SellicoUnitEconomicsExportPath != "" {
+		productsClient := sellico.NewClient(cfg.ProductsAPIBaseURL, cfg.SellicoAPITimeout)
 		economicsSyncService = service.NewSellicoEconomicsSyncService(
-			deps.Queries, sellicoClient, sellicoTokenManager,
+			deps.Queries, productsClient, cfg.ProductsAPIToken,
 			service.NewProductEconomicsService(deps.Queries),
 			cfg.SellicoUnitEconomicsExportPath, deps.Logger,
 		)
-		deps.Logger.Info().Str("path", cfg.SellicoUnitEconomicsExportPath).Msg("sellico economics bridge enabled for repricer")
+		deps.Logger.Info().Str("base", cfg.ProductsAPIBaseURL).Str("path", cfg.SellicoUnitEconomicsExportPath).Msg("products economics bridge enabled for repricer")
 	}
 	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
 	if err != nil {

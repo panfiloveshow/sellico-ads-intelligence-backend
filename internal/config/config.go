@@ -66,6 +66,10 @@ type Config struct {
 	SellicoUnitEconomicsReadinessPath string        // env: SELLICO_UNIT_ECONOMICS_READINESS_PATH, optional; empty disables bid scale-up economics checks
 	SellicoUnitEconomicsExportPath    string        // env: SELLICO_UNIT_ECONOMICS_EXPORT_PATH, cost/commission/tax by nmID; empty disables the repricer economics bridge
 
+	// Products-backend (cost bridge) — separate host from the CRM (sellico.ru/api).
+	ProductsAPIBaseURL string // env: PRODUCTS_API_BASE_URL, default "https://products.sellico.ru/api"
+	ProductsAPIToken   string // env: PRODUCTS_API_TOKEN, shared secret for the economics export; empty disables the bridge
+
 	// Sellico service-account credentials. The backend uses them to call the
 	// service-account endpoints documented in financial-dashboard/rules.md
 	// (GET /get-integrations, GET /check-permission, etc.). One of these two
@@ -132,6 +136,8 @@ func Load() *Config {
 		SellicoAPITimeout:                 getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
 		SellicoUnitEconomicsReadinessPath: getEnvOrDefault("SELLICO_UNIT_ECONOMICS_READINESS_PATH", ""),
 		SellicoUnitEconomicsExportPath:    getEnvOrDefault("SELLICO_UNIT_ECONOMICS_EXPORT_PATH", "/products/unit-economics/export"),
+		ProductsAPIBaseURL:                getEnvOrDefault("PRODUCTS_API_BASE_URL", "https://products.sellico.ru/api"),
+		ProductsAPIToken:                  getEnvOrDefault("PRODUCTS_API_TOKEN", ""),
 		SellicoServiceToken:               getEnvOrDefault("SELLICO_API_TOKEN", ""),
 		SellicoServiceEmail:               getEnvOrDefault("SELLICO_EMAIL", ""),
 		SellicoServicePassword:            getEnvOrDefault("SELLICO_PASSWORD", ""),

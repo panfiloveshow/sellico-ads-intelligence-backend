@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"math"
 
 	"github.com/google/uuid"
@@ -23,32 +22,33 @@ type sellicoEconomicsClient interface {
 	ListWBUnitEconomics(ctx context.Context, serviceToken, path, integrationID string) ([]sellico.WBUnitEconomics, error)
 }
 
-// SellicoEconomicsSyncService pulls per-product cost/commission/tax from Sellico's
-// unit economics and mirrors it into product_economics so the repricer margin-floor
-// strategy has real data. Runs on a schedule; no user input needed.
+// SellicoEconomicsSyncService pulls per-product cost/commission/tax from the
+// products-backend unit economics and mirrors it into product_economics so the
+// repricer margin-floor strategy has real data. Backend-to-backend: authenticates
+// with a shared service token. Runs on a schedule; no user input needed.
 type SellicoEconomicsSyncService struct {
-	queries      *sqlcgen.Queries
-	client       sellicoEconomicsClient
-	tokenManager serviceTokenProvider
-	economics    economicsImporter
-	path         string
-	logger       zerolog.Logger
+	queries   *sqlcgen.Queries
+	client    sellicoEconomicsClient
+	token     string
+	economics economicsImporter
+	path      string
+	logger    zerolog.Logger
 }
 
-func NewSellicoEconomicsSyncService(queries *sqlcgen.Queries, client sellicoEconomicsClient, tokenManager serviceTokenProvider, economics economicsImporter, path string, logger zerolog.Logger) *SellicoEconomicsSyncService {
+func NewSellicoEconomicsSyncService(queries *sqlcgen.Queries, client sellicoEconomicsClient, token string, economics economicsImporter, path string, logger zerolog.Logger) *SellicoEconomicsSyncService {
 	return &SellicoEconomicsSyncService{
-		queries:      queries,
-		client:       client,
-		tokenManager: tokenManager,
-		economics:    economics,
-		path:         path,
-		logger:       logger.With().Str("component", "sellico_economics_sync").Logger(),
+		queries:   queries,
+		client:    client,
+		token:     token,
+		economics: economics,
+		path:      path,
+		logger:    logger.With().Str("component", "sellico_economics_sync").Logger(),
 	}
 }
 
 // Configured reports whether the bridge can run (client + token + path present).
 func (s *SellicoEconomicsSyncService) Configured() bool {
-	return s != nil && s.client != nil && s.tokenManager != nil && s.path != ""
+	return s != nil && s.client != nil && s.token != "" && s.path != ""
 }
 
 // SyncWorkspace mirrors Sellico cost data into product_economics for every
@@ -67,11 +67,6 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 		return 0, err
 	}
 
-	token, err := s.tokenManager.Get(ctx)
-	if err != nil {
-		return 0, err
-	}
-
 	imported := 0
 	for _, cab := range cabinets {
 		integrationID := pgTextValue(cab.ExternalIntegrationID)
@@ -79,15 +74,7 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 			continue // manual cabinet, no Sellico link
 		}
 
-		rows, err := s.client.ListWBUnitEconomics(ctx, token, s.path, integrationID)
-		if errors.Is(err, sellico.ErrUnauthorized) {
-			s.tokenManager.Invalidate()
-			token, err = s.tokenManager.Get(ctx)
-			if err != nil {
-				return imported, err
-			}
-			rows, err = s.client.ListWBUnitEconomics(ctx, token, s.path, integrationID)
-		}
+		rows, err := s.client.ListWBUnitEconomics(ctx, s.token, s.path, integrationID)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integrationID).Msg("fetch sellico economics failed")
 			continue
