@@ -90,10 +90,11 @@ type repricerRunner interface {
 	ExecuteDueSchedules(ctx context.Context, now time.Time) (int, error)
 	SyncQuarantine(ctx context.Context, workspaceID uuid.UUID) (int, error)
 	SyncPrices(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	SendDailyDigest(ctx context.Context, workspaceID uuid.UUID) error
 }
 
 type semanticsCollector interface {
-	CollectFromPhrases(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
@@ -355,15 +356,29 @@ func (p *Processor) HandleCollectKeywords(ctx context.Context, task *asynq.Task)
 		return fmt.Errorf("semantics collector not configured")
 	}
 	return p.runWithJobRun(ctx, TaskCollectKeywords, &workspaceID, payload, func() (map[string]any, error) {
-		fromPhrases, runErr := p.semantics.CollectFromPhrases(ctx, workspaceID)
-		if runErr != nil {
-			return nil, runErr
+		// Keywords are per-store: collect each active cabinet separately so a
+		// workspace running multiple stores never blends their keyword pools.
+		cabinets, err := p.queries.ListActiveSellerCabinetsByWorkspace(ctx, pgtype.UUID{Bytes: workspaceID, Valid: true})
+		if err != nil {
+			return nil, err
 		}
+
+		fromPhrases := 0
+		for _, cabinet := range cabinets {
+			cabinetID := uuid.UUID(cabinet.ID.Bytes)
+			count, runErr := p.semantics.CollectFromPhrases(ctx, workspaceID, cabinetID)
+			if runErr != nil {
+				return nil, runErr
+			}
+			fromPhrases += count
+		}
+
 		fromSERP, runErr := p.semantics.CollectFromSERP(ctx, workspaceID)
 		if runErr != nil {
 			return nil, runErr
 		}
 		return map[string]any{
+			"cabinets":     len(cabinets),
 			"from_phrases": fromPhrases,
 			"from_serp":    fromSERP,
 			"imported":     fromPhrases + fromSERP,
@@ -438,6 +453,23 @@ func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task
 // all workspaces, so the repricer view stays populated without a manual click.
 func (p *Processor) HandleSweepSyncPrices(ctx context.Context, _ *asynq.Task) error {
 	return p.runSweep(ctx, TaskSweepSyncPrices, TaskSyncPrices, QueueRepricer)
+}
+
+// HandleSweepRepricerDigest sends each workspace's daily repricer summary.
+func (p *Processor) HandleSweepRepricerDigest(ctx context.Context, _ *asynq.Task) error {
+	if p.repricer == nil {
+		return nil
+	}
+	workspaces, err := p.queries.ListWorkspaces(ctx, sqlcgen.ListWorkspacesParams{Limit: 1000, Offset: 0})
+	if err != nil {
+		return err
+	}
+	for _, w := range workspaces {
+		if err := p.repricer.SendDailyDigest(ctx, uuid.UUID(w.ID.Bytes)); err != nil {
+			p.logger.Warn().Err(err).Msg("repricer digest failed")
+		}
+	}
+	return nil
 }
 
 // HandleSyncPrices refreshes WB prices for a workspace (async, user-triggered).

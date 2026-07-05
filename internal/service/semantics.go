@@ -32,13 +32,11 @@ func NewSemanticsService(queries *sqlcgen.Queries, logger zerolog.Logger) *Seman
 	}
 }
 
-// CollectFromPhrases imports keywords from synced WB search phrases.
-func (s *SemanticsService) CollectFromPhrases(ctx context.Context, workspaceID uuid.UUID) (int, error) {
-	phrases, err := s.queries.ListPhrasesByWorkspace(ctx, sqlcgen.ListPhrasesByWorkspaceParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       5000,
-		Offset:      0,
-	})
+// CollectFromPhrases imports keywords from a single seller cabinet's synced WB
+// search phrases. Scoped to one cabinet so a workspace running multiple
+// stores never blends their keyword pools together.
+func (s *SemanticsService) CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error) {
+	phrases, err := s.queries.ListPhrasesForKeywordCollection(ctx, uuidToPgtype(sellerCabinetID), 5000)
 	if err != nil {
 		return 0, err
 	}
@@ -58,11 +56,12 @@ func (s *SemanticsService) CollectFromPhrases(ctx context.Context, workspaceID u
 		}
 
 		kw, err := s.queries.UpsertKeyword(ctx, sqlcgen.UpsertKeywordParams{
-			WorkspaceID: uuidToPgtype(workspaceID),
-			Query:       phrase.Keyword,
-			Normalized:  normalized,
-			Frequency:   frequency,
-			Source:      "wb_phrases",
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(sellerCabinetID),
+			Query:           phrase.Keyword,
+			Normalized:      normalized,
+			Frequency:       frequency,
+			Source:          "wb_phrases",
 		})
 		if err != nil {
 			continue
@@ -75,6 +74,7 @@ func (s *SemanticsService) CollectFromPhrases(ctx context.Context, workspaceID u
 
 	s.logger.Info().
 		Str("workspace_id", workspaceID.String()).
+		Str("seller_cabinet_id", sellerCabinetID.String()).
 		Int("imported", imported).
 		Msg("keywords collected from phrases")
 
@@ -101,7 +101,7 @@ func (s *SemanticsService) CollectFromSERP(ctx context.Context, workspaceID uuid
 		}
 		seen[normalized] = true
 
-		_, err := s.queries.UpsertKeyword(ctx, sqlcgen.UpsertKeywordParams{
+		_, err := s.queries.UpsertWorkspaceKeyword(ctx, sqlcgen.UpsertKeywordParams{
 			WorkspaceID: uuidToPgtype(workspaceID),
 			Query:       snap.Query,
 			Normalized:  normalized,
@@ -117,13 +117,13 @@ func (s *SemanticsService) CollectFromSERP(ctx context.Context, workspaceID uuid
 	return imported, nil
 }
 
-// ListKeywords returns keywords for a workspace with optional search.
-func (s *SemanticsService) ListKeywords(ctx context.Context, workspaceID uuid.UUID, search string, limit, offset int32) ([]domain.Keyword, error) {
+// ListKeywords returns a seller cabinet's keywords with optional search.
+func (s *SemanticsService) ListKeywords(ctx context.Context, sellerCabinetID uuid.UUID, search string, limit, offset int32) ([]domain.Keyword, error) {
 	rows, err := s.queries.ListKeywords(ctx, sqlcgen.ListKeywordsParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Search:      textToPgtype(search),
-		Limit:       limit,
-		Offset:      offset,
+		SellerCabinetID: uuidToPgtype(sellerCabinetID),
+		Search:          textToPgtype(search),
+		Limit:           limit,
+		Offset:          offset,
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to list keywords")
@@ -136,12 +136,12 @@ func (s *SemanticsService) ListKeywords(ctx context.Context, workspaceID uuid.UU
 	return result, nil
 }
 
-// AutoCluster groups keywords by prefix similarity.
-func (s *SemanticsService) AutoCluster(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+// AutoCluster groups a seller cabinet's keywords by prefix similarity.
+func (s *SemanticsService) AutoCluster(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error) {
 	keywords, err := s.queries.ListKeywords(ctx, sqlcgen.ListKeywordsParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       5000,
-		Offset:      0,
+		SellerCabinetID: uuidToPgtype(sellerCabinetID),
+		Limit:           5000,
+		Offset:          0,
 	})
 	if err != nil {
 		return 0, err
@@ -165,18 +165,17 @@ func (s *SemanticsService) AutoCluster(ctx context.Context, workspaceID uuid.UUI
 
 		// Find highest-frequency keyword as main
 		var main sqlcgen.KeywordRow
-		totalFreq := int32(0)
 		for _, m := range members {
-			totalFreq += m.Frequency
 			if m.Frequency > main.Frequency {
 				main = m
 			}
 		}
 
 		cluster, err := s.queries.CreateKeywordCluster(ctx, sqlcgen.CreateKeywordClusterParams{
-			WorkspaceID: uuidToPgtype(workspaceID),
-			Name:        prefix,
-			MainKeyword: main.Normalized,
+			WorkspaceID:     uuidToPgtype(workspaceID),
+			SellerCabinetID: uuidToPgtype(sellerCabinetID),
+			Name:            prefix,
+			MainKeyword:     main.Normalized,
 		})
 		if err != nil {
 			continue
@@ -191,6 +190,7 @@ func (s *SemanticsService) AutoCluster(ctx context.Context, workspaceID uuid.UUI
 
 	s.logger.Info().
 		Str("workspace_id", workspaceID.String()).
+		Str("seller_cabinet_id", sellerCabinetID.String()).
 		Int("clusters_created", created).
 		Int("total_keywords", len(keywords)).
 		Msg("auto-clustering completed")
@@ -198,9 +198,9 @@ func (s *SemanticsService) AutoCluster(ctx context.Context, workspaceID uuid.UUI
 	return created, nil
 }
 
-// ListClusters returns keyword clusters for a workspace.
-func (s *SemanticsService) ListClusters(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.KeywordCluster, error) {
-	rows, err := s.queries.ListKeywordClusters(ctx, uuidToPgtype(workspaceID), limit, offset)
+// ListClusters returns a seller cabinet's keyword clusters.
+func (s *SemanticsService) ListClusters(ctx context.Context, sellerCabinetID uuid.UUID, limit, offset int32) ([]domain.KeywordCluster, error) {
+	rows, err := s.queries.ListKeywordClusters(ctx, uuidToPgtype(sellerCabinetID), limit, offset)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to list clusters")
 	}
@@ -208,25 +208,26 @@ func (s *SemanticsService) ListClusters(ctx context.Context, workspaceID uuid.UU
 	result := make([]domain.KeywordCluster, len(rows))
 	for i, row := range rows {
 		result[i] = domain.KeywordCluster{
-			ID:             uuidFromPgtype(row.ID),
-			WorkspaceID:    uuidFromPgtype(row.WorkspaceID),
-			Name:           row.Name,
-			MainKeyword:    row.MainKeyword,
-			KeywordCount:   int(row.KeywordCount),
-			TotalFrequency: int(row.TotalFrequency),
-			CreatedAt:      row.CreatedAt.Time,
-			UpdatedAt:      row.UpdatedAt.Time,
+			ID:              uuidFromPgtype(row.ID),
+			WorkspaceID:     uuidFromPgtype(row.WorkspaceID),
+			SellerCabinetID: uuidFromPgtype(row.SellerCabinetID),
+			Name:            row.Name,
+			MainKeyword:     row.MainKeyword,
+			KeywordCount:    int(row.KeywordCount),
+			TotalFrequency:  int(row.TotalFrequency),
+			CreatedAt:       row.CreatedAt.Time,
+			UpdatedAt:       row.UpdatedAt.Time,
 		}
 	}
 	return result, nil
 }
 
-// UpdateFrequencies refreshes frequency data for top keywords using total search results as proxy.
-func (s *SemanticsService) UpdateFrequencies(ctx context.Context, workspaceID uuid.UUID) (int, error) {
+// UpdateFrequencies refreshes frequency data for a seller cabinet's top keywords.
+func (s *SemanticsService) UpdateFrequencies(ctx context.Context, sellerCabinetID uuid.UUID) (int, error) {
 	keywords, err := s.queries.ListKeywords(ctx, sqlcgen.ListKeywordsParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       200,
-		Offset:      0,
+		SellerCabinetID: uuidToPgtype(sellerCabinetID),
+		Limit:           200,
+		Offset:          0,
 	})
 	if err != nil {
 		return 0, err
@@ -241,7 +242,7 @@ func (s *SemanticsService) UpdateFrequencies(ctx context.Context, workspaceID uu
 	}
 
 	s.logger.Info().
-		Str("workspace_id", workspaceID.String()).
+		Str("seller_cabinet_id", sellerCabinetID.String()).
 		Int("updated", updated).
 		Msg("keyword frequencies updated")
 
@@ -266,18 +267,18 @@ func (s *SemanticsService) GetFrequencyHistory(ctx context.Context, keywordID uu
 	return result, nil
 }
 
-// FindRelated finds keywords related to a given keyword by prefix matching.
-func (s *SemanticsService) FindRelated(ctx context.Context, workspaceID uuid.UUID, query string, limit int32) ([]domain.Keyword, error) {
+// FindRelated finds a seller cabinet's keywords related to a given keyword by prefix matching.
+func (s *SemanticsService) FindRelated(ctx context.Context, sellerCabinetID uuid.UUID, query string, limit int32) ([]domain.Keyword, error) {
 	normalized := normalizeKeyword(query)
 	if normalized == "" {
 		return nil, nil
 	}
 
 	rows, err := s.queries.ListKeywords(ctx, sqlcgen.ListKeywordsParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Search:      textToPgtype(normalized),
-		Limit:       limit,
-		Offset:      0,
+		SellerCabinetID: uuidToPgtype(sellerCabinetID),
+		Search:          textToPgtype(normalized),
+		Limit:           limit,
+		Offset:          0,
 	})
 	if err != nil {
 		return nil, err
@@ -319,15 +320,16 @@ func clusterPrefix(normalized string) string {
 
 func keywordFromSqlc(row sqlcgen.KeywordRow) domain.Keyword {
 	kw := domain.Keyword{
-		ID:             uuidFromPgtype(row.ID),
-		WorkspaceID:    uuidFromPgtype(row.WorkspaceID),
-		Query:          row.Query,
-		Normalized:     row.Normalized,
-		Frequency:      int(row.Frequency),
-		FrequencyTrend: row.FrequencyTrend,
-		Source:         row.Source,
-		CreatedAt:      row.CreatedAt.Time,
-		UpdatedAt:      row.UpdatedAt.Time,
+		ID:              uuidFromPgtype(row.ID),
+		WorkspaceID:     uuidFromPgtype(row.WorkspaceID),
+		SellerCabinetID: uuidFromPgtype(row.SellerCabinetID),
+		Query:           row.Query,
+		Normalized:      row.Normalized,
+		Frequency:       int(row.Frequency),
+		FrequencyTrend:  row.FrequencyTrend,
+		Source:          row.Source,
+		CreatedAt:       row.CreatedAt.Time,
+		UpdatedAt:       row.UpdatedAt.Time,
 	}
 	if row.ClusterID.Valid {
 		id := uuidFromPgtype(row.ClusterID)

@@ -30,11 +30,12 @@ func NewSEOAnalyzerService(queries *sqlcgen.Queries, semantics *SemanticsService
 
 // AnalyzeProduct runs SEO analysis on a single product card.
 func (s *SEOAnalyzerService) AnalyzeProduct(ctx context.Context, workspaceID uuid.UUID, product domain.Product) (*domain.SEOAnalysis, error) {
-	// Get top keywords for this workspace
+	// Get top keywords for this product's own store — not the whole workspace,
+	// which may run other stores in unrelated niches.
 	keywords, _ := s.queries.ListKeywords(ctx, sqlcgen.ListKeywordsParams{
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Limit:       100,
-		Offset:      0,
+		SellerCabinetID: uuidToPgtype(product.SellerCabinetID),
+		Limit:           100,
+		Offset:          0,
 	})
 
 	topKeywords := make([]string, 0, len(keywords))

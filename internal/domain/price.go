@@ -249,6 +249,18 @@ type OrdersHeatmap struct {
 	Peak     *HeatmapPeak  `json:"peak,omitempty"`
 }
 
+// RepricerHealth is a one-glance status summary for the repricer UI.
+type RepricerHealth struct {
+	Products         int        `json:"products"`
+	WithPrice        int        `json:"with_price"`
+	ActiveStrategies int        `json:"active_strategies"`
+	AppliedToday     int        `json:"applied_today"`     // price changes applied in the last 24h
+	Recommendations  int        `json:"recommendations"`   // dry-run recommendations pending, last 24h
+	FailedToday      int        `json:"failed_today"`      // failed uploads, last 24h
+	LastSyncAt       *time.Time `json:"last_sync_at,omitempty"`
+	PausedUntil      *time.Time `json:"paused_until,omitempty"`
+}
+
 // CabinetPricesScope reports whether a cabinet's WB token can read/write prices.
 type CabinetPricesScope struct {
 	SellerCabinetID   uuid.UUID  `json:"seller_cabinet_id"`

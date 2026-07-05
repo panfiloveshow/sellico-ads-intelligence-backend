@@ -366,3 +366,21 @@ func TestDecidePeakHours(t *testing.T) {
 		assert.Equal(t, int64(1030), d.TargetEffectiveRub)
 	})
 }
+
+func TestDecideCompetitorFollow(t *testing.T) {
+	params := domain.StrategyParams{StepPercent: 10, UndercutPercent: 5, MaxDiscountPercent: 40}
+
+	t.Run("undercut competitor median, capped by step", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
+		d := DecideCompetitorFollow(in, params, 800) // target 800×0.95=760, step −10% → 900, floor 600
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "down", d.Direction)
+		assert.Equal(t, int64(900), d.TargetEffectiveRub)
+	})
+
+	t.Run("no competitor price → skip", func(t *testing.T) {
+		d := DecideCompetitorFollow(PriceEngineInputs{Current: price(1000, 0, 1000)}, params, 0)
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "no_competitor_price", d.SkipReason)
+	})
+}

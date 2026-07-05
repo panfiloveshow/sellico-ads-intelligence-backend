@@ -30,6 +30,8 @@ type priceServicer interface {
 	CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error
 	ListQuarantine(ctx context.Context, workspaceID uuid.UUID) ([]domain.PriceQuarantineGood, error)
 	OrdersHeatmap(ctx context.Context, workspaceID, cabinetID uuid.UUID, wbProductID int64, from, to time.Time, metric string) (*domain.OrdersHeatmap, error)
+	SetPause(ctx context.Context, workspaceID, cabinetID uuid.UUID, until *time.Time) error
+	Health(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.RepricerHealth, error)
 }
 
 // repricerEnqueuer enqueues an async repricer run for a workspace.
@@ -102,6 +104,53 @@ func (h *PriceHandler) Heatmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, hm)
+}
+
+// Health returns the repricer status summary for a cabinet.
+func (h *PriceHandler) Health(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	cabinetID, err := uuid.Parse(r.URL.Query().Get("seller_cabinet_id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "seller_cabinet_id is required")
+		return
+	}
+	res, err := h.service.Health(r.Context(), workspaceID, cabinetID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, res)
+}
+
+// Pause freezes (or, with until=null, unfreezes) a cabinet's repricer auto-apply.
+func (h *PriceHandler) Pause(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	var body struct {
+		SellerCabinetID string     `json:"seller_cabinet_id"`
+		Until           *time.Time `json:"until"` // null = unfreeze
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	cabinetID, err := uuid.Parse(body.SellerCabinetID)
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "seller_cabinet_id is required")
+		return
+	}
+	if err := h.service.SetPause(r.Context(), workspaceID, cabinetID, body.Until); err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // CabinetsStatus returns each cabinet's prices-scope status so the UI can warn

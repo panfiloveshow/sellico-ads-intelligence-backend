@@ -140,7 +140,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 	case domain.StrategyTypePriceMarginFloor,
 		domain.StrategyTypePriceInventoryDemand,
 		domain.StrategyTypePriceAdLinked,
-		domain.StrategyTypePricePeakHours:
+		domain.StrategyTypePricePeakHours,
+		domain.StrategyTypePriceCompetitorFollow:
 		return validatePriceStrategy(input)
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid strategy type")
@@ -231,6 +232,9 @@ func validatePriceStrategy(input domain.Strategy) error {
 	}
 	if p.MaxDiscountPercent < 0 || p.MaxDiscountPercent > 95 {
 		return apperror.New(apperror.ErrValidation, "max_discount_percent must be between 0 and 95")
+	}
+	if p.UndercutPercent < 0 || p.UndercutPercent > 95 {
+		return apperror.New(apperror.ErrValidation, "undercut_percent must be between 0 and 95")
 	}
 	// Upward moves need a ceiling, but the engine already skips them without one
 	// ("max_price_required_for_increase") — a down-only inventory strategy is

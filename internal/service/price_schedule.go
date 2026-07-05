@@ -126,6 +126,14 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 	workspaceID := uuidFromPgtype(row.WorkspaceID)
 	cabinetID := uuidFromPgtype(row.SellerCabinetID)
 
+	// Freeze switch: a paused cabinet defers its scheduled entries (they stay
+	// 'planned' and fire once unfrozen).
+	if paused, err := s.queries.PausedCabinets(ctx, row.WorkspaceID); err == nil {
+		if _, frozen := paused[cabinetID.String()]; frozen {
+			return
+		}
+	}
+
 	prices, err := s.queries.ListProductPricesByCabinet(ctx, row.SellerCabinetID)
 	if err != nil {
 		s.failSchedule(ctx, entryID, err.Error())

@@ -28,6 +28,8 @@ type repricerData struct {
 	hasActiveCampaign map[int64]bool
 	drrByNm           map[int64]float64 // ad DRR % over the lookback window
 	intensityByNm     map[int64]float64 // current MSK-slot order intensity 0..1 (price_peak_hours)
+	competitorByNm    map[int64]int64   // competitor median price, rubles (price_competitor_follow)
+	pausedCabinets    map[string]bool   // cabinets whose repricer is frozen (no auto-apply)
 }
 
 type stockInfo struct {
@@ -71,7 +73,9 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 	var autoIntents []priceChangeIntent
 	for _, st := range priceStrategies {
 		params := st.Params.MergedPriceParams()
-		auto := params.PriceApplyMode == domain.PriceApplyModeAuto
+		// Freeze switch: a paused cabinet keeps producing recommendations but
+		// never auto-applies.
+		auto := params.PriceApplyMode == domain.PriceApplyModeAuto && !data.pausedCabinets[st.SellerCabinetID.String()]
 		for _, nm := range s.targetNmIDs(st, data) {
 			decision, ctxInfo, ok := s.evaluateProduct(ctx, workspaceID, st, params, nm, data)
 			if !ok {
@@ -192,6 +196,8 @@ func (s *RepricerService) evaluateProduct(ctx context.Context, workspaceID uuid.
 		decision = DecideAdLinked(in, params)
 	case domain.StrategyTypePricePeakHours:
 		decision = DecidePeakHours(in, params, data.intensityByNm[nm])
+	case domain.StrategyTypePriceCompetitorFollow:
+		decision = DecideCompetitorFollow(in, params, data.competitorByNm[nm])
 	default:
 		return PriceDecision{}, nil, false
 	}
@@ -249,15 +255,28 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 		hasActiveCampaign: map[int64]bool{},
 		drrByNm:           map[int64]float64{},
 		intensityByNm:     map[int64]float64{},
+		competitorByNm:    map[int64]int64{},
+		pausedCabinets:    map[string]bool{},
+	}
+
+	// Frozen cabinets (freeze switch): recommendations still compute, but no
+	// auto-apply.
+	if paused, err := s.queries.PausedCabinets(ctx, uuidToPgtype(workspaceID)); err == nil {
+		for id := range paused {
+			data.pausedCabinets[id] = true
+		}
 	}
 
 	// Cabinets referenced by the strategies.
 	cabinets := map[uuid.UUID]struct{}{}
-	hasPeakHours := false
+	hasPeakHours, hasCompetitor := false, false
 	for _, st := range strategies {
 		cabinets[st.SellerCabinetID] = struct{}{}
 		if st.Type == domain.StrategyTypePricePeakHours {
 			hasPeakHours = true
+		}
+		if st.Type == domain.StrategyTypePriceCompetitorFollow {
+			hasCompetitor = true
 		}
 	}
 
@@ -379,6 +398,21 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 	}
 	for _, g := range quar {
 		data.activeQuarNm[g.WbProductID] = struct{}{}
+	}
+
+	// Competitor median prices (price_competitor_follow), mapped product_id → nmID.
+	if hasCompetitor {
+		if byProduct, err := s.queries.CompetitorMedianByProduct(ctx, uuidToPgtype(workspaceID)); err == nil {
+			for pidStr, median := range byProduct {
+				if pid, perr := uuid.Parse(pidStr); perr == nil {
+					if nm, ok := data.nmByProductID[pid]; ok {
+						data.competitorByNm[nm] = median
+					}
+				}
+			}
+		} else {
+			s.logger.Warn().Err(err).Msg("competitor price load failed")
+		}
 	}
 
 	return data, nil

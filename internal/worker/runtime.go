@@ -69,6 +69,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskExecutePriceSchedule, processor.HandleExecutePriceSchedules)
 	mux.HandleFunc(TaskSyncPrices, processor.HandleSyncPrices)
 	mux.HandleFunc(TaskSweepSyncPrices, processor.HandleSweepSyncPrices)
+	mux.HandleFunc(TaskSweepRepricerDigest, processor.HandleSweepRepricerDigest)
 	mux.HandleFunc(TaskCollectKeywords, processor.HandleCollectKeywords)
 	mux.HandleFunc(TaskSweepCollectKeywords, processor.HandleSweepCollectKeywords)
 	mux.HandleFunc(TaskExtractCompetitors, processor.HandleExtractCompetitors)
@@ -138,7 +139,11 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		{recInterval, TaskSweepRecommendations, QueueRecommendations},
 		{bidInterval, TaskSweepBidAutomation, QueueBidAutomation},
 		{cfg.RepricerInterval, TaskSweepSyncPrices, QueueRepricer},
-		{cfg.RepricerInterval, TaskSweepRepricer, QueueRepricer},
+		// Strategy engine on the top of the hour so demand-based (peak-hours)
+		// pricing lands the right price at the hour boundary, not a boot-offset.
+		{"@hourly", TaskSweepRepricer, QueueRepricer},
+		// Daily digest at 06:00 UTC (09:00 MSK).
+		{"0 6 * * *", TaskSweepRepricerDigest, QueueRepricer},
 		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricer},
 		{cfg.RepricerScheduleInterval, TaskExecutePriceSchedule, QueueRepricer},
 		{syncInterval, TaskSweepCollectKeywords, QueueSemantics},

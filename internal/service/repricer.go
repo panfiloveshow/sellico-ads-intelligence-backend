@@ -355,6 +355,68 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 	}
 }
 
+// SetPause freezes (or unfreezes) a cabinet's repricer auto-apply until the
+// given time. until=nil unfreezes immediately.
+func (s *RepricerService) SetPause(ctx context.Context, workspaceID, cabinetID uuid.UUID, until *time.Time) error {
+	ts := pgtype.Timestamptz{}
+	if until != nil {
+		ts = pgtype.Timestamptz{Time: *until, Valid: true}
+	}
+	return s.queries.SetCabinetRepricerPause(ctx, uuidToPgtype(cabinetID), ts, uuidToPgtype(workspaceID))
+}
+
+// Health returns a one-glance repricer status summary for a cabinet.
+func (s *RepricerService) Health(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.RepricerHealth, error) {
+	r, err := s.queries.RepricerHealth(ctx, uuidToPgtype(workspaceID), uuidToPgtype(cabinetID))
+	if err != nil {
+		return nil, err
+	}
+	h := &domain.RepricerHealth{
+		Products:         int(r.Products),
+		WithPrice:        int(r.WithPrice),
+		ActiveStrategies: int(r.ActiveStrategies),
+		AppliedToday:     int(r.ChangesApplied),
+		Recommendations:  int(r.Recommendations),
+		FailedToday:      int(r.Failed),
+	}
+	if r.LastSyncAt.Valid {
+		t := r.LastSyncAt.Time
+		h.LastSyncAt = &t
+	}
+	if r.PausedUntil.Valid && r.PausedUntil.Time.After(time.Now()) {
+		t := r.PausedUntil.Time
+		h.PausedUntil = &t
+	}
+	return h, nil
+}
+
+// SendDailyDigest notifies the workspace with a repricer summary and suggests
+// promoting well-behaving dry-run strategies to auto. No-op when nothing happened.
+func (s *RepricerService) SendDailyDigest(ctx context.Context, workspaceID uuid.UUID) error {
+	if s.notifications == nil {
+		return nil
+	}
+	applied, recommendations, failed, err := s.queries.RepricerDigestCounts(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return err
+	}
+	var promoteReady []string
+	if failed == 0 && recommendations > 0 && s.strategies != nil {
+		if active, err := s.strategies.ListActive(ctx, workspaceID); err == nil {
+			weekAgo := time.Now().Add(-7 * 24 * time.Hour)
+			for _, st := range active {
+				if domain.IsPriceStrategy(st.Type) &&
+					st.Params.MergedPriceParams().PriceApplyMode == domain.PriceApplyModeDryRun &&
+					st.CreatedAt.Before(weekAgo) {
+					promoteReady = append(promoteReady, st.Name)
+				}
+			}
+		}
+	}
+	s.notifications.NotifyRepricerDigest(ctx, workspaceID, int(applied), int(recommendations), int(failed), promoteReady)
+	return nil
+}
+
 // ListCabinetsScope reports each cabinet's prices-scope status for the workspace.
 func (s *RepricerService) ListCabinetsScope(ctx context.Context, workspaceID uuid.UUID) ([]domain.CabinetPricesScope, error) {
 	rows, err := s.queries.ListCabinetPricesScope(ctx, uuidToPgtype(workspaceID))

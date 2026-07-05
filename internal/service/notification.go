@@ -158,6 +158,33 @@ func (s *NotificationService) NotifyPriceQuarantine(ctx context.Context, workspa
 	s.sendEmailReport(ctx, workspaceID, settings, settings.Notifications != nil && settings.Notifications.Email != nil, "WB: товары в карантине цен", sb.String(), "price quarantine")
 }
 
+// NotifyRepricerDigest sends the daily repricer summary: what was applied, how
+// many recommendations wait, and which dry-run strategies look ready for auto.
+func (s *NotificationService) NotifyRepricerDigest(ctx context.Context, workspaceID uuid.UUID, applied, recommendations, failed int, promoteReady []string) {
+	if applied == 0 && recommendations == 0 && failed == 0 {
+		return
+	}
+	settings := s.loadSettings(ctx, workspaceID)
+	if settings == nil {
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("Репрайсер за сутки:\n")
+	fmt.Fprintf(&sb, "• Применено изменений цен: %d\n", applied)
+	fmt.Fprintf(&sb, "• Рекомендаций ждут: %d\n", recommendations)
+	if failed > 0 {
+		fmt.Fprintf(&sb, "• Ошибок загрузки: %d\n", failed)
+	}
+	if len(promoteReady) > 0 {
+		sb.WriteString("\nСтратегии стабильно советуют — можно включить авто-применение:\n")
+		for _, name := range promoteReady {
+			fmt.Fprintf(&sb, "• %s\n", name)
+		}
+	}
+	s.sendTelegramText(ctx, workspaceID, settings, sb.String(), "repricer digest")
+	s.sendEmailReport(ctx, workspaceID, settings, settings.Notifications != nil && settings.Notifications.Email != nil, "Репрайсер: сводка за сутки", sb.String(), "repricer digest")
+}
+
 // NotifyPriceUploadResult alerts when a price upload batch fails or partially fails.
 func (s *NotificationService) NotifyPriceUploadResult(ctx context.Context, workspaceID uuid.UUID, itemsCount int, outcome string) {
 	if outcome != "failed" && outcome != "partial" {

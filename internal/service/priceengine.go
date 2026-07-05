@@ -325,6 +325,55 @@ func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensi
 	return priceMove(in, dir, target, floor, fmt.Sprintf("demand %.0f%%, %s to %d₽ (band −%.0f%%..+%.0f%%)", intensity*100, dir, target, dead, uplift))
 }
 
+// DecideCompetitorFollow tracks the market: target effective price = competitor
+// median × (1 − undercut%), clamped to the product floor and capped by step%.
+// competitorPrice ≤ 0 (no competitor data for this product) → skip.
+func DecideCompetitorFollow(in PriceEngineInputs, params domain.StrategyParams, competitorPrice int64) PriceDecision {
+	p := params.MergedPriceParams()
+	if competitorPrice <= 0 {
+		return skip("no_competitor_price")
+	}
+	current := in.Current.EffectivePriceRub()
+	if current <= 0 {
+		return skip("invalid_current_price")
+	}
+	floor, reason := resolveFloor(in, p)
+	if reason != "" {
+		return skip(reason)
+	}
+
+	target := int64(math.Round(float64(competitorPrice) * (1 - p.UndercutPercent/100)))
+	if target < floor {
+		target = floor
+	}
+	step := p.StepPercent / 100
+	if target > current {
+		if capped := int64(math.Round(float64(current) * (1 + step))); target > capped {
+			target = capped
+		}
+	} else if target < current {
+		if capped := int64(math.Round(float64(current) * (1 - step))); target < capped {
+			target = capped
+		}
+		if target < floor {
+			target = floor
+		}
+	}
+
+	diff := target - current
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff == 0 || float64(diff) < math.Max(1, float64(current)*0.01) {
+		return noChange("near_competitor", floor)
+	}
+	dir := "up"
+	if target < current {
+		dir = "down"
+	}
+	return priceMove(in, dir, target, floor, fmt.Sprintf("competitor median %d₽, %s to %d₽ (−%.0f%%)", competitorPrice, dir, target, p.UndercutPercent))
+}
+
 // priceMove builds a change decision for a target effective price.
 func priceMove(in PriceEngineInputs, direction string, targetEffective, floor int64, reason string) PriceDecision {
 	return PriceDecision{

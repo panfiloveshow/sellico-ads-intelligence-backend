@@ -6,18 +6,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// Keyword represents a collected search query with frequency metadata.
+// Keyword represents a collected search query with frequency metadata,
+// scoped to the seller cabinet (store) it was collected from.
 type Keyword struct {
-	ID             uuid.UUID  `json:"id"`
-	WorkspaceID    uuid.UUID  `json:"workspace_id"`
-	Query          string     `json:"query"`
-	Normalized     string     `json:"normalized"`
-	Frequency      int        `json:"frequency"`
-	FrequencyTrend string     `json:"frequency_trend"` // rising, falling, stable
-	ClusterID      *uuid.UUID `json:"cluster_id,omitempty"`
-	Source         string     `json:"source"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID              uuid.UUID  `json:"id"`
+	WorkspaceID     uuid.UUID  `json:"workspace_id"`
+	SellerCabinetID uuid.UUID  `json:"seller_cabinet_id"`
+	Query           string     `json:"query"`
+	Normalized      string     `json:"normalized"`
+	Frequency       int        `json:"frequency"`
+	FrequencyTrend  string     `json:"frequency_trend"` // rising, falling, stable
+	ClusterID       *uuid.UUID `json:"cluster_id,omitempty"`
+	Source          string     `json:"source"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // KeywordFrequencyPoint represents a single frequency measurement.
@@ -28,17 +30,19 @@ type KeywordFrequencyPoint struct {
 	CheckedAt time.Time `json:"checked_at"`
 }
 
-// KeywordCluster groups related keywords by semantic similarity.
+// KeywordCluster groups related keywords by semantic similarity, scoped to
+// the seller cabinet (store) the keywords were collected from.
 type KeywordCluster struct {
-	ID             uuid.UUID `json:"id"`
-	WorkspaceID    uuid.UUID `json:"workspace_id"`
-	Name           string    `json:"name"`
-	MainKeyword    string    `json:"main_keyword"`
-	KeywordCount   int       `json:"keyword_count"`
-	TotalFrequency int       `json:"total_frequency"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	Keywords       []Keyword `json:"keywords,omitempty"`
+	ID              uuid.UUID `json:"id"`
+	WorkspaceID     uuid.UUID `json:"workspace_id"`
+	SellerCabinetID uuid.UUID `json:"seller_cabinet_id"`
+	Name            string    `json:"name"`
+	MainKeyword     string    `json:"main_keyword"`
+	KeywordCount    int       `json:"keyword_count"`
+	TotalFrequency  int       `json:"total_frequency"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Keywords        []Keyword `json:"keywords,omitempty"`
 }
 
 // KeywordRelation represents a relationship between two keywords.

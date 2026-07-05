@@ -479,6 +479,8 @@ func NewRouter(deps RouterDeps) chi.Router {
 						prices.Get("/quarantine", deps.PriceHandler.ListQuarantine)
 						prices.Get("/cabinets-status", deps.PriceHandler.CabinetsStatus)
 						prices.Get("/heatmap", deps.PriceHandler.Heatmap)
+						prices.Get("/health", deps.PriceHandler.Health)
+						prices.With(middleware.RequireWriteAccess()).Post("/pause", deps.PriceHandler.Pause)
 					} else {
 						prices.Get("/", notImplemented)
 						prices.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
@@ -486,6 +488,8 @@ func NewRouter(deps RouterDeps) chi.Router {
 						prices.Get("/quarantine", notImplemented)
 						prices.Get("/cabinets-status", notImplemented)
 						prices.Get("/heatmap", notImplemented)
+						prices.Get("/health", notImplemented)
+						prices.With(middleware.RequireWriteAccess()).Post("/pause", notImplemented)
 					}
 				})
 				scoped.Route("/price-changes", func(pc chi.Router) {

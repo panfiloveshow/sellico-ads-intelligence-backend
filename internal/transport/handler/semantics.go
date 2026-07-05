@@ -15,10 +15,10 @@ import (
 )
 
 type semanticsServicer interface {
-	ListKeywords(ctx context.Context, workspaceID uuid.UUID, search string, limit, offset int32) ([]domain.Keyword, error)
-	CollectFromPhrases(ctx context.Context, workspaceID uuid.UUID) (int, error)
-	AutoCluster(ctx context.Context, workspaceID uuid.UUID) (int, error)
-	ListClusters(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.KeywordCluster, error)
+	ListKeywords(ctx context.Context, sellerCabinetID uuid.UUID, search string, limit, offset int32) ([]domain.Keyword, error)
+	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
+	AutoCluster(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
+	ListClusters(ctx context.Context, sellerCabinetID uuid.UUID, limit, offset int32) ([]domain.KeywordCluster, error)
 }
 
 type SemanticsHandler struct {
@@ -29,15 +29,30 @@ func NewSemanticsHandler(svc semanticsServicer) *SemanticsHandler {
 	return &SemanticsHandler{svc: svc}
 }
 
+// requireSellerCabinetID reads the mandatory seller_cabinet_id query param.
+// Keywords/clusters are per-store data — a workspace with multiple cabinets
+// (stores in different niches) would otherwise blend them into one pool.
+func requireSellerCabinetID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil || id == nil {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "seller_cabinet_id is required"))
+		return uuid.UUID{}, false
+	}
+	return *id, true
+}
+
 func (h *SemanticsHandler) ListKeywords(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
-	if !ok {
+	if _, ok := middleware.WorkspaceIDFromContext(r.Context()); !ok {
 		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	sellerCabinetID, ok := requireSellerCabinetID(w, r)
+	if !ok {
 		return
 	}
 	pg := pagination.Parse(r)
 	search := r.URL.Query().Get("search")
-	keywords, err := h.svc.ListKeywords(r.Context(), workspaceID, search, int32(pg.PerPage), int32(pg.Offset()))
+	keywords, err := h.svc.ListKeywords(r.Context(), sellerCabinetID, search, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -51,7 +66,11 @@ func (h *SemanticsHandler) CollectKeywords(w http.ResponseWriter, r *http.Reques
 		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
 		return
 	}
-	count, err := h.svc.CollectFromPhrases(r.Context(), workspaceID)
+	sellerCabinetID, ok := requireSellerCabinetID(w, r)
+	if !ok {
+		return
+	}
+	count, err := h.svc.CollectFromPhrases(r.Context(), workspaceID, sellerCabinetID)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -65,7 +84,11 @@ func (h *SemanticsHandler) AutoCluster(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
 		return
 	}
-	count, err := h.svc.AutoCluster(r.Context(), workspaceID)
+	sellerCabinetID, ok := requireSellerCabinetID(w, r)
+	if !ok {
+		return
+	}
+	count, err := h.svc.AutoCluster(r.Context(), workspaceID, sellerCabinetID)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -74,13 +97,16 @@ func (h *SemanticsHandler) AutoCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SemanticsHandler) ListClusters(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
-	if !ok {
+	if _, ok := middleware.WorkspaceIDFromContext(r.Context()); !ok {
 		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
 		return
 	}
+	sellerCabinetID, ok := requireSellerCabinetID(w, r)
+	if !ok {
+		return
+	}
 	pg := pagination.Parse(r)
-	clusters, err := h.svc.ListClusters(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	clusters, err := h.svc.ListClusters(r.Context(), sellerCabinetID, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return

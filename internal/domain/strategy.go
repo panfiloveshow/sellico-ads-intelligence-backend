@@ -24,12 +24,13 @@ const (
 	StrategyTypePriceInventoryDemand = "price_inventory_demand"
 	StrategyTypePriceAdLinked        = "price_ad_linked"
 	StrategyTypePricePeakHours       = "price_peak_hours"
+	StrategyTypePriceCompetitorFollow = "price_competitor_follow"
 )
 
 // IsPriceStrategy reports whether a strategy type is a repricer strategy.
 func IsPriceStrategy(strategyType string) bool {
 	switch strategyType {
-	case StrategyTypePriceMarginFloor, StrategyTypePriceInventoryDemand, StrategyTypePriceAdLinked, StrategyTypePricePeakHours:
+	case StrategyTypePriceMarginFloor, StrategyTypePriceInventoryDemand, StrategyTypePriceAdLinked, StrategyTypePricePeakHours, StrategyTypePriceCompetitorFollow:
 		return true
 	}
 	return false
@@ -111,6 +112,8 @@ type StrategyParams struct {
 	// price_peak_hours: percentage band around each product's own price.
 	PeakUpliftPercent   float64 `json:"peak_uplift_percent,omitempty"`   // % above current at a demand peak; default 8
 	DeadDiscountPercent float64 `json:"dead_discount_percent,omitempty"` // % below current at a dead hour; default 12
+	// price_competitor_follow: target = competitor median × (1 − this%).
+	UndercutPercent float64 `json:"undercut_percent,omitempty"` // % below competitor median; default 2
 	// Relative safety floor when product economics is absent: never sell below
 	// current × (1 − this%). Applies to all price strategies. Default 30.
 	MaxDiscountPercent float64 `json:"max_discount_percent,omitempty"`
@@ -129,6 +132,7 @@ func DefaultPriceParams() StrategyParams {
 		PeakUpliftPercent:     8,
 		DeadDiscountPercent:   12,
 		MaxDiscountPercent:    30,
+		UndercutPercent:       2,
 	}
 }
 
@@ -167,6 +171,9 @@ func (p StrategyParams) MergedPriceParams() StrategyParams {
 	}
 	if p.MaxDiscountPercent == 0 {
 		p.MaxDiscountPercent = d.MaxDiscountPercent
+	}
+	if p.UndercutPercent == 0 {
+		p.UndercutPercent = d.UndercutPercent
 	}
 	return p
 }

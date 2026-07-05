@@ -2,7 +2,9 @@ package sqlcgen
 
 import (
 	"context"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -222,6 +224,30 @@ func (q *Queries) DeleteOldProductOrdersHourly(ctx context.Context, sellerCabine
 	return err
 }
 
+// CompetitorMedianByProduct returns the median competitor price (rubles) per our
+// product_id, for the price_competitor_follow strategy.
+func (q *Queries) CompetitorMedianByProduct(ctx context.Context, workspaceID pgtype.UUID) (map[string]int64, error) {
+	rows, err := q.db.Query(ctx, `
+SELECT product_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY competitor_price)
+FROM competitors
+WHERE workspace_id = $1 AND product_id IS NOT NULL AND competitor_price > 0
+GROUP BY product_id`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var pid pgtype.UUID
+		var median float64
+		if err := rows.Scan(&pid, &median); err != nil {
+			return nil, err
+		}
+		out[uuid.UUID(pid.Bytes).String()] = int64(median)
+	}
+	return out, rows.Err()
+}
+
 const productSlotIntensity = `
 WITH agg AS (
     SELECT wb_product_id, EXTRACT(ISODOW FROM date)::int AS dow, hour, SUM(units) AS v
@@ -292,6 +318,88 @@ func (q *Queries) OrdersHeatmap(ctx context.Context, workspaceID, sellerCabinetI
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// repricer pause (freeze switch)
+// ---------------------------------------------------------------------------
+
+const setCabinetRepricerPause = `
+UPDATE seller_cabinets SET repricer_paused_until = $2, updated_at = now()
+WHERE id = $1 AND workspace_id = $3
+`
+
+func (q *Queries) SetCabinetRepricerPause(ctx context.Context, cabinetID pgtype.UUID, until pgtype.Timestamptz, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, setCabinetRepricerPause, cabinetID, until, workspaceID)
+	return err
+}
+
+// PausedCabinets returns the set of a workspace's cabinets whose repricer is
+// currently frozen (paused_until in the future).
+func (q *Queries) PausedCabinets(ctx context.Context, workspaceID pgtype.UUID) (map[string]time.Time, error) {
+	rows, err := q.db.Query(ctx, `SELECT id, repricer_paused_until FROM seller_cabinets
+		WHERE workspace_id = $1 AND repricer_paused_until > now()`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id pgtype.UUID
+		var until pgtype.Timestamptz
+		if err := rows.Scan(&id, &until); err != nil {
+			return nil, err
+		}
+		out[uuid.UUID(id.Bytes).String()] = until.Time
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// repricer health summary
+// ---------------------------------------------------------------------------
+
+type RepricerHealthRow struct {
+	Products         int64
+	WithPrice        int64
+	LastSyncAt       pgtype.Timestamptz
+	ActiveStrategies int64
+	ChangesApplied   int64 // last 24h
+	Recommendations  int64 // last 24h, pending review
+	Failed           int64 // last 24h
+	PausedUntil      pgtype.Timestamptz
+}
+
+const repricerHealth = `
+SELECT
+  (SELECT count(*) FROM products p WHERE p.seller_cabinet_id = $2) AS products,
+  (SELECT count(*) FROM product_prices pp WHERE pp.seller_cabinet_id = $2) AS with_price,
+  (SELECT max(pp.synced_at) FROM product_prices pp WHERE pp.seller_cabinet_id = $2) AS last_sync,
+  (SELECT count(*) FROM strategies s WHERE s.seller_cabinet_id = $2 AND s.is_active AND s.type LIKE 'price_%') AS active_strategies,
+  (SELECT count(*) FROM price_changes c WHERE c.seller_cabinet_id = $2 AND c.wb_status = 'applied' AND c.created_at > now() - interval '24 hours') AS applied,
+  (SELECT count(*) FROM price_changes c WHERE c.seller_cabinet_id = $2 AND c.wb_status = 'recommended' AND c.created_at > now() - interval '24 hours') AS recommended,
+  (SELECT count(*) FROM price_changes c WHERE c.seller_cabinet_id = $2 AND c.wb_status = 'failed' AND c.created_at > now() - interval '24 hours') AS failed,
+  (SELECT repricer_paused_until FROM seller_cabinets sc WHERE sc.id = $2) AS paused_until
+`
+
+// RepricerDigestCounts sums the workspace's repricer activity over the last 24h.
+func (q *Queries) RepricerDigestCounts(ctx context.Context, workspaceID pgtype.UUID) (applied, recommended, failed int64, err error) {
+	err = q.db.QueryRow(ctx, `
+SELECT
+  count(*) FILTER (WHERE wb_status = 'applied'),
+  count(*) FILTER (WHERE wb_status = 'recommended'),
+  count(*) FILTER (WHERE wb_status = 'failed')
+FROM price_changes
+WHERE workspace_id = $1 AND created_at > now() - interval '24 hours'`, workspaceID).Scan(&applied, &recommended, &failed)
+	return
+}
+
+func (q *Queries) RepricerHealth(ctx context.Context, workspaceID, cabinetID pgtype.UUID) (RepricerHealthRow, error) {
+	var r RepricerHealthRow
+	err := q.db.QueryRow(ctx, repricerHealth, workspaceID, cabinetID).Scan(
+		&r.Products, &r.WithPrice, &r.LastSyncAt, &r.ActiveStrategies,
+		&r.ChangesApplied, &r.Recommendations, &r.Failed, &r.PausedUntil)
+	return r, err
 }
 
 // ---------------------------------------------------------------------------
