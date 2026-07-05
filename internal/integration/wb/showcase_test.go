@@ -18,8 +18,8 @@ func TestShowcaseByNmIDs_ComputesSppAndRubles(t *testing.T) {
 		assert.Equal(t, "170516317;222", r.URL.Query().Get("nm"))
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"products":[
-			{"id":170516317,"name":"Набор специй","totalQuantity":42,"sizes":[{"price":{"basic":225200,"product":91300}}]},
-			{"id":222,"name":"Нет в наличии","totalQuantity":0,"sizes":[{"price":{"basic":0,"product":0}}]}
+			{"id":170516317,"name":"Набор специй","sizes":[{"price":{"basic":225200,"product":91300}}]},
+			{"id":222,"name":"Нет в наличии","sizes":[{"price":{"basic":0,"product":0}}]}
 		]}`))
 	}))
 	defer server.Close()
@@ -33,7 +33,6 @@ func TestShowcaseByNmIDs_ComputesSppAndRubles(t *testing.T) {
 	assert.Equal(t, int64(913), got.BuyerRub)  // 91300 kop -> 913 rub
 	assert.Equal(t, 59, got.SppPercent)        // round((1-913/2252)*100) = 59
 	assert.Equal(t, "Набор специй", got.Name)
-	assert.Equal(t, 42, got.Stock)
 
 	// Out of stock: name kept, no price/СПП.
 	assert.Equal(t, "Нет в наличии", res[222].Name)

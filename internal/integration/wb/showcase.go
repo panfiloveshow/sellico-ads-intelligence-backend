@@ -19,7 +19,6 @@ type Showcase struct {
 	BasicRub   int64 // base/struck price (before the seller discount)
 	BuyerRub   int64 // retail price after the seller discount (card.wb.ru product)
 	SppPercent int   // seller discount = (1 - BuyerRub/BasicRub) * 100
-	Stock      int   // total quantity in stock across warehouses
 }
 
 // showcaseDest is the RF geo (delivery point); prices are only returned for
@@ -29,10 +28,9 @@ const showcaseChunk = 100
 
 type wbShowcaseResponse struct {
 	Products []struct {
-		ID            int64  `json:"id"`
-		Name          string `json:"name"`
-		TotalQuantity int    `json:"totalQuantity"`
-		Sizes         []struct {
+		ID    int64  `json:"id"`
+		Name  string `json:"name"`
+		Sizes []struct {
 			Price struct {
 				Basic   int64 `json:"basic"`   // kopecks
 				Product int64 `json:"product"` // kopecks
@@ -95,7 +93,7 @@ func (c *Client) ShowcaseByNmIDs(ctx context.Context, nmIDs []int64) (map[int64]
 				continue
 			}
 			// Name + stock are available even for out-of-stock items (no price).
-			sc := Showcase{Name: p.Name, Stock: p.TotalQuantity}
+			sc := Showcase{Name: p.Name}
 			if len(p.Sizes) > 0 {
 				basic := p.Sizes[0].Price.Basic
 				buyer := p.Sizes[0].Price.Product

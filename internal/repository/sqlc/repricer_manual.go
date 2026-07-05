@@ -91,37 +91,6 @@ func (q *Queries) ListProductPricesByWorkspace(ctx context.Context, workspaceID 
 	return items, rows.Err()
 }
 
-// ListProductPricesFiltered lists prices for a workspace, optionally narrowed to
-// a single cabinet (pass an invalid pgtype.UUID to skip the cabinet filter).
-const listProductPricesFiltered = `
-SELECT id, workspace_id, seller_cabinet_id, wb_product_id, price_rub, discount_percent,
-    club_discount_percent, discounted_price_rub, editable_size_price, synced_at, updated_at
-FROM product_prices
-WHERE workspace_id = $1
-  AND ($2::uuid IS NULL OR seller_cabinet_id = $2)
-ORDER BY wb_product_id
-LIMIT $3 OFFSET $4
-`
-
-func (q *Queries) ListProductPricesFiltered(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, limit, offset int32) ([]ProductPrice, error) {
-	rows, err := q.db.Query(ctx, listProductPricesFiltered, workspaceID, sellerCabinetID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProductPrice
-	for rows.Next() {
-		var i ProductPrice
-		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.WbProductID, &i.PriceRub,
-			&i.DiscountPercent, &i.ClubDiscountPercent, &i.DiscountedPriceRub, &i.EditableSizePrice,
-			&i.SyncedAt, &i.UpdatedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	return items, rows.Err()
-}
-
 const listProductPricesByCabinet = `
 SELECT id, workspace_id, seller_cabinet_id, wb_product_id, price_rub, discount_percent,
     club_discount_percent, discounted_price_rub, editable_size_price, synced_at, updated_at
@@ -251,13 +220,6 @@ DELETE FROM product_orders_hourly WHERE seller_cabinet_id = $1 AND date < now() 
 func (q *Queries) DeleteOldProductOrdersHourly(ctx context.Context, sellerCabinetID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteOldProductOrdersHourly, sellerCabinetID)
 	return err
-}
-
-// ProductSlotIntensity is a product's order intensity for one (dow, hour) slot:
-// value at that slot relative to the product's own busiest slot (0..1).
-type ProductSlotIntensity struct {
-	WbProductID int64
-	Intensity   float64
 }
 
 const productSlotIntensity = `

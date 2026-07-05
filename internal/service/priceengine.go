@@ -268,9 +268,6 @@ func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensi
 	p := params.MergedPriceParams()
 	uplift := p.PeakUpliftPercent
 	dead := p.DeadDiscountPercent
-	if uplift <= 0 && dead <= 0 {
-		return skip("peak_or_dead_percent_required")
-	}
 	current := in.Current.EffectivePriceRub()
 	if current <= 0 {
 		return skip("invalid_current_price")

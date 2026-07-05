@@ -216,24 +216,6 @@ func (s *RepricerService) syncCabinetPrices(ctx context.Context, workspaceID, ca
 	return count, nil
 }
 
-// ListPrices returns the synced current prices for a workspace (paginated),
-// optionally narrowed to a single seller cabinet.
-func (s *RepricerService) ListPrices(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.ProductPrice, error) {
-	cabinetFilter := pgtype.UUID{}
-	if cabinetID != nil {
-		cabinetFilter = uuidToPgtype(*cabinetID)
-	}
-	rows, err := s.queries.ListProductPricesFiltered(ctx, uuidToPgtype(workspaceID), cabinetFilter, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]domain.ProductPrice, len(rows))
-	for i, row := range rows {
-		out[i] = productPriceFromSqlc(row)
-	}
-	return out, nil
-}
-
 // ListCatalog returns the full product catalog (all products) left-joined with
 // their current prices, optionally narrowed to one cabinet. Products without a
 // synced price appear with nil price fields.
