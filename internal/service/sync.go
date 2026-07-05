@@ -22,10 +22,15 @@ import (
 const (
 	syncBatchLimit             = int32(10000)
 	campaignListFetchTimeout   = 150 * time.Second
-	campaignBudgetFetchTimeout = 20 * time.Second
+	campaignBudgetFetchTimeout = 10 * time.Second
 	businessReportFetchTimeout = 25 * time.Second
 	wbAdvertStatsRequestDelay  = 20 * time.Second
 	maxCampaignBudgetFailures  = 3
+	// Budgets are a best-effort secondary signal. Cap the whole budget phase so a
+	// slow WB budget endpoint on large accounts (hundreds of campaigns) can't eat
+	// the entire 60-minute sync window and starve the primary data (stats/phrases/
+	// products). Whatever isn't fetched this run refreshes on the next sync.
+	campaignBudgetPhaseTimeout = 4 * time.Minute
 )
 
 const (
@@ -876,33 +881,52 @@ func (s *SyncService) syncCampaignBudgetsForCabinet(ctx context.Context, cabinet
 	if s.guardWBEndpoint(ctx, &summary, cabinetID, wbEndpointBudget, "campaign_budgets.rate_limit") {
 		return summary, summary.Error()
 	}
-	consecutiveFailures := 0
+
+	phaseDeadline := time.Now().Add(campaignBudgetPhaseTimeout)
+	consecutiveTransient := 0
 	for _, campaign := range campaigns {
 		if campaign.Status != "active" && campaign.Status != "paused" && campaign.Status != "ready" {
 			continue
 		}
-		if err := s.syncCampaignBudget(ctx, token, campaign); err != nil {
-			s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointBudget, err)
-			s.markSummaryRateLimitFromError(&summary, wbEndpointBudget, err)
-			summary.addIssue("campaign_budgets.fetch", fmt.Sprintf("%d", campaign.WbCampaignID), "budget: %v", err)
-			if campaignBudgetFailureShouldStop(err) {
-				consecutiveFailures++
-			} else {
-				consecutiveFailures = 0
-			}
-			if consecutiveFailures >= maxCampaignBudgetFailures {
-				summary.addIssue("campaign_budgets.skipped", cabinetID.String(), "stop budget sync after %d consecutive failures", consecutiveFailures)
-				break
-			}
+		// Best-effort time cap: stop cleanly (no issue → sync stays "ok", not
+		// "partial") once the budget phase has used its share of the window.
+		if time.Now().After(phaseDeadline) {
+			break
+		}
+
+		err := s.syncCampaignBudget(ctx, token, campaign)
+		if err == nil {
+			consecutiveTransient = 0
+			summary.CampaignBudgets++
 			continue
 		}
-		consecutiveFailures = 0
-		summary.CampaignBudgets++
+
+		s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointBudget, err)
+		s.markSummaryRateLimitFromError(&summary, wbEndpointBudget, err)
+
+		// Access/rate-limit problems are real and actionable — surface them and stop
+		// the whole phase (retrying every campaign would only deepen the rate limit).
+		if campaignBudgetAccessFailure(err) {
+			summary.addIssue("campaign_budgets.fetch", fmt.Sprintf("%d", campaign.WbCampaignID), "budget: %v", err)
+			summary.addIssue("campaign_budgets.skipped", cabinetID.String(), "stopped budget sync after WB access/limit error")
+			break
+		}
+
+		// Transient per-campaign failures (slow endpoint timeout, one-off 4xx) are
+		// budget noise: skip silently so they don't flip the whole sync to "partial".
+		// If they pile up consecutively the budget endpoint is degraded — stop early.
+		consecutiveTransient++
+		if consecutiveTransient >= maxCampaignBudgetFailures {
+			break
+		}
 	}
 	return summary, summary.Error()
 }
 
-func campaignBudgetFailureShouldStop(err error) bool {
+// campaignBudgetAccessFailure reports whether a budget fetch error is an
+// account-level access/limit problem worth surfacing and stopping on, as opposed
+// to transient per-campaign slowness (timeouts) that should be silently skipped.
+func campaignBudgetAccessFailure(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -912,9 +936,6 @@ func campaignBudgetFailureShouldStop(err error) bool {
 		strings.Contains(lower, "403") ||
 		strings.Contains(lower, "unauthorized") ||
 		strings.Contains(lower, "forbidden") ||
-		strings.Contains(lower, "context deadline exceeded") ||
-		strings.Contains(lower, "timeout") ||
-		strings.Contains(lower, "server error") ||
 		strings.Contains(lower, "circuit breaker")
 }
 
