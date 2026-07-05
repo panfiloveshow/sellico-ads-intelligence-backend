@@ -15,8 +15,9 @@ import (
 )
 
 type Runtime struct {
-	server        *asynq.Server
-	scheduler     *asynq.Scheduler
+	server         *asynq.Server
+	repricerServer *asynq.Server
+	scheduler      *asynq.Scheduler
 	client        *asynq.Client
 	inspector     *asynq.Inspector
 	queries       *sqlcgen.Queries
@@ -92,10 +93,6 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		QueueRecommendations: 4,
 		QueueExports:         2,
 		QueueBidAutomation:   3,
-		// Repricer is user-interactive (manual sync/bulk/run) — give it the
-		// highest weight so a click isn't starved behind the WB sweep queues.
-		// Still Concurrency 1, so no parallel WB calls.
-		QueueRepricer: 6,
 		QueueSemantics:       2,
 		QueueCompetitors:     2,
 		QueueDelivery:        2,
@@ -106,10 +103,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		Concurrency:     1,
 		ShutdownTimeout: 30 * time.Second,
 		Queues:          queueWeights,
-		// Strict priority so the highest-weight non-empty queue is always drained
-		// first — otherwise the default weighted-random pick lets a large WB-sync
-		// backlog starve the interactive repricer queue (weight 6).
-		StrictPriority: true,
+		StrictPriority:  true,
+	})
+
+	// Dedicated server for the repricer queue with its own slot, so the
+	// user-interactive sync/bulk/run never waits behind a long-running WB-sync
+	// task (which holds the main server's single slot for minutes). Concurrency 1
+	// here too — the repricer's own WB rate-limit guard serializes its calls.
+	repricerServer := asynq.NewServer(redisOpt, asynq.Config{
+		Concurrency:     1,
+		ShutdownTimeout: 30 * time.Second,
+		Queues:          map[string]int{QueueRepricer: 1},
 	})
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
@@ -157,13 +161,14 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		Msg("autopilot scheduler configured")
 
 	return &Runtime{
-		server:    server,
-		scheduler: scheduler,
-		client:    client,
-		inspector: inspector,
-		queries:   queries,
-		queues:    queueNames(queueWeights),
-		logger:    logger,
+		server:         server,
+		repricerServer: repricerServer,
+		scheduler:      scheduler,
+		client:         client,
+		inspector:      inspector,
+		queries:        queries,
+		queues:         append(queueNames(queueWeights), QueueRepricer),
+		logger:         logger,
 		mux:       mux,
 	}, nil
 }
@@ -191,6 +196,12 @@ func (r *Runtime) Start() error {
 		r.scheduler.Shutdown()
 		return err
 	}
+	if err := r.repricerServer.Start(r.mux); err != nil {
+		cancel()
+		r.scheduler.Shutdown()
+		r.server.Shutdown()
+		return err
+	}
 	r.logger.Info().Msg("worker runtime started")
 
 	// Kick off one catalog/price sync a few seconds after boot so the repricer
@@ -210,6 +221,7 @@ func (r *Runtime) Shutdown() {
 	}
 	r.scheduler.Shutdown()
 	r.server.Shutdown()
+	r.repricerServer.Shutdown()
 	if r.inspector != nil {
 		_ = r.inspector.Close()
 	}
