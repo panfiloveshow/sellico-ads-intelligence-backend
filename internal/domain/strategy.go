@@ -18,12 +18,13 @@ const (
 	StrategyTypePriceMarginFloor     = "price_margin_floor"
 	StrategyTypePriceInventoryDemand = "price_inventory_demand"
 	StrategyTypePriceAdLinked        = "price_ad_linked"
+	StrategyTypePricePeakHours       = "price_peak_hours"
 )
 
 // IsPriceStrategy reports whether a strategy type is a repricer strategy.
 func IsPriceStrategy(strategyType string) bool {
 	switch strategyType {
-	case StrategyTypePriceMarginFloor, StrategyTypePriceInventoryDemand, StrategyTypePriceAdLinked:
+	case StrategyTypePriceMarginFloor, StrategyTypePriceInventoryDemand, StrategyTypePriceAdLinked, StrategyTypePricePeakHours:
 		return true
 	}
 	return false

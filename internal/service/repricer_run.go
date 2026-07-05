@@ -27,6 +27,7 @@ type repricerData struct {
 	activeQuarNm      map[int64]struct{}
 	hasActiveCampaign map[int64]bool
 	drrByNm           map[int64]float64 // ad DRR % over the lookback window
+	intensityByNm     map[int64]float64 // current MSK-slot order intensity 0..1 (price_peak_hours)
 }
 
 type stockInfo struct {
@@ -189,6 +190,8 @@ func (s *RepricerService) evaluateProduct(ctx context.Context, workspaceID uuid.
 		decision = DecideInventoryDemand(in, params)
 	case domain.StrategyTypePriceAdLinked:
 		decision = DecideAdLinked(in, params)
+	case domain.StrategyTypePricePeakHours:
+		decision = DecidePeakHours(in, params, data.intensityByNm[nm])
 	default:
 		return PriceDecision{}, nil, false
 	}
@@ -245,12 +248,36 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 		activeQuarNm:      map[int64]struct{}{},
 		hasActiveCampaign: map[int64]bool{},
 		drrByNm:           map[int64]float64{},
+		intensityByNm:     map[int64]float64{},
 	}
 
 	// Cabinets referenced by the strategies.
 	cabinets := map[uuid.UUID]struct{}{}
+	hasPeakHours := false
 	for _, st := range strategies {
 		cabinets[st.SellerCabinetID] = struct{}{}
+		if st.Type == domain.StrategyTypePricePeakHours {
+			hasPeakHours = true
+		}
+	}
+
+	// Current MSK time slot for demand-driven (peak-hours) pricing.
+	if hasPeakHours {
+		nowMSK := time.Now().In(mskLocation)
+		dow := int(nowMSK.Weekday())
+		if dow == 0 {
+			dow = 7 // ISO: Sunday = 7
+		}
+		for cabinetID := range cabinets {
+			m, err := s.queries.ProductSlotIntensities(ctx, uuidToPgtype(cabinetID), dow, nowMSK.Hour(), 30)
+			if err != nil {
+				s.logger.Warn().Err(err).Msg("peak-hours intensity load failed")
+				continue
+			}
+			for nm, intensity := range m {
+				data.intensityByNm[nm] = intensity
+			}
+		}
 	}
 
 	// Prices + products (stock, nm↔productID) per cabinet.

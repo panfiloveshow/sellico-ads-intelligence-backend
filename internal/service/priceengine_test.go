@@ -314,3 +314,38 @@ func TestResolveFloor_MinPriceFallback(t *testing.T) {
 		assert.Equal(t, "down", d.Direction)
 	})
 }
+
+func TestDecidePeakHours(t *testing.T) {
+	minP, maxP := int64(500), int64(1500)
+	params := domain.StrategyParams{StepPercent: 10, MinPriceRub: &minP, MaxPriceRub: &maxP}
+	// No economics → min_price_rub is the floor.
+
+	t.Run("peak intensity walks price up toward max, capped by step", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
+		d := DecidePeakHours(in, params, 1.0) // target 1500, capped to +10% = 1100
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "up", d.Direction)
+		assert.Equal(t, int64(1100), d.TargetEffectiveRub)
+	})
+
+	t.Run("dead hour walks price down toward min, capped by step", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
+		d := DecidePeakHours(in, params, 0.0) // target 500, capped to -10% = 900
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "down", d.Direction)
+		assert.Equal(t, int64(900), d.TargetEffectiveRub)
+	})
+
+	t.Run("mid intensity within dead-band → no change", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
+		d := DecidePeakHours(in, params, 0.5) // target 1000 = current → no change
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "near_demand_target", d.Reason)
+	})
+
+	t.Run("requires min and max", func(t *testing.T) {
+		d := DecidePeakHours(PriceEngineInputs{Current: price(1000, 0, 1000)}, domain.StrategyParams{}, 0.8)
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "min_max_required", d.SkipReason)
+	})
+}

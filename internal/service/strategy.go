@@ -138,7 +138,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeRecommendation:
 	case domain.StrategyTypePriceMarginFloor,
 		domain.StrategyTypePriceInventoryDemand,
-		domain.StrategyTypePriceAdLinked:
+		domain.StrategyTypePriceAdLinked,
+		domain.StrategyTypePricePeakHours:
 		return validatePriceStrategy(input)
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid strategy type")
@@ -201,6 +202,10 @@ func validatePriceStrategy(input domain.Strategy) error {
 	}
 	if p.MaxAllowedDRRPercent != nil && (*p.MaxAllowedDRRPercent < 0 || *p.MaxAllowedDRRPercent > 100) {
 		return apperror.New(apperror.ErrValidation, "max_allowed_drr_percent must be between 0 and 100")
+	}
+	// Peak-hours pricing interpolates between min and max by demand — both required.
+	if input.Type == domain.StrategyTypePricePeakHours && (p.MinPriceRub == nil || p.MaxPriceRub == nil) {
+		return apperror.New(apperror.ErrValidation, "price_peak_hours requires both min_price_rub and max_price_rub")
 	}
 	// Upward moves need a ceiling, but the engine already skips them without one
 	// ("max_price_required_for_increase") — a down-only inventory strategy is

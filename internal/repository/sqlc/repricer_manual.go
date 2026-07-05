@@ -253,6 +253,49 @@ func (q *Queries) DeleteOldProductOrdersHourly(ctx context.Context, sellerCabine
 	return err
 }
 
+// ProductSlotIntensity is a product's order intensity for one (dow, hour) slot:
+// value at that slot relative to the product's own busiest slot (0..1).
+type ProductSlotIntensity struct {
+	WbProductID int64
+	Intensity   float64
+}
+
+const productSlotIntensity = `
+WITH agg AS (
+    SELECT wb_product_id, EXTRACT(ISODOW FROM date)::int AS dow, hour, SUM(units) AS v
+    FROM product_orders_hourly
+    WHERE seller_cabinet_id = $1 AND date >= (now() at time zone 'UTC')::date - $4::int
+    GROUP BY 1, 2, 3
+)
+SELECT wb_product_id,
+    COALESCE(MAX(v) FILTER (WHERE dow = $2 AND hour = $3), 0)::float8
+      / NULLIF(MAX(v)::float8, 0) AS intensity
+FROM agg
+GROUP BY wb_product_id
+`
+
+// ProductSlotIntensities returns each product's demand intensity for the given
+// ISO day-of-week (1..7) and hour (0..23) over the last lookbackDays.
+func (q *Queries) ProductSlotIntensities(ctx context.Context, sellerCabinetID pgtype.UUID, dow, hour, lookbackDays int) (map[int64]float64, error) {
+	rows, err := q.db.Query(ctx, productSlotIntensity, sellerCabinetID, dow, hour, lookbackDays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]float64{}
+	for rows.Next() {
+		var nm int64
+		var intensity pgtype.Float8
+		if err := rows.Scan(&nm, &intensity); err != nil {
+			return nil, err
+		}
+		if intensity.Valid {
+			out[nm] = intensity.Float64
+		}
+	}
+	return out, rows.Err()
+}
+
 // OrdersHeatmapCell is one aggregated (ISO day-of-week, hour) bucket.
 type OrdersHeatmapCell struct {
 	DayOfWeek int16 // 1=Mon .. 7=Sun

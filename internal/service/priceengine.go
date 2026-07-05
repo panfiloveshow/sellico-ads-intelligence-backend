@@ -254,6 +254,77 @@ func DecideAdLinked(in PriceEngineInputs, params domain.StrategyParams) PriceDec
 	return priceMove(in, "down", target, floor, fmt.Sprintf("DRR %.1f%% over allowed %.1f%%, stepping down", *in.DRR, *maxDRR))
 }
 
+// DecidePeakHours does demand-driven time-of-day pricing: the target effective
+// price is interpolated between min and max by the current hour's order
+// intensity (0..1, from the orders heatmap) — high demand → near max, dead hour
+// → near min. Deterministic (no drift), clamped to the margin floor, and the
+// per-run move is capped to step% so the price walks smoothly.
+func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensity float64) PriceDecision {
+	p := params.MergedPriceParams()
+	if params.MinPriceRub == nil || params.MaxPriceRub == nil {
+		return skip("min_max_required")
+	}
+	minP, maxP := *params.MinPriceRub, *params.MaxPriceRub
+	if maxP <= minP {
+		return skip("max_must_exceed_min")
+	}
+	floor, reason := resolveFloor(in, p)
+	if reason != "" {
+		return skip(reason)
+	}
+	if floor < minP {
+		floor = minP
+	}
+	current := in.Current.EffectivePriceRub()
+	if current <= 0 {
+		return skip("invalid_current_price")
+	}
+	if intensity < 0 {
+		intensity = 0
+	}
+	if intensity > 1 {
+		intensity = 1
+	}
+
+	target := int64(math.Round(float64(minP) + intensity*float64(maxP-minP)))
+	if target < floor {
+		target = floor
+	}
+	if target > maxP {
+		target = maxP
+	}
+
+	// Cap the per-run move to step% and re-clamp.
+	step := p.StepPercent / 100
+	if target > current {
+		if capped := int64(math.Round(float64(current) * (1 + step))); target > capped {
+			target = capped
+		}
+	} else if target < current {
+		if capped := int64(math.Round(float64(current) * (1 - step))); target < capped {
+			target = capped
+		}
+		if target < floor {
+			target = floor
+		}
+	}
+
+	// Dead-band: ignore sub-1% (or sub-1₽) nudges to avoid churn.
+	diff := target - current
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff == 0 || float64(diff) < math.Max(1, float64(current)*0.01) {
+		return noChange("near_demand_target", floor)
+	}
+
+	dir := "up"
+	if target < current {
+		dir = "down"
+	}
+	return priceMove(in, dir, target, floor, fmt.Sprintf("demand intensity %.0f%%, targeting %d₽ in [%d..%d]", intensity*100, target, minP, maxP))
+}
+
 // priceMove builds a change decision for a target effective price.
 func priceMove(in PriceEngineInputs, direction string, targetEffective, floor int64, reason string) PriceDecision {
 	return PriceDecision{
