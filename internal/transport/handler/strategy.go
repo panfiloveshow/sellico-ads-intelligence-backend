@@ -48,9 +48,10 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 		domain.StrategyTypeROAS,
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
-		domain.StrategyTypeRecommendation:
+		domain.StrategyTypeRecommendation,
+		domain.StrategyTypeSearchPlaybook:
 	default:
-		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, recommendation"
+		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, recommendation, search_playbook"
 	}
 	params := input.Params
 	if params.MinBid < 0 {

@@ -284,11 +284,20 @@ func TestResolveFloor_MinPriceFallback(t *testing.T) {
 		assert.Equal(t, minPrice, d.MinPriceRub)
 	})
 
-	t.Run("no economics and no min price → skip", func(t *testing.T) {
-		in := PriceEngineInputs{Current: price(2000, 0, 2000), Economics: domain.ProductEconomics{}, StockKnown: true}
+	t.Run("no economics, no min → relative floor (default 30% below current)", func(t *testing.T) {
+		// Overstock + slow with no economics: the relative floor (current×0.7)
+		// lets the strategy still act instead of skipping.
+		in := PriceEngineInputs{Current: price(2000, 0, 2000), Economics: domain.ProductEconomics{}, StockKnown: true, Stock: 1000, SalesUnitsPerDay: 0.1}
+		d := DecideInventoryDemand(in, domain.StrategyParams{SlowVelocityPerDay: 1})
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, "down", d.Direction)
+		assert.Equal(t, int64(1400), d.MinPriceRub) // 2000 × (1 − 0.30)
+	})
+
+	t.Run("no economics, no min, no relative floor → skip", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(0, 0, 0), Economics: domain.ProductEconomics{}, StockKnown: true}
 		d := DecideInventoryDemand(in, domain.StrategyParams{})
 		assert.False(t, d.ShouldChange)
-		assert.Equal(t, "missing_cost_price", d.SkipReason)
 	})
 
 	t.Run("margin floor raises to explicit min price", func(t *testing.T) {
@@ -316,36 +325,44 @@ func TestResolveFloor_MinPriceFallback(t *testing.T) {
 }
 
 func TestDecidePeakHours(t *testing.T) {
-	minP, maxP := int64(500), int64(1500)
-	params := domain.StrategyParams{StepPercent: 10, MinPriceRub: &minP, MaxPriceRub: &maxP}
-	// No economics → min_price_rub is the floor.
+	// Percentage band per product: +10% peak, −20% dead, step cap 10%, relative
+	// floor 30% below current (no economics).
+	params := domain.StrategyParams{StepPercent: 10, PeakUpliftPercent: 10, DeadDiscountPercent: 20, MaxDiscountPercent: 30}
 
-	t.Run("peak intensity walks price up toward max, capped by step", func(t *testing.T) {
+	t.Run("peak → up by uplift on the product's own price", func(t *testing.T) {
 		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
-		d := DecidePeakHours(in, params, 1.0) // target 1500, capped to +10% = 1100
+		d := DecidePeakHours(in, params, 1.0) // 1000 × 1.10 = 1100
 		require.True(t, d.ShouldChange)
 		assert.Equal(t, "up", d.Direction)
 		assert.Equal(t, int64(1100), d.TargetEffectiveRub)
 	})
 
-	t.Run("dead hour walks price down toward min, capped by step", func(t *testing.T) {
+	t.Run("same % scales with a cheaper product (300₽)", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(300, 0, 300), Economics: domain.ProductEconomics{}}
+		d := DecidePeakHours(in, params, 1.0) // 300 × 1.10 = 330
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, int64(330), d.TargetEffectiveRub)
+	})
+
+	t.Run("dead hour → down, capped by step and relative floor", func(t *testing.T) {
 		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
-		d := DecidePeakHours(in, params, 0.0) // target 500, capped to -10% = 900
+		d := DecidePeakHours(in, params, 0.0) // 1000×0.8=800 → step −10% → 900 (floor 700)
 		require.True(t, d.ShouldChange)
 		assert.Equal(t, "down", d.Direction)
 		assert.Equal(t, int64(900), d.TargetEffectiveRub)
 	})
 
-	t.Run("mid intensity within dead-band → no change", func(t *testing.T) {
+	t.Run("neutral intensity within dead-band → no change", func(t *testing.T) {
 		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
-		d := DecidePeakHours(in, params, 0.5) // target 1000 = current → no change
+		d := DecidePeakHours(in, params, 2.0/3.0) // factor ≈ 1 → target ≈ current
 		assert.False(t, d.ShouldChange)
 		assert.Equal(t, "near_demand_target", d.Reason)
 	})
 
-	t.Run("requires min and max", func(t *testing.T) {
-		d := DecidePeakHours(PriceEngineInputs{Current: price(1000, 0, 1000)}, domain.StrategyParams{}, 0.8)
-		assert.False(t, d.ShouldChange)
-		assert.Equal(t, "min_max_required", d.SkipReason)
+	t.Run("bare strategy uses defaults; default step 3% caps the move", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(1000, 0, 1000), Economics: domain.ProductEconomics{}}
+		d := DecidePeakHours(in, domain.StrategyParams{}, 1.0) // +8% band but step 3% → 1030
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, int64(1030), d.TargetEffectiveRub)
 	})
 }

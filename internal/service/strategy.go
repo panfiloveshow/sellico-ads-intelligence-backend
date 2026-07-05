@@ -135,7 +135,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeROAS,
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
-		domain.StrategyTypeRecommendation:
+		domain.StrategyTypeRecommendation,
+		domain.StrategyTypeSearchPlaybook:
 	case domain.StrategyTypePriceMarginFloor,
 		domain.StrategyTypePriceInventoryDemand,
 		domain.StrategyTypePriceAdLinked,
@@ -173,6 +174,28 @@ func validateStrategyForSave(input domain.Strategy) error {
 	case params.MaxDataAgeHours < 0:
 		return apperror.New(apperror.ErrValidation, "max_data_age_hours must be non-negative")
 	}
+	if input.Type == domain.StrategyTypeSearchPlaybook {
+		return validateSearchPlaybookStrategy(params)
+	}
+	return nil
+}
+
+// validateSearchPlaybookStrategy validates search_playbook-specific parameters.
+func validateSearchPlaybookStrategy(p domain.StrategyParams) error {
+	switch p.FrequencyTier {
+	case "", "high", "mid", "low":
+	default:
+		return apperror.New(apperror.ErrValidation, "frequency_tier must be high, mid or low")
+	}
+	if p.TargetPosition < 0 {
+		return apperror.New(apperror.ErrValidation, "target_position must be non-negative")
+	}
+	if p.TargetPosition == 0 && p.FrequencyTier == "" {
+		return apperror.New(apperror.ErrValidation, "search_playbook requires frequency_tier or target_position")
+	}
+	if p.SacrificialSpendPricePct < 0 || p.FlatImpressionsPct < 0 || p.RollbackStepPercent < 0 {
+		return apperror.New(apperror.ErrValidation, "search_playbook percentages must be non-negative")
+	}
 	return nil
 }
 
@@ -203,9 +226,11 @@ func validatePriceStrategy(input domain.Strategy) error {
 	if p.MaxAllowedDRRPercent != nil && (*p.MaxAllowedDRRPercent < 0 || *p.MaxAllowedDRRPercent > 100) {
 		return apperror.New(apperror.ErrValidation, "max_allowed_drr_percent must be between 0 and 100")
 	}
-	// Peak-hours pricing interpolates between min and max by demand — both required.
-	if input.Type == domain.StrategyTypePricePeakHours && (p.MinPriceRub == nil || p.MaxPriceRub == nil) {
-		return apperror.New(apperror.ErrValidation, "price_peak_hours requires both min_price_rub and max_price_rub")
+	if p.PeakUpliftPercent < 0 || p.PeakUpliftPercent > 100 || p.DeadDiscountPercent < 0 || p.DeadDiscountPercent > 100 {
+		return apperror.New(apperror.ErrValidation, "peak/dead percentages must be between 0 and 100")
+	}
+	if p.MaxDiscountPercent < 0 || p.MaxDiscountPercent > 95 {
+		return apperror.New(apperror.ErrValidation, "max_discount_percent must be between 0 and 95")
 	}
 	// Upward moves need a ceiling, but the engine already skips them without one
 	// ("max_price_required_for_increase") — a down-only inventory strategy is

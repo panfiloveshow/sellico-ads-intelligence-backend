@@ -125,10 +125,11 @@ func effectiveMinFloor(marginFloor int64, params domain.StrategyParams) int64 {
 	return floor
 }
 
-// resolveFloor computes the effective price floor for a strategy. When product
-// economics isn't filled in (no cost price), an explicit MinPriceRub on the
-// strategy acts as the floor — so strategies work out of the box; with neither,
-// the product is skipped (never reprice without a safety floor).
+// resolveFloor computes the per-product effective price floor for a strategy.
+// Priority: (1) margin floor from product economics (most precise); (2) an
+// explicit MinPriceRub override; (3) a RELATIVE floor — current price minus
+// MaxDiscountPercent — so strategies protect every product at its own level
+// without per-product config or economics. With none, the product is skipped.
 func resolveFloor(in PriceEngineInputs, params domain.StrategyParams) (int64, string) {
 	marginFloor, reason := ComputeMinEffectivePrice(in.Economics, in.CommissionFallbackPercent)
 	if reason == "" {
@@ -136,6 +137,9 @@ func resolveFloor(in PriceEngineInputs, params domain.StrategyParams) (int64, st
 	}
 	if params.MinPriceRub != nil && *params.MinPriceRub > 0 {
 		return *params.MinPriceRub, ""
+	}
+	if current := in.Current.EffectivePriceRub(); current > 0 && params.MaxDiscountPercent > 0 {
+		return int64(math.Round(float64(current) * (1 - params.MaxDiscountPercent/100))), ""
 	}
 	return 0, reason
 }
@@ -254,26 +258,18 @@ func DecideAdLinked(in PriceEngineInputs, params domain.StrategyParams) PriceDec
 	return priceMove(in, "down", target, floor, fmt.Sprintf("DRR %.1f%% over allowed %.1f%%, stepping down", *in.DRR, *maxDRR))
 }
 
-// DecidePeakHours does demand-driven time-of-day pricing: the target effective
-// price is interpolated between min and max by the current hour's order
-// intensity (0..1, from the orders heatmap) — high demand → near max, dead hour
-// → near min. Deterministic (no drift), clamped to the margin floor, and the
-// per-run move is capped to step% so the price walks smoothly.
+// DecidePeakHours does demand-driven time-of-day pricing PER PRODUCT, in percent
+// of each product's own current price — so it works across any price tier with
+// no per-product config. The target sits between current×(1−dead%) at a dead
+// hour and current×(1+peak%) at a demand peak, interpolated by the current
+// hour's order intensity (0..1 from the heatmap). Clamped to the product floor,
+// per-run move capped to step%, 1% dead-band to avoid churn.
 func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensity float64) PriceDecision {
 	p := params.MergedPriceParams()
-	if params.MinPriceRub == nil || params.MaxPriceRub == nil {
-		return skip("min_max_required")
-	}
-	minP, maxP := *params.MinPriceRub, *params.MaxPriceRub
-	if maxP <= minP {
-		return skip("max_must_exceed_min")
-	}
-	floor, reason := resolveFloor(in, p)
-	if reason != "" {
-		return skip(reason)
-	}
-	if floor < minP {
-		floor = minP
+	uplift := p.PeakUpliftPercent
+	dead := p.DeadDiscountPercent
+	if uplift <= 0 && dead <= 0 {
+		return skip("peak_or_dead_percent_required")
 	}
 	current := in.Current.EffectivePriceRub()
 	if current <= 0 {
@@ -285,16 +281,23 @@ func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensi
 	if intensity > 1 {
 		intensity = 1
 	}
+	floor, reason := resolveFloor(in, p)
+	if reason != "" {
+		return skip(reason)
+	}
 
-	target := int64(math.Round(float64(minP) + intensity*float64(maxP-minP)))
+	// Band relative to each product's current price.
+	factor := 1 + (uplift/100)*intensity - (dead/100)*(1-intensity)
+	target := int64(math.Round(float64(current) * factor))
+	ceiling := int64(math.Round(float64(current) * (1 + uplift/100)))
+	if target > ceiling {
+		target = ceiling
+	}
 	if target < floor {
 		target = floor
 	}
-	if target > maxP {
-		target = maxP
-	}
 
-	// Cap the per-run move to step% and re-clamp.
+	// Cap the per-run move to step%.
 	step := p.StepPercent / 100
 	if target > current {
 		if capped := int64(math.Round(float64(current) * (1 + step))); target > capped {
@@ -309,7 +312,7 @@ func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensi
 		}
 	}
 
-	// Dead-band: ignore sub-1% (or sub-1₽) nudges to avoid churn.
+	// Dead-band: ignore sub-1% (or sub-1₽) nudges.
 	diff := target - current
 	if diff < 0 {
 		diff = -diff
@@ -322,7 +325,7 @@ func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensi
 	if target < current {
 		dir = "down"
 	}
-	return priceMove(in, dir, target, floor, fmt.Sprintf("demand intensity %.0f%%, targeting %d₽ in [%d..%d]", intensity*100, target, minP, maxP))
+	return priceMove(in, dir, target, floor, fmt.Sprintf("demand %.0f%%, %s to %d₽ (band −%.0f%%..+%.0f%%)", intensity*100, dir, target, dead, uplift))
 }
 
 // priceMove builds a change decision for a target effective price.

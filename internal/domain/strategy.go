@@ -14,6 +14,11 @@ const (
 	StrategyTypeDayparting     = "dayparting"
 	StrategyTypeRecommendation = "recommendation"
 
+	// StrategyTypeSearchPlaybook drives a search campaign to a target position
+	// derived from its keyword frequency tier, governed by the sacrificial-spend,
+	// DRR-ceiling, competitive-pressure and flat-impression-pullback rules.
+	StrategyTypeSearchPlaybook = "search_playbook"
+
 	// Repricer strategy types (price_* prefix — bid automation skips these).
 	StrategyTypePriceMarginFloor     = "price_margin_floor"
 	StrategyTypePriceInventoryDemand = "price_inventory_demand"
@@ -66,6 +71,15 @@ type StrategyParams struct {
 	HourlyMultipliers  map[string]float64 `json:"hourly_multipliers,omitempty"`
 	WeekdayMultipliers map[string]float64 `json:"weekday_multipliers,omitempty"`
 
+	// Search playbook strategy (position-targeting, frequency-tiered search).
+	// FrequencyTier tags the campaign's keyword group: high|mid|low. When
+	// TargetPosition is 0 it is derived from the tier (high→4, mid→3, low→1).
+	FrequencyTier            string  `json:"frequency_tier,omitempty"`
+	TargetPosition           float64 `json:"target_position,omitempty"`             // desired avg position (1 = top)
+	SacrificialSpendPricePct float64 `json:"sacrificial_spend_price_pct,omitempty"` // cut when spend ≥ this % of buyer price with 0 orders; default 100
+	FlatImpressionsPct       float64 `json:"flat_impressions_pct,omitempty"`        // impressions within ±this % of prior window = "flat"; default 20
+	RollbackStepPercent      float64 `json:"rollback_step_percent,omitempty"`       // pullback % once at target with flat impressions; default 9
+
 	// Common limits
 	MinBid                    int     `json:"min_bid,omitempty"`                      // default: 50
 	MaxBid                    int     `json:"max_bid,omitempty"`                      // default: 5000
@@ -94,7 +108,14 @@ type StrategyParams struct {
 	AdLookbackDays         int      `json:"ad_lookback_days,omitempty"`          // default: 7 (price_ad_linked)
 	MaxAllowedDRRPercent   *float64 `json:"max_allowed_drr_percent,omitempty"`   // price_ad_linked: DRR ceiling; falls back to product economics
 	RevertWhenAdsPaused    bool     `json:"revert_when_ads_paused,omitempty"`    // price_ad_linked, opt-in
-	DisableBidCoordination bool `json:"disable_bid_coordination,omitempty"`  // price_ad_linked; zero = coordinate with bids (safe default)
+	DisableBidCoordination bool     `json:"disable_bid_coordination,omitempty"`  // price_ad_linked; zero = coordinate with bids (safe default)
+
+	// price_peak_hours: percentage band around each product's own price.
+	PeakUpliftPercent   float64 `json:"peak_uplift_percent,omitempty"`   // % above current at a demand peak; default 8
+	DeadDiscountPercent float64 `json:"dead_discount_percent,omitempty"` // % below current at a dead hour; default 12
+	// Relative safety floor when product economics is absent: never sell below
+	// current × (1 − this%). Applies to all price strategies. Default 30.
+	MaxDiscountPercent float64 `json:"max_discount_percent,omitempty"`
 }
 
 // DefaultPriceParams returns sensible defaults for repricer strategy parameters.
@@ -107,6 +128,9 @@ func DefaultPriceParams() StrategyParams {
 		MaxPriceChangesPerDay: 2,
 		PriceApplyMode:        PriceApplyModeDryRun,
 		AdLookbackDays:        7,
+		PeakUpliftPercent:     8,
+		DeadDiscountPercent:   12,
+		MaxDiscountPercent:    30,
 	}
 }
 
@@ -136,6 +160,15 @@ func (p StrategyParams) MergedPriceParams() StrategyParams {
 	}
 	if p.AdLookbackDays == 0 {
 		p.AdLookbackDays = d.AdLookbackDays
+	}
+	if p.PeakUpliftPercent == 0 {
+		p.PeakUpliftPercent = d.PeakUpliftPercent
+	}
+	if p.DeadDiscountPercent == 0 {
+		p.DeadDiscountPercent = d.DeadDiscountPercent
+	}
+	if p.MaxDiscountPercent == 0 {
+		p.MaxDiscountPercent = d.MaxDiscountPercent
 	}
 	return p
 }
@@ -261,6 +294,16 @@ func (p StrategyParams) Merged() StrategyParams {
 	}
 	if p.MaxDataAgeHours == 0 {
 		p.MaxDataAgeHours = defaults.MaxDataAgeHours
+	}
+	// Search-playbook defaults (only read by the search_playbook engine; harmless elsewhere).
+	if p.SacrificialSpendPricePct == 0 {
+		p.SacrificialSpendPricePct = 100
+	}
+	if p.FlatImpressionsPct == 0 {
+		p.FlatImpressionsPct = 20
+	}
+	if p.RollbackStepPercent == 0 {
+		p.RollbackStepPercent = 9
 	}
 	return p
 }

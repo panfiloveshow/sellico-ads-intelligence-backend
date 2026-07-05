@@ -54,6 +54,12 @@ type BidContext struct {
 	Orders            int64
 	Placement         string
 	IncreaseGuardrail *BidIncreaseGuardrail
+
+	// Search-playbook inputs (populated only for search_playbook strategies).
+	AvgPosition     float64 // impression-weighted average position of the campaign's keywords (1 = top)
+	HasPosition     bool    // true when real position evidence is available
+	PrevImpressions int64   // impressions of the prior half-window, for the flat-impression pullback rule
+	BuyerPrice      float64 // buyer-facing product price in rubles, for the sacrificial-spend rule
 }
 
 // BidIncreaseGuardrail blocks scale-up decisions when real readiness data is missing.
@@ -98,6 +104,8 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 		newBid, reason, acos = e.calculateAntiSlivBid(params, ctx)
 	case domain.StrategyTypeDayparting:
 		newBid, reason = e.calculateDaypartingBid(params, ctx)
+	case domain.StrategyTypeSearchPlaybook:
+		newBid, reason = e.calculateSearchPlaybookBid(params, ctx)
 	default:
 		return nil
 	}
@@ -227,6 +235,95 @@ func (e *BidEngine) calculateROASBid(params domain.StrategyParams, ctx BidContex
 	}
 
 	return 0, "", nil
+}
+
+// defaultTargetPositionForTier maps a keyword frequency tier to its target average
+// position when the strategy does not pin one explicitly (per the launch playbook:
+// high-freq keys are probed at top-4, mid-freq pushed to top-3, low-freq to top-1).
+func defaultTargetPositionForTier(tier string) float64 {
+	switch tier {
+	case "high":
+		return 4
+	case "mid":
+		return 3
+	case "low":
+		return 1
+	}
+	return 0
+}
+
+// calculateSearchPlaybookBid drives the campaign bid toward a frequency-tier target
+// position, gated by four rules evaluated in priority order:
+//  1. Sacrificial spend — 0 orders and spend ≥ N% of buyer price → cut hard.
+//  2. DRR ceiling — orders exist but DRR above max_acos → reduce toward the ceiling.
+//  3. Position targeting — below target position, climb (kept feeding while orders come);
+//     competitive pressure (bot holding the top with no orders near the sacrificial cap)
+//     stops the climb instead of overpaying.
+//  4. Flat-impression pullback — at target with impressions flat vs the prior window →
+//     step the bid back to hold the spot cheaper.
+//
+// Returns a raw target bid (0 = hold); CalculateBid applies change/min/max limits and the
+// stock/economics increase guardrails afterwards.
+func (e *BidEngine) calculateSearchPlaybookBid(params domain.StrategyParams, ctx BidContext) (int, string) {
+	if !ctx.HasPosition || ctx.Impressions == 0 {
+		return 0, "" // no real position evidence yet — do nothing
+	}
+
+	target := params.TargetPosition
+	if target == 0 {
+		target = defaultTargetPositionForTier(params.FrequencyTier)
+	}
+	if target <= 0 {
+		return 0, "" // neither target_position nor a known tier configured
+	}
+
+	// Rule 1: sacrificial product. No orders and spend has reached the buyer-price cap.
+	sacrificialCap := 0.0
+	if params.SacrificialSpendPricePct > 0 && ctx.BuyerPrice > 0 {
+		sacrificialCap = ctx.BuyerPrice * params.SacrificialSpendPricePct / 100
+	}
+	if sacrificialCap > 0 && ctx.Orders == 0 && ctx.Spend >= sacrificialCap {
+		newBid := int(math.Round(float64(ctx.CurrentBid) * 0.7))
+		return newBid, fmt.Sprintf("sacrificial cap: spend %.0f ≥ %.0f%% of buyer price %.0f with 0 orders, cutting bid",
+			ctx.Spend, params.SacrificialSpendPricePct, ctx.BuyerPrice)
+	}
+
+	// Rule 2: DRR ceiling (reuses max_acos as the DRR cap).
+	if ceiling := params.MaxACoS; ceiling > 0 && ctx.Orders > 0 && ctx.Revenue > 0 {
+		drr := ctx.Spend / ctx.Revenue * 100
+		if drr > ceiling {
+			ratio := ceiling / drr
+			newBid := int(math.Round(float64(ctx.CurrentBid) * ratio))
+			return newBid, fmt.Sprintf("DRR %.1f%% > ceiling %.1f%%, reducing bid toward target", drr, ceiling)
+		}
+	}
+
+	// Rule 3: position targeting. avg_pos is 1-based; a larger number is a worse spot.
+	if ctx.AvgPosition > target {
+		// Competitive pressure: the top is contested and we are burning toward the
+		// sacrificial cap with nothing to show — stop climbing instead of overpaying.
+		if ctx.Orders == 0 && sacrificialCap > 0 && ctx.Spend >= sacrificialCap*0.7 {
+			return 0, ""
+		}
+		step := params.MaxChangePercent
+		if step <= 0 {
+			step = 15
+		}
+		newBid := int(math.Round(float64(ctx.CurrentBid) * (1 + step/100)))
+		return newBid, fmt.Sprintf("avg position %.1f worse than target %.1f, raising bid to climb", ctx.AvgPosition, target)
+	}
+
+	// Rule 4: at/above target — pull back when impressions are flat vs the prior window.
+	if params.FlatImpressionsPct > 0 && params.RollbackStepPercent > 0 && ctx.PrevImpressions > 0 {
+		growth := (float64(ctx.Impressions) - float64(ctx.PrevImpressions)) / float64(ctx.PrevImpressions) * 100
+		if math.Abs(growth) <= params.FlatImpressionsPct {
+			newBid := int(math.Round(float64(ctx.CurrentBid) * (1 - params.RollbackStepPercent/100)))
+			return newBid, fmt.Sprintf("at target (pos %.1f), impressions flat within %.0f%% — pulling back %.0f%% to hold cheaper",
+				ctx.AvgPosition, params.FlatImpressionsPct, params.RollbackStepPercent)
+		}
+	}
+
+	return 0, "" // at target, holding
 }
 
 func (e *BidEngine) calculateAntiSlivBid(params domain.StrategyParams, ctx BidContext) (int, string, *float64) {

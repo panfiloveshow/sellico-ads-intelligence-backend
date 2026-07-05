@@ -270,7 +270,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			continue
 		}
 
-		decision := s.engine.CalculateBid(strategy, BidContext{
+		bidCtx := BidContext{
 			CurrentBid:        currentBid,
 			Impressions:       totalImpressions,
 			Clicks:            totalClicks,
@@ -279,7 +279,12 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			Orders:            totalOrders,
 			Placement:         "search",
 			IncreaseGuardrail: s.bidIncreaseGuardrail(ctx, strategy, binding, *binding.CampaignID, currentBid),
-		})
+		}
+		if strategy.Type == domain.StrategyTypeSearchPlaybook {
+			s.augmentSearchPlaybookContext(ctx, *binding.CampaignID, binding, stats, &bidCtx)
+		}
+
+		decision := s.engine.CalculateBid(strategy, bidCtx)
 
 		if decision == nil {
 			continue
@@ -761,6 +766,98 @@ func minTime(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+// augmentSearchPlaybookContext fills the position/price/prev-impression fields the
+// search_playbook engine needs. All sources are real synced data; when a source is
+// missing the field stays zero and the engine's own guards handle the absence.
+func (s *BidAutomationService) augmentSearchPlaybookContext(ctx context.Context, campaignID uuid.UUID, binding domain.StrategyBinding, stats []sqlcgen.CampaignStat, bidCtx *BidContext) {
+	if avgPos, ok := s.campaignAvgPosition(ctx, campaignID); ok {
+		bidCtx.AvgPosition = avgPos
+		bidCtx.HasPosition = true
+	}
+
+	if products, err := s.productsForBidGuardrail(ctx, binding, campaignID); err == nil {
+		for _, p := range products {
+			if p.Price.Valid && p.Price.Int64 > 0 {
+				bidCtx.BuyerPrice = float64(p.Price.Int64)
+				break
+			}
+		}
+	}
+
+	// Split the lookback window in half so the flat-impression pullback rule compares
+	// the recent half against the prior half.
+	cur, prev := splitImpressionsByDateMidpoint(stats)
+	if cur > 0 || prev > 0 {
+		bidCtx.Impressions = cur
+		bidCtx.PrevImpressions = prev
+	}
+}
+
+// campaignAvgPosition returns the impression-weighted average position across the
+// campaign's keywords, from the latest synced phrase stats.
+// ponytail: per-phrase loop capped at 500 phrases/campaign; batch by campaign if that ceiling is ever hit.
+func (s *BidAutomationService) campaignAvgPosition(ctx context.Context, campaignID uuid.UUID) (float64, bool) {
+	phrases, err := s.queries.ListPhrasesByCampaign(ctx, sqlcgen.ListPhrasesByCampaignParams{
+		CampaignID: uuidToPgtype(campaignID),
+		Limit:      500,
+		Offset:     0,
+	})
+	if err != nil || len(phrases) == 0 {
+		return 0, false
+	}
+
+	var weightedSum, weight float64
+	for _, phrase := range phrases {
+		stat, err := s.queries.GetLatestPhraseStat(ctx, phrase.ID)
+		if err != nil || !stat.AvgPos.Valid || stat.AvgPos.Float64 <= 0 {
+			continue
+		}
+		w := float64(stat.Impressions)
+		if w <= 0 {
+			w = 1
+		}
+		weightedSum += stat.AvgPos.Float64 * w
+		weight += w
+	}
+	if weight == 0 {
+		return 0, false
+	}
+	return weightedSum / weight, true
+}
+
+// splitImpressionsByDateMidpoint sums impressions for the recent half of the stat
+// window (cur) and the older half (prev), split at the date midpoint.
+func splitImpressionsByDateMidpoint(stats []sqlcgen.CampaignStat) (cur, prev int64) {
+	var minD, maxD time.Time
+	for _, st := range stats {
+		if !st.Date.Valid {
+			continue
+		}
+		d := st.Date.Time
+		if minD.IsZero() || d.Before(minD) {
+			minD = d
+		}
+		if maxD.IsZero() || d.After(maxD) {
+			maxD = d
+		}
+	}
+	if minD.IsZero() {
+		return 0, 0
+	}
+	mid := minD.Add(maxD.Sub(minD) / 2)
+	for _, st := range stats {
+		if !st.Date.Valid {
+			continue
+		}
+		if st.Date.Time.Before(mid) {
+			prev += st.Impressions
+		} else {
+			cur += st.Impressions
+		}
+	}
+	return cur, prev
 }
 
 func (s *BidAutomationService) decryptCabinetToken(ctx context.Context, cabinetID uuid.UUID) (string, error) {
