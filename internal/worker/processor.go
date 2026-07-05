@@ -93,6 +93,10 @@ type repricerRunner interface {
 	SendDailyDigest(ctx context.Context, workspaceID uuid.UUID) error
 }
 
+type economicsSyncRunner interface {
+	SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
 type semanticsCollector interface {
 	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
@@ -129,6 +133,7 @@ type Processor struct {
 	integrationRefresher integrationRefresher
 	bidRunner            bidAutomationRunner
 	repricer             repricerRunner
+	economicsSync        economicsSyncRunner
 	semantics            semanticsCollector
 	competitors          competitorExtractor
 	delivery             deliveryCollector
@@ -177,6 +182,12 @@ func (p *Processor) WithBidRunner(r bidAutomationRunner) *Processor {
 
 func (p *Processor) WithRepricer(r repricerRunner) *Processor {
 	p.repricer = r
+	return p
+}
+
+// WithEconomicsSync sets the Sellico→product_economics cost bridge runner.
+func (p *Processor) WithEconomicsSync(r economicsSyncRunner) *Processor {
+	p.economicsSync = r
 	return p
 }
 
@@ -467,6 +478,26 @@ func (p *Processor) HandleSweepRepricerDigest(ctx context.Context, _ *asynq.Task
 	for _, w := range workspaces {
 		if err := p.repricer.SendDailyDigest(ctx, uuid.UUID(w.ID.Bytes)); err != nil {
 			p.logger.Warn().Err(err).Msg("repricer digest failed")
+		}
+	}
+	return nil
+}
+
+// HandleSweepSellicoEconomics mirrors Sellico cost data into product_economics
+// for every workspace so the margin-floor strategy has real numbers.
+func (p *Processor) HandleSweepSellicoEconomics(ctx context.Context, _ *asynq.Task) error {
+	if p.economicsSync == nil {
+		return nil
+	}
+	workspaces, err := p.queries.ListWorkspaces(ctx, sqlcgen.ListWorkspacesParams{Limit: 1000, Offset: 0})
+	if err != nil {
+		return err
+	}
+	for _, w := range workspaces {
+		if n, err := p.economicsSync.SyncWorkspace(ctx, uuid.UUID(w.ID.Bytes)); err != nil {
+			p.logger.Warn().Err(err).Msg("sellico economics sync failed")
+		} else if n > 0 {
+			p.logger.Info().Int("imported", n).Str("workspace_id", uuid.UUID(w.ID.Bytes).String()).Msg("sellico economics synced")
 		}
 	}
 	return nil

@@ -64,6 +64,7 @@ type Config struct {
 	SellicoAPIBaseURL                 string        // env: SELLICO_API_BASE_URL, default: "https://sellico.ru/api"
 	SellicoAPITimeout                 time.Duration // env: SELLICO_API_TIMEOUT, default: 5s
 	SellicoUnitEconomicsReadinessPath string        // env: SELLICO_UNIT_ECONOMICS_READINESS_PATH, optional; empty disables bid scale-up economics checks
+	SellicoUnitEconomicsExportPath    string        // env: SELLICO_UNIT_ECONOMICS_EXPORT_PATH, cost/commission/tax by nmID; empty disables the repricer economics bridge
 
 	// Sellico service-account credentials. The backend uses them to call the
 	// service-account endpoints documented in financial-dashboard/rules.md
@@ -130,6 +131,7 @@ func Load() *Config {
 		SellicoAPIBaseURL:                 getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
 		SellicoAPITimeout:                 getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
 		SellicoUnitEconomicsReadinessPath: getEnvOrDefault("SELLICO_UNIT_ECONOMICS_READINESS_PATH", ""),
+		SellicoUnitEconomicsExportPath:    getEnvOrDefault("SELLICO_UNIT_ECONOMICS_EXPORT_PATH", "/products/unit-economics/export"),
 		SellicoServiceToken:               getEnvOrDefault("SELLICO_API_TOKEN", ""),
 		SellicoServiceEmail:               getEnvOrDefault("SELLICO_EMAIL", ""),
 		SellicoServicePassword:            getEnvOrDefault("SELLICO_PASSWORD", ""),

@@ -27,7 +27,7 @@ type Runtime struct {
 	mux           *asynq.ServeMux
 }
 
-func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, repricer *service.RepricerService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
+func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, repricer *service.RepricerService, economicsSync *service.SellicoEconomicsSyncService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
 	redisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis uri for worker: %w", err)
@@ -39,6 +39,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		WithIntegrationRefresher(integrationRefresher).
 		WithBidRunner(bidRunner).
 		WithRepricer(repricer).
+		WithEconomicsSync(economicsSync).
 		WithSemanticsCollector(semantics).
 		WithCompetitorExtractor(competitors).
 		WithDeliveryCollector(delivery).
@@ -70,6 +71,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSyncPrices, processor.HandleSyncPrices)
 	mux.HandleFunc(TaskSweepSyncPrices, processor.HandleSweepSyncPrices)
 	mux.HandleFunc(TaskSweepRepricerDigest, processor.HandleSweepRepricerDigest)
+	mux.HandleFunc(TaskSweepSellicoEconomics, processor.HandleSweepSellicoEconomics)
 	mux.HandleFunc(TaskCollectKeywords, processor.HandleCollectKeywords)
 	mux.HandleFunc(TaskSweepCollectKeywords, processor.HandleSweepCollectKeywords)
 	mux.HandleFunc(TaskExtractCompetitors, processor.HandleExtractCompetitors)
@@ -144,6 +146,8 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		{"@hourly", TaskSweepRepricer, QueueRepricer},
 		// Daily digest at 06:00 UTC (09:00 MSK).
 		{"0 6 * * *", TaskSweepRepricerDigest, QueueRepricer},
+		// Mirror Sellico cost data into product_economics (feeds margin-floor).
+		{"@every 6h", TaskSweepSellicoEconomics, QueueRepricer},
 		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricer},
 		{cfg.RepricerScheduleInterval, TaskExecutePriceSchedule, QueueRepricer},
 		{syncInterval, TaskSweepCollectKeywords, QueueSemantics},
@@ -216,6 +220,11 @@ func (r *Runtime) Start() error {
 	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepSyncPrices),
 		asynq.Queue(QueueRepricer), asynq.ProcessIn(15*time.Second), asynq.Unique(30*time.Minute)); err != nil {
 		r.logger.Warn().Err(err).Msg("failed to enqueue startup price sync")
+	}
+	// Pull Sellico cost data shortly after boot so margin-floor has numbers.
+	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepSellicoEconomics),
+		asynq.Queue(QueueRepricer), asynq.ProcessIn(30*time.Second), asynq.Unique(30*time.Minute)); err != nil {
+		r.logger.Warn().Err(err).Msg("failed to enqueue startup economics sync")
 	}
 	return nil
 }

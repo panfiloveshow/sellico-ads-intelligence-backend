@@ -20,7 +20,7 @@ func TestNewRuntime_BuildsWithoutStarting(t *testing.T) {
 		RepricerScheduleInterval: "@every 15m",
 	}
 
-	runtime, err := NewRuntime(cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zerolog.Nop())
+	runtime, err := NewRuntime(cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, runtime)
 }

@@ -92,7 +92,17 @@ func main() {
 		service.WithRepricerNotifications(notificationService),
 	)
 	exportGenerator := service.NewExportGenerator(deps.Queries, cfg.ExportStoragePath)
-	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
+	// Sellico → product_economics cost bridge (feeds the margin-floor strategy).
+	var economicsSyncService *service.SellicoEconomicsSyncService
+	if sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsExportPath != "" {
+		economicsSyncService = service.NewSellicoEconomicsSyncService(
+			deps.Queries, sellicoClient, sellicoTokenManager,
+			service.NewProductEconomicsService(deps.Queries),
+			cfg.SellicoUnitEconomicsExportPath, deps.Logger,
+		)
+		deps.Logger.Info().Str("path", cfg.SellicoUnitEconomicsExportPath).Msg("sellico economics bridge enabled for repricer")
+	}
+	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap worker runtime: %v\n", err)
 		os.Exit(1)

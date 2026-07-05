@@ -1,0 +1,89 @@
+package sellico
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// WBUnitEconomics is one product's cost data pulled from Sellico's unit economics
+// (GET /products/unit-economics/export), keyed by WB nmID. Costs are in rubles.
+type WBUnitEconomics struct {
+	NmID              int64
+	CostPrice         float64
+	CommissionPercent *float64
+	TaxPercent        *float64
+}
+
+// ListWBUnitEconomics fetches cost/commission/tax by nmID for one Sellico
+// integration. path is the export endpoint (default "/products/unit-economics/export").
+func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, integrationID string) ([]WBUnitEconomics, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("sellico unit economics export path is empty")
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	u := c.baseURL + path + "?integration_id=" + url.QueryEscape(integrationID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sellico unit economics export: new request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+serviceToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrUnauthorized
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("sellico unit economics export returned status %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Items []struct {
+			NmID              json.Number  `json:"nm_id"`
+			CostPrice         json.Number  `json:"cost_price"`
+			CommissionPercent *json.Number `json:"commission_percent"`
+			TaxPercent        *json.Number `json:"tax_percent"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+
+	out := make([]WBUnitEconomics, 0, len(payload.Items))
+	for _, it := range payload.Items {
+		nm, err := it.NmID.Int64()
+		if err != nil || nm <= 0 {
+			continue
+		}
+		cost, err := it.CostPrice.Float64()
+		if err != nil || cost <= 0 {
+			continue
+		}
+		row := WBUnitEconomics{NmID: nm, CostPrice: cost}
+		if it.CommissionPercent != nil {
+			if v, err := it.CommissionPercent.Float64(); err == nil {
+				row.CommissionPercent = &v
+			}
+		}
+		if it.TaxPercent != nil {
+			if v, err := it.TaxPercent.Float64(); err == nil {
+				row.TaxPercent = &v
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}

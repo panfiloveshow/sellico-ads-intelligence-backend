@@ -35,6 +35,11 @@ func (s *ProductEconomicsService) List(ctx context.Context, workspaceID uuid.UUI
 }
 
 func (s *ProductEconomicsService) Import(ctx context.Context, actorID, workspaceID uuid.UUID, rows []domain.ProductEconomicsInput) (*domain.ProductEconomicsImportResult, error) {
+	// updated_by → NULL for system imports (uuid.Nil); it's an FK to users(id).
+	updatedBy := uuidToPgtype(actorID)
+	if actorID == uuid.Nil {
+		updatedBy = pgtype.UUID{}
+	}
 	result := &domain.ProductEconomicsImportResult{Items: make([]domain.ProductEconomics, 0, len(rows))}
 	for index, row := range rows {
 		normalized, err := validateProductEconomicsInput(row)
@@ -55,7 +60,7 @@ func (s *ProductEconomicsService) Import(ctx context.Context, actorID, workspace
 			MaxAllowedDrr:       float64PtrToPgtype(normalized.MaxAllowedDRR),
 			Source:              normalized.Source,
 			EffectiveAt:         timePtrToPgDate(normalized.EffectiveAt),
-			UpdatedBy:           uuidToPgtype(actorID),
+			UpdatedBy:           updatedBy,
 		})
 		if err != nil {
 			result.Skipped++
