@@ -247,6 +247,9 @@ func main() {
 					return taskErr
 				}
 				_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueRepricer), asynq.MaxRetry(5), asynq.Timeout(30*time.Minute), asynq.Unique(5*time.Minute))
+				if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+					return nil // already queued — treat repeated clicks as success
+				}
 				return taskErr
 			},
 			func(workspaceID uuid.UUID) error {
@@ -255,6 +258,9 @@ func main() {
 					return taskErr
 				}
 				_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueRepricer), asynq.MaxRetry(3), asynq.Timeout(15*time.Minute), asynq.Unique(2*time.Minute))
+				if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+					return nil // already queued — treat repeated clicks as success
+				}
 				return taskErr
 			}),
 	})
