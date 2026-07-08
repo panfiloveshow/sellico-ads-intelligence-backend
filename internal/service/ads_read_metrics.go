@@ -198,6 +198,14 @@ func buildAdsDataStatus(data *adsWorkspaceData, dateFrom, dateTo time.Time, cabi
 	}
 
 	campaignIDs := make(map[uuid.UUID]struct{})
+	// Готовность (state=ready) оцениваем только по АКТИВНЫМ кампаниям: у
+	// completed/архивных и давно paused закономерно нет статистики за текущий
+	// период — это не пробел данных. Раньше знаменателем были все кампании, и
+	// зрелый кабинет (десятки завершённых РК) навсегда зависал в state=partial
+	// («данные обновляются») при полностью свежей синхронизации.
+	activeCampaignIDs := make(map[uuid.UUID]struct{})
+	activeCampaignsTotal := 0
+	activeCampaignsWithStats := 0
 	for _, campaign := range data.campaigns {
 		if cabinetFilter != nil && campaign.SellerCabinetID != *cabinetFilter {
 			continue
@@ -207,21 +215,38 @@ func buildAdsDataStatus(data *adsWorkspaceData, dateFrom, dateTo time.Time, cabi
 		if campaign.Status == "active" || campaign.Status == "paused" {
 			status.HasCampaigns = true
 		}
+		active := campaign.Status == "active"
+		if active {
+			activeCampaignIDs[campaign.ID] = struct{}{}
+			activeCampaignsTotal++
+		}
 		if campaignHasStatsInRange(data.campaignStatsByID[campaign.ID], dateFrom, dateTo) {
 			status.CampaignsWithStats++
 			status.HasCurrentStats = true
+			if active {
+				activeCampaignsWithStats++
+			}
 		}
 	}
 
 	status.QueriesTotal = 0
+	activeQueriesTotal := 0
+	activeQueriesWithStats := 0
 	for _, phrase := range data.phrases {
 		if _, ok := campaignIDs[phrase.CampaignID]; !ok {
 			continue
 		}
 		status.QueriesTotal++
+		_, activePhrase := activeCampaignIDs[phrase.CampaignID]
+		if activePhrase {
+			activeQueriesTotal++
+		}
 		if phraseHasStatsInRange(data.phraseStatsByID[phrase.ID], dateFrom, dateTo) {
 			status.QueriesWithStats++
 			status.HasCurrentStats = true
+			if activePhrase {
+				activeQueriesWithStats++
+			}
 		}
 	}
 	if mismatches := data.extensionEvidence.bidMismatchCount(data.phrases, campaignIDs); mismatches > 0 {
@@ -253,9 +278,9 @@ func buildAdsDataStatus(data *adsWorkspaceData, dateFrom, dateTo time.Time, cabi
 	case status.FreshnessState == "stale":
 		status.State = "stale"
 		status.Reason = "Последняя синхронизация устарела; метрики могут быть неполными."
-	case status.CampaignsWithStats < status.CampaignsTotal || status.QueriesWithStats < status.QueriesTotal:
+	case activeCampaignsWithStats < activeCampaignsTotal || activeQueriesWithStats < activeQueriesTotal:
 		status.State = "partial"
-		status.Reason = "Данные частичные: не у всех кампаний или фраз есть статистика за период."
+		status.Reason = "Данные частичные: не у всех активных кампаний или их фраз есть статистика за период."
 	}
 
 	return status

@@ -3232,6 +3232,43 @@ func TestBuildAdsDataStatusReportsReadyWithRealCoverage(t *testing.T) {
 	}
 }
 
+// Завершённые кампании без статистики за период не должны ронять state в
+// "partial": иначе зрелый кабинет (много completed РК) вечно показывает
+// «данные обновляются» при полностью свежей синхронизации.
+func TestBuildAdsDataStatusIgnoresCompletedCampaignsForReadiness(t *testing.T) {
+	cabinetID := uuid.New()
+	activeID := uuid.New()
+	completedID := uuid.New()
+	workspaceID := uuid.New()
+	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+
+	data := &adsWorkspaceData{
+		cabinets: map[uuid.UUID]domain.SellerCabinet{
+			cabinetID: {ID: cabinetID, WorkspaceID: workspaceID, Name: "WB cabinet"},
+		},
+		campaigns: []domain.Campaign{
+			{ID: activeID, WorkspaceID: workspaceID, SellerCabinetID: cabinetID, Status: "active"},
+			{ID: completedID, WorkspaceID: workspaceID, SellerCabinetID: cabinetID, Status: "completed"},
+		},
+		phrases:  []domain.Phrase{},
+		products: []domain.Product{},
+		campaignStatsByID: map[uuid.UUID][]domain.CampaignStat{
+			activeID: {{CampaignID: activeID, Date: now, Impressions: 100, Clicks: 10, Spend: 500}},
+		},
+		phraseStatsByID:     map[uuid.UUID][]domain.PhraseStat{},
+		productBusinessByID: map[uuid.UUID][]domain.ProductBusinessSummary{},
+	}
+
+	status := buildAdsDataStatus(data, now.AddDate(0, 0, -30), now, &cabinetID)
+
+	if status.State != "ready" {
+		t.Fatalf("completed campaign without current stats must not degrade state, got %+v", status)
+	}
+	if status.CampaignsTotal != 2 || status.CampaignsWithStats != 1 {
+		t.Fatalf("reported totals must still count all campaigns: %+v", status)
+	}
+}
+
 func TestEnrichAdsDataStatusReportsQueuedPhaseRetries(t *testing.T) {
 	jobRunID := uuid.New()
 	runAt := time.Date(2026, 5, 19, 14, 30, 0, 0, time.UTC)
