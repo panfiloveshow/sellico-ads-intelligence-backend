@@ -36,7 +36,7 @@ func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 			if allowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-Workspace-ID, X-User-Token, Content-Type, X-Request-ID")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-User-Token, X-User-Id, X-Workspace-ID, X-Account-Id, X-Request-ID")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Max-Age", "86400")
 			}
