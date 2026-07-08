@@ -379,7 +379,7 @@ SELECT
   (SELECT count(*) FROM price_changes c WHERE c.seller_cabinet_id = $2 AND c.wb_status = 'applied' AND c.created_at > now() - interval '24 hours') AS applied,
   (SELECT count(*) FROM price_changes c WHERE c.seller_cabinet_id = $2 AND c.wb_status = 'recommended' AND c.created_at > now() - interval '24 hours') AS recommended,
   (SELECT count(*) FROM price_changes c WHERE c.seller_cabinet_id = $2 AND c.wb_status = 'failed' AND c.created_at > now() - interval '24 hours') AS failed,
-  (SELECT repricer_paused_until FROM seller_cabinets sc WHERE sc.id = $2) AS paused_until
+  (SELECT repricer_paused_until FROM seller_cabinets sc WHERE sc.id = $2 AND sc.workspace_id = $1) AS paused_until
 `
 
 // RepricerDigestCounts sums the workspace's repricer activity over the last 24h.
