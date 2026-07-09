@@ -36,6 +36,9 @@ type Config struct {
 	// WB API
 	WBAPIBaseURL   string // env: WB_API_BASE_URL, default: "https://advert-api.wildberries.ru"
 	WBAPIRateLimit int    // env: WB_API_RATE_LIMIT, default: 10
+	// Зарегистрированный в партнёрской программе WB User-Agent сервиса —
+	// ставится на все исходящие запросы к WB.
+	WBServiceUserAgent string // env: WB_SERVICE_USER_AGENT
 
 	// Ads Read service per-query data caps. Previously hardcoded as constants in
 	// internal/service/ads_read_loader.go and tuned during the OOM incident; lifted
@@ -120,6 +123,7 @@ func Load() *Config {
 		EncryptionKey:                     requireEnv("ENCRYPTION_KEY"),
 		WBAPIBaseURL:                      getEnvOrDefault("WB_API_BASE_URL", "https://advert-api.wildberries.ru"),
 		WBAPIRateLimit:                    getEnvAsInt("WB_API_RATE_LIMIT", 10),
+		WBServiceUserAgent:                getEnvOrDefault("WB_SERVICE_USER_AGENT", "wbas_sellico.ru2823"),
 		AdsReadEntityLimit:                getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
 		AdsReadStatsLimit:                 getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
 		WBParserMinDelay:                  getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),

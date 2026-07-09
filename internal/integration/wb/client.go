@@ -38,6 +38,21 @@ var (
 	retryAfterUnit    = time.Second
 )
 
+// serviceUARoundTripper stamps the registered service User-Agent on every
+// outgoing WB request (official APIs and the public showcase alike).
+type serviceUARoundTripper struct {
+	ua   string
+	next http.RoundTripper
+}
+
+func (t serviceUARoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.ua != "" && req.Header.Get("User-Agent") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("User-Agent", t.ua)
+	}
+	return t.next.RoundTrip(req)
+}
+
 // Client is the concrete HTTP client for the WB Advertising API.
 type Client struct {
 	httpClient               *http.Client
@@ -78,7 +93,14 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 	}
 
 	return &Client{
-		httpClient:               &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			// Партнёрская программа WB для сервисов: зарегистрированный User-Agent
+			// должен стоять на ВСЕХ запросах к WB (по нему WB отделяет запросы
+			// сервиса от ботов и валидирует заявку). Инжектим на транспорте, чтобы
+			// покрыть каждый вызов без правки мест использования.
+			Transport: serviceUARoundTripper{ua: cfg.WBServiceUserAgent, next: http.DefaultTransport},
+		},
 		baseURL:                  cfg.WBAPIBaseURL,
 		contentURL:               contentURL,
 		statisticsURL:            statisticsURL,
