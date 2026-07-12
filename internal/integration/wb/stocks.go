@@ -1,6 +1,7 @@
 package wb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,23 +9,43 @@ import (
 	"net/http"
 )
 
-// ErrStatsScopeMissing is returned when the WB token lacks the "Статистика"
-// category — the statistics-api answers 401/403.
+// ErrStatsScopeMissing is returned when the WB token lacks the required
+// category or token type — the seller-analytics-api answers 401/403.
 var ErrStatsScopeMissing = errors.New("wb token missing statistics scope")
 
-type wbSupplierStock struct {
+type wbStocksReportItem struct {
 	NmID     int64 `json:"nmId"`
-	Quantity int   `json:"quantity"` // available for sale (matches the seller cabinet "Остаток")
+	Quantity int   `json:"quantity"`
+}
+
+type wbStocksReportResponse struct {
+	Data struct {
+		Items []wbStocksReportItem `json:"items"`
+	} `json:"data"`
 }
 
 // ListSupplierStocks returns the seller's real FBW stock summed per nmID from
-// the WB Statistics API. This is the true warehouse stock (like the seller
-// cabinet shows), unlike the card.wb.ru storefront quantity. Needs the
-// "Статистика" token category — 401/403 → ErrStatsScopeMissing.
+// the WB Seller Analytics API. This is the true warehouse stock (like the
+// seller cabinet shows), unlike the card.wb.ru storefront quantity.
+//
+// Needs the "Аналитика" token category, AND a Personal token, Service token,
+// or a Basic token with a registered service secret — a plain self-issued
+// Basic token gets 401/403 regardless of category. 401/403 → ErrStatsScopeMissing.
+//
+// WB retired the legacy GET /api/v1/supplier/stocks (Statistics API) on
+// 2026-07-14; this is its replacement.
 func (c *Client) ListSupplierStocks(ctx context.Context, token string) (map[int64]int, error) {
-	// dateFrom far in the past → full current stock snapshot.
-	const path = "/api/v1/supplier/stocks?dateFrom=2020-01-01"
-	resp, body, err := c.doStatisticsRequest(ctx, http.MethodGet, path, token, nil)
+	const path = "/api/analytics/v1/stocks-report/wb-warehouses"
+
+	// No nmIds filter → full snapshot. 250000 is the endpoint's max page size;
+	// a seller with a larger catalog would need offset pagination, but the
+	// repricer's 12s stock-sync budget (see syncCabinetStocks) only allows one page.
+	reqBody, err := json.Marshal(map[string]int{"limit": 250000, "offset": 0})
+	if err != nil {
+		return nil, fmt.Errorf("marshal stocks report request: %w", err)
+	}
+
+	resp, body, err := c.doAnalyticsRequest(ctx, http.MethodPost, path, token, bytes.NewReader(reqBody))
 	if err != nil {
 		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 			return nil, ErrStatsScopeMissing
@@ -37,12 +58,13 @@ func (c *Client) ListSupplierStocks(ctx context.Context, token string) (map[int6
 		}
 		return nil, fmt.Errorf("wb stocks: status %d", resp.StatusCode)
 	}
-	var rows []wbSupplierStock
-	if err := json.Unmarshal(body, &rows); err != nil {
+
+	var parsed wbStocksReportResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("unmarshal supplier stocks: %w", err)
 	}
-	out := make(map[int64]int, len(rows))
-	for _, r := range rows {
+	out := make(map[int64]int, len(parsed.Data.Items))
+	for _, r := range parsed.Data.Items {
 		if r.NmID != 0 {
 			out[r.NmID] += r.Quantity
 		}
