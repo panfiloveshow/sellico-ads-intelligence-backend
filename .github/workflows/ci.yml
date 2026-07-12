@@ -34,6 +34,9 @@ jobs:
       - name: OpenAPI ↔ router drift check
         run: go run ./tools/check-openapi-drift
 
+      - name: Install CI guard tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep jq
+
       - name: Real data only guard
         run: bash scripts/check-real-data-only.sh
 
@@ -74,13 +77,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # gosec and trivy actions previously tracked @master — supply-chain risk if
-      # the action repo gets compromised. Pin to released tags so Dependabot can
-      # surface upgrades explicitly.
+      # The container action ships an older Go runtime and cannot load modules
+      # requiring Go 1.25. The baseline wrapper runs the full current scanner and
+      # fails on every finding not explicitly present in the checked-in baseline.
       - name: Run gosec
-        uses: securego/gosec@v2.21.4
-        with:
-          args: -exclude-generated ./...
+        run: bash scripts/check-gosec-baseline.sh
 
       - name: Run Trivy (filesystem)
         uses: aquasecurity/trivy-action@v0.35.0

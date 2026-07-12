@@ -1,0 +1,117 @@
+G101	internal/pkg/jwt/jwt.go	Potential hardcoded credentials	const ExtensionTokenAudience = "sellico-ads-extension"
+G101	internal/repository/sqlc/sellico_token_cache_manual.go	Potential hardcoded credentials	const cacheSellicoToken = ` UPDATE workspaces SET encrypted_sellico_token = $2, sellico_token_updated_at = now(), updated_at = now() WHERE id = $1 `
+G101	internal/repository/sqlc/sellico_token_cache_manual.go	Potential hardcoded credentials	const listWorkspacesWithSellicoToken = ` SELECT id, encrypted_sellico_token, sellico_token_updated_at, external_workspace_id, source FROM workspaces WHERE deleted_at IS NULL AND source = 'sellico' AND encrypted_sellico_token IS NOT NULL AND encrypted_sellico_token != '' ORDER BY sellico_token_updated_at DESC NULLS LAST LIMIT $1 `
+G101	internal/testutil/db.go	Potential hardcoded credentials: Password in URL	if dsn == "" { dsn = "postgres://sellico:sellico@localhost:5432/sellico_test?sslmode=disable" }
+G104	internal/integration/wb/client.go	Errors unhandled	respBody, err := io.ReadAll(resp.Body) resp.Body.Close() if err != nil {
+G104	internal/integration/wb/showcase.go	Errors unhandled	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) resp.Body.Close() if resp.StatusCode != http.StatusOK {
+G104	internal/service/bid_automation.go	Errors unhandled	s.queries.CreateBidChange(ctx, sqlcgen.CreateBidChangeParams{ WorkspaceID: uuidToPgtype(workspaceID), SellerCabinetID: uuidToPgtype(strategy.SellerCabinetID), CampaignID: uuidToPgtype(*binding.CampaignID), ProductID: uuidToPgtypePtr(binding.ProductID), StrategyID: uuidToPgtype(strategy.ID), Placement: decision.Placement, OldBid: int32(decision.OldBid), NewBid: int32(decision.NewBid), Reason: decision.Reason, Source: domain.BidSourceStrategy, Acos: acosVal, Roas: roasVal, WbStatus: wbStatus, })
+G104	internal/service/delivery.go	Errors unhandled	for _, info := range deliveryInfos { s.queries.CreateDeliveryData(ctx, sqlcgen.CreateDeliveryDataParams{ WorkspaceID: uuidToPgtype(workspaceID), ProductID: product.ID, Region: info.Region, Warehouse: textToPgtype(info.Warehouse), DeliveryDays: int32(info.DeliveryDays), DeliveryCost: 0, InStock: info.InStock, })
+G104	internal/service/delivery.go	Errors unhandled	if info.StockCount >= 0 { s.queries.UpdateProductStock(ctx, product.ID, int32(info.StockCount)) }
+G104	internal/service/export.go	Errors unhandled	const sheetName = "Export" file.SetSheetName(file.GetSheetName(0), sheetName)
+G104	internal/service/product_events.go	Errors unhandled	metaJSON, _ := json.Marshal(event.Metadata) s.queries.CreateProductEvent(ctx, sqlcgen.CreateProductEventParams{ WorkspaceID: uuidToPgtype(event.WorkspaceID), ProductID: uuidToPgtype(event.ProductID), EventType: event.EventType, FieldName: textToPgtype(event.FieldName), OldValue: textToPgtype(event.OldValue), NewValue: textToPgtype(event.NewValue), Metadata: metaJSON, Source: event.Source, }) }
+G104	internal/service/regional.go	Errors unhandled	productID, _ := uuid.Parse(k.productID) s.queries.UpsertRegionalPositionAggregate(ctx, sqlcgen.UpsertRegionalPositionAggregateParams{ WorkspaceID: uuidToPgtype(workspaceID), ProductID: uuidToPgtype(productID), Query: k.query, Region: k.region, AvgPosition: avg, BestPosition: best, WorstPosition: worst, CheckCount: int32(len(positions)), PeriodStart: pgtype.Date{Time: periodStart, Valid: true}, PeriodEnd: pgtype.Date{Time: periodEnd, Valid: true}, }) aggregated++
+G104	internal/service/semantics.go	Errors unhandled	// More accurate than external API calls and doesn't require rate limiting s.queries.CreateFrequencyHistory(ctx, kw.ID, kw.Frequency) updated++
+G104	internal/service/semantics.go	Errors unhandled	// Record frequency history point s.queries.CreateFrequencyHistory(ctx, kw.ID, frequency) imported++
+G104	internal/service/semantics.go	Errors unhandled	for _, m := range members { s.queries.AssignKeywordToCluster(ctx, m.ID, cluster.ID) }
+G104	internal/service/serp_classifier.go	Errors unhandled	if isPromoted || promoType != "" { s.queries.UpdateSERPItemPromoStatus(ctx, sqlcgen.UpdateSERPItemPromoStatusParams{ ID: item.ID, IsPromoted: isPromoted, PromoType: promoType, }) classified++
+G104	internal/service/sync.go	Errors unhandled	} s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID)) }
+G104	internal/service/sync.go	Errors unhandled	} s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinetID)) return summary, summary.Error()
+G104	internal/transport/middleware/auth.go	Errors unhandled	json.NewEncoder(w).Encode(resp) }
+G104	internal/transport/middleware/ratelimit.go	Errors unhandled	}) json.NewEncoder(w).Encode(resp) return
+G104	internal/transport/middleware/recovery.go	Errors unhandled	}) json.NewEncoder(w).Encode(resp) }
+G104	internal/transport/middleware/tenant.go	Errors unhandled	json.NewEncoder(w).Encode(resp) }
+G104	internal/transport/router.go	Errors unhandled	w.WriteHeader(http.StatusNotImplemented) w.Write([]byte(`{"data":null,"errors":[{"code":"NOT_IMPLEMENTED","message":"not implemented"}]}`)) }
+G104	internal/worker/health.go	Errors unhandled	defer cancel() h.server.Shutdown(ctx) }
+G104	internal/worker/health.go	Errors unhandled	w.WriteHeader(http.StatusOK) w.Write([]byte(`{"status":"ok"}`)) })
+G115	internal/app/bootstrap.go	integer overflow conversion int -> int32	poolConfig.MaxConns = int32(cfg.DBMaxConns) poolConfig.MinConns = int32(cfg.DBMinConns) poolConfig.MaxConnIdleTime = cfg.DBMaxConnIdleTime
+G115	internal/app/bootstrap.go	integer overflow conversion int -> int32	} poolConfig.MaxConns = int32(cfg.DBMaxConns) poolConfig.MinConns = int32(cfg.DBMinConns)
+G115	internal/pkg/crypto/argon2.go	integer overflow conversion int -> uint32	computedHash := argon2.IDKey([]byte(password), salt, params.iterations, params.memory, params.parallelism, uint32(len(hash)))
+G115	internal/service/ads_read.go	integer overflow conversion int -> int32	if entityLimit > 0 { s.entityLimit = int32(entityLimit) }
+G115	internal/service/ads_read.go	integer overflow conversion int -> int32	if statsLimit > 0 { s.statsLimit = int32(statsLimit) }
+G115	internal/service/bid_automation.go	integer overflow conversion int -> int32	OldBid: int32(decision.OldBid), NewBid: int32(decision.NewBid), Reason: decision.Reason,
+G115	internal/service/bid_automation.go	integer overflow conversion int -> int32	Placement: decision.Placement, OldBid: int32(decision.OldBid), NewBid: int32(decision.NewBid),
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(currentBid), NewBid: int32(rollbackBid), Reason: reason,
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(oldBid), NewBid: int32(newBid), Reason: fmt.Sprintf("Manual bid set by user %s", actorID),
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(oldBid), NewBid: int32(suggestedBid), Reason: fmt.Sprintf("Applied phrase recommendation %s: %s", rec.Type, rec.Title),
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(oldBid), NewBid: int32(suggestedBid), Reason: fmt.Sprintf("Applied recommendation %s: %s", rec.Type, rec.Title),
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	Placement: "search", OldBid: int32(oldBid), NewBid: int32(suggestedBid),
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	Placement: placement, OldBid: int32(oldBid), NewBid: int32(newBid),
+G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	Placement: row.Placement, OldBid: int32(currentBid), NewBid: int32(rollbackBid),
+G115	internal/service/competitor.go	integer overflow conversion int -> int32	LastPosition: item.Position, OurPosition: int32(ourPos), })
+G115	internal/service/delivery.go	integer overflow conversion int -> int32	Warehouse: textToPgtype(info.Warehouse), DeliveryDays: int32(info.DeliveryDays), DeliveryCost: 0,
+G115	internal/service/delivery.go	integer overflow conversion int -> int32	if info.StockCount >= 0 { s.queries.UpdateProductStock(ctx, product.ID, int32(info.StockCount)) }
+G115	internal/service/extension_evidence_debug.go	integer overflow conversion int -> int32	WorkspaceID: uuidToPgtype(workspaceID), Limit: limit - int32(len(result)), Offset: 0,
+G115	internal/service/extension_evidence_debug.go	integer overflow conversion int -> int32	func limitDOMRowSnapshots(items []domain.ExtensionDOMRowSnapshot, limit int32) []domain.ExtensionDOMRowSnapshot { if int32(len(items)) <= limit { return items
+G115	internal/service/extension_evidence_debug.go	integer overflow conversion int -> int32	func limitNetworkCaptures(items []domain.ExtensionNetworkCapture, limit int32) []domain.ExtensionNetworkCapture { if int32(len(items)) <= limit { return items
+G115	internal/service/extension_evidence_debug.go	integer overflow conversion int -> int32	func limitPageContexts(items []domain.ExtensionPageContext, limit int32) []domain.ExtensionPageContext { if int32(len(items)) <= limit { return items
+G115	internal/service/extension_ingest.go	integer overflow conversion int -> int32	Region: region, VisiblePosition: int32(input.VisiblePosition), VisiblePage: optionalIntToPgInt4(input.VisiblePage),
+G115	internal/service/helpers.go	integer overflow conversion int -> int32	} return pgtype.Int4{Int32: int32(*value), Valid: true} }
+G115	internal/service/position.go	integer overflow conversion int -> int32	Position: int32(input.Position), Page: int32(input.Page), Source: input.Source,
+G115	internal/service/position.go	integer overflow conversion int -> int32	Region: input.Region, Position: int32(input.Position), Page: int32(input.Page),
+G115	internal/service/regional.go	integer overflow conversion int -> int32	WorstPosition: worst, CheckCount: int32(len(positions)), PeriodStart: pgtype.Date{Time: periodStart, Valid: true},
+G115	internal/service/repricer.go	integer overflow conversion int -> int32	DiscountPercent: int32(g.Discount), ClubDiscountPercent: int32(g.ClubDiscount), DiscountedPriceRub: discounted,
+G115	internal/service/repricer.go	integer overflow conversion int -> int32	PriceRub: g.Price, DiscountPercent: int32(g.Discount), ClubDiscountPercent: int32(g.ClubDiscount),
+G115	internal/service/repricer.go	integer overflow conversion int -> int32	for nm, qty := range stocks { if err := s.queries.SetProductStock(ctx, uuidToPgtype(workspaceID), uuidToPgtype(cabinetID), nm, int32(qty)); err == nil { updated++
+G115	internal/service/repricer_apply.go	integer overflow conversion int -> int32	NewPriceRub: it.NewPriceRub, OldDiscountPercent: int32(it.OldDiscount), NewDiscountPercent: int32(it.NewDiscount),
+G115	internal/service/repricer_apply.go	integer overflow conversion int -> int32	OldDiscountPercent: int32(it.OldDiscount), NewDiscountPercent: int32(it.NewDiscount), MinPriceRub: pgtype.Int8{Int64: it.MinPriceRub, Valid: it.MinPriceRub > 0},
+G115	internal/service/repricer_apply.go	integer overflow conversion int -> int32	Status: domain.PriceTaskUploaded, ItemsCount: int32(len(items)), }, uuidsToPgtype(changeIDs))
+G115	internal/service/repricer_run.go	integer overflow conversion int -> int32	NewPriceRub: decision.NewPriceRub, OldDiscountPercent: int32(price.DiscountPercent), NewDiscountPercent: int32(decision.NewDiscountPercent),
+G115	internal/service/repricer_run.go	integer overflow conversion int -> int32	OldDiscountPercent: int32(price.DiscountPercent), NewDiscountPercent: int32(decision.NewDiscountPercent), MinPriceRub: pgtype.Int8{Int64: decision.MinPriceRub, Valid: decision.MinPriceRub > 0},
+G115	internal/service/seller_cabinet.go	integer overflow conversion int -> int32	func paginateCabinets(items []domain.SellerCabinet, limit, offset int32) []domain.SellerCabinet { if offset >= int32(len(items)) { return []domain.SellerCabinet{}
+G115	internal/service/semantics.go	integer overflow conversion int64 -> int32	if statErr == nil { frequency = int32(stat.Impressions) }
+G115	internal/service/seo_analyzer.go	integer overflow conversion int -> int32	DescriptionScore: int32(analysis.DescriptionScore), KeywordsScore: int32(analysis.KeywordsScore), OverallScore: int32(analysis.OverallScore),
+G115	internal/service/seo_analyzer.go	integer overflow conversion int -> int32	KeywordsScore: int32(analysis.KeywordsScore), OverallScore: int32(analysis.OverallScore), TitleIssues: titleIssuesJSON,
+G115	internal/service/seo_analyzer.go	integer overflow conversion int -> int32	ProductID: uuidToPgtype(product.ID), TitleScore: int32(analysis.TitleScore), DescriptionScore: int32(analysis.DescriptionScore),
+G115	internal/service/seo_analyzer.go	integer overflow conversion int -> int32	TitleScore: int32(analysis.TitleScore), DescriptionScore: int32(analysis.DescriptionScore), KeywordsScore: int32(analysis.KeywordsScore),
+G115	internal/service/serp.go	integer overflow conversion int -> int32	Region: input.Region, TotalResults: int32(input.TotalResults), ScannedAt: timePtrToPgtype(&scannedAt),
+G115	internal/service/serp.go	integer overflow conversion int -> int32	SnapshotID: snapshotRow.ID, Position: int32(item.Position), WbProductID: item.WBProductID,
+G115	internal/service/sync.go	integer overflow conversion int -> int16	if ts, ok := parseReportDateTime(row.Date); ok { k := hourlyOrdersKey{nmID: row.NmID, date: ts.Format("2006-01-02"), hour: int16(ts.Hour())} agg := hourly[k]
+G115	internal/service/sync.go	integer overflow conversion int -> int32	Status: campaign.Status, CampaignType: int32(campaign.CampaignType), BidType: campaign.BidType,
+G115	internal/service/sync.go	integer overflow conversion int -> int32	} return pgtype.Int4{Int32: int32(*value), Valid: true} }
+G115	internal/service/wb_rate_limit_guard.go	integer overflow conversion int -> int32	NextAllowedAt: pgtype.Timestamptz{Time: next, Valid: true}, RetryAfterSeconds: int32(retryAfterSeconds), LastStatus: 429,
+G115	internal/transport/handler/audit_log.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/bid.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	Name: r.URL.Query().Get("name"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	phrases, err := h.svc.ListPhrases(r.Context(), campaignID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	stats, err := h.svc.GetStats(r.Context(), campaignID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/campaign_actions.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) changes, err := h.actions.ListBidHistory(r.Context(), workspaceID, campaignID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/competitor.go	integer overflow conversion int -> int32	if productID != nil { competitors, err = h.svc.ListByProduct(r.Context(), *productID, int32(pg.PerPage), int32(pg.Offset())) } else {
+G115	internal/transport/handler/competitor.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) competitors, err := h.svc.ListByProduct(r.Context(), productID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/competitor.go	integer overflow conversion int -> int32	} else { competitors, err = h.svc.ListByWorkspace(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) }
+G115	internal/transport/handler/export.go	integer overflow conversion int -> int32	Status: r.URL.Query().Get("status"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/job_run.go	integer overflow conversion int -> int32	Status: r.URL.Query().Get("status"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	CampaignID: campaignID, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) bids, err := h.svc.ListBids(r.Context(), workspaceID, phraseID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) stats, err := h.svc.GetStats(r.Context(), workspaceID, phraseID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/position.go	integer overflow conversion int -> int32	ActiveOnly: r.URL.Query().Get("active_only") != "false", }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/position.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	Limit: int32(pg.PerPage), Offset: int32(pg.Offset()), }
+G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	Status: status, Limit: int32(pg.PerPage), Offset: int32(pg.Offset()),
+G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	} items, err := h.service.ListCatalog(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	} items, err := h.service.ListSchedules(r.Context(), workspaceID, status, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	} items, err := h.service.ListUploadTasks(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/product.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/product.go	integer overflow conversion int -> int32	SellerCabinetID: sellerCabinetID, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/product.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) positions, err := h.svc.ListPositions(r.Context(), workspaceID, productID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/product_economics.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) items, err := h.service.List(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/product_events.go	integer overflow conversion int -> int32	eventType := r.URL.Query().Get("event_type") events, err := h.svc.ListEventsByWorkspace(r.Context(), workspaceID, eventType, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/product_events.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) events, err := h.svc.ListEvents(r.Context(), productID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/recommendation.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/seller_cabinet.go	integer overflow conversion int -> int32	Status: r.URL.Query().Get("status"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/seller_cabinet.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) campaigns, err := h.svc.ListCampaigns(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/seller_cabinet.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) products, err := h.svc.ListProducts(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/semantics.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) clusters, err := h.svc.ListClusters(r.Context(), sellerCabinetID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/semantics.go	integer overflow conversion int -> int32	search := r.URL.Query().Get("search") keywords, err := h.svc.ListKeywords(r.Context(), sellerCabinetID, search, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/serp.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/strategy.go	integer overflow conversion int -> int32	} strategies, err := h.svc.List(r.Context(), workspaceID, sellerCabinetID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/workspace.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) members, err := h.svc.ListMembers(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G115	internal/transport/handler/workspace.go	integer overflow conversion int -> int32	workspaces, err := h.svc.List(r.Context(), userID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G301	internal/service/export.go	Expect directory permissions to be 0750 or less	exportDir := filepath.Join(basePath, workspaceID.String()) if err := os.MkdirAll(exportDir, 0o755); err != nil { return "", apperror.New(apperror.ErrInternal, "failed to prepare export storage")
+G304	internal/app/memlimit.go	Potential file inclusion via variable	} { raw, err := os.ReadFile(p) if err != nil {
+G304	internal/service/export.go	Potential file inclusion via variable	func writeCSVFile(path string, headers []string, rows [][]string) error { file, err := os.Create(path) if err != nil {
+G304	internal/testutil/db.go	Potential file inclusion via variable	for _, f := range upFiles { sql, err := os.ReadFile(f) if err != nil {
+G304	tools/check-openapi-drift/main.go	Potential file inclusion via variable	func readOpenAPIPaths(path string) ([]string, error) { f, err := os.Open(path) if err != nil {
+G304	tools/check-openapi-drift/main.go	Potential file inclusion via variable	func readRouterPaths(path string) ([]string, error) { f, err := os.Open(path) if err != nil {
+G304	tools/check-openapi-drift/main.go	Potential file inclusion via variable	routerOnly = map[string]struct{}{} f, err := os.Open(path) if err != nil {
