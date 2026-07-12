@@ -44,6 +44,7 @@ func newTestRouterWithRole(role string) chi.Router {
 		SEOHandler:            handler.NewSEOHandler(nil),
 		DeliveryHandler:       handler.NewDeliveryHandler(nil),
 		CompetitorHandler:     handler.NewCompetitorHandler(nil),
+		PriceHandler:          handler.NewPriceHandler(nil, nil, nil),
 	})
 }
 
@@ -197,6 +198,23 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["GET /api/v1/extension/evidence-summary"], "missing GET /api/v1/extension/evidence-summary")
 	assert.True(t, set["GET /api/v1/extension/evidence-debug"], "missing GET /api/v1/extension/evidence-debug")
 	assert.True(t, set["GET /api/v1/extension/evidence-debug/report"], "missing GET /api/v1/extension/evidence-debug/report")
+
+	// Repricer
+	assert.True(t, set["GET /api/v1/prices/"], "missing GET /api/v1/prices/")
+	assert.True(t, set["POST /api/v1/prices/sync"], "missing POST /api/v1/prices/sync")
+	assert.True(t, set["POST /api/v1/prices/bulk"], "missing POST /api/v1/prices/bulk")
+	assert.True(t, set["GET /api/v1/prices/quarantine"], "missing GET /api/v1/prices/quarantine")
+	assert.True(t, set["GET /api/v1/prices/cabinets-status"], "missing GET /api/v1/prices/cabinets-status")
+	assert.True(t, set["GET /api/v1/prices/heatmap"], "missing GET /api/v1/prices/heatmap")
+	assert.True(t, set["GET /api/v1/prices/health"], "missing GET /api/v1/prices/health")
+	assert.True(t, set["POST /api/v1/prices/pause"], "missing POST /api/v1/prices/pause")
+	assert.True(t, set["GET /api/v1/price-changes/"], "missing GET /api/v1/price-changes/")
+	assert.True(t, set["POST /api/v1/price-changes/{changeId}/rollback"], "missing price rollback route")
+	assert.True(t, set["GET /api/v1/price-upload-tasks"], "missing GET /api/v1/price-upload-tasks")
+	assert.True(t, set["POST /api/v1/repricer/run"], "missing POST /api/v1/repricer/run")
+	assert.True(t, set["GET /api/v1/price-schedules/"], "missing GET /api/v1/price-schedules/")
+	assert.True(t, set["POST /api/v1/price-schedules/"], "missing POST /api/v1/price-schedules/")
+	assert.True(t, set["DELETE /api/v1/price-schedules/{scheduleId}"], "missing schedule cancel route")
 }
 
 func TestPublicRoutes_NoAuth(t *testing.T) {
@@ -301,6 +319,13 @@ func TestViewerCannotAccessWorkspaceWriteRoutes(t *testing.T) {
 		{"DELETE", "/api/v1/strategies/" + entityID.String(), ""},
 		{"POST", "/api/v1/strategies/" + entityID.String() + "/attach", `{}`},
 		{"DELETE", "/api/v1/strategies/" + entityID.String() + "/bindings/" + phraseID.String(), ""},
+		{"POST", "/api/v1/prices/sync", ""},
+		{"POST", "/api/v1/prices/bulk", `{}`},
+		{"POST", "/api/v1/prices/pause", `{}`},
+		{"POST", "/api/v1/price-changes/" + entityID.String() + "/rollback", ""},
+		{"POST", "/api/v1/repricer/run", ""},
+		{"POST", "/api/v1/price-schedules/", `{}`},
+		{"DELETE", "/api/v1/price-schedules/" + entityID.String(), ""},
 	}
 
 	for _, tc := range tests {

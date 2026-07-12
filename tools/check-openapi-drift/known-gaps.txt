@@ -32,21 +32,3 @@
 + /api/v1/extension/token/exchange
 + /api/v1/workspaces/{workspaceId}/ads-intelligence/wb/data-health
 + /api/v1/workspaces/{workspaceId}/ads-intelligence/wb/debug/normquery
-
-# ---- Repricer (WB price management). Full OpenAPI schemas are pending the v1.0
-# spec-sync pass; routes are live and workspace-scoped. All price fields are
-# integer rubles. ----
-+ /api/v1/prices
-+ /api/v1/prices/sync
-+ /api/v1/prices/bulk
-+ /api/v1/prices/quarantine
-+ /api/v1/price-changes
-+ /api/v1/price-changes/{changeId}/rollback
-+ /api/v1/price-upload-tasks
-+ /api/v1/price-schedules
-+ /api/v1/price-schedules/{scheduleId}
-+ /api/v1/repricer/run
-+ /api/v1/prices/cabinets-status
-+ /api/v1/prices/heatmap
-+ /api/v1/prices/health
-+ /api/v1/prices/pause

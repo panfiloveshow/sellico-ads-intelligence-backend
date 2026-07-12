@@ -232,6 +232,19 @@ func TestDoRequest_RateLimiterPerToken(t *testing.T) {
 	assert.Same(t, lim1, lim1Again, "same token should return same limiter")
 }
 
+func TestPricesRateLimiterIsSharedPerTokenAndUsesWBBucket(t *testing.T) {
+	client := newTestClient("http://localhost")
+
+	lim1 := client.priceLimiterForToken("token-a")
+	lim2 := client.priceLimiterForToken("token-b")
+	lim1Again := client.priceLimiterForToken("token-a")
+
+	assert.NotSame(t, lim1, lim2)
+	assert.Same(t, lim1, lim1Again)
+	assert.InDelta(t, 10.0/6.0, float64(lim1.Limit()), 0.001)
+	assert.Equal(t, 1, lim1.Burst())
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -270,4 +283,5 @@ func TestNewClient_DefaultValues(t *testing.T) {
 	assert.Equal(t, "https://custom-api.example.com", client.baseURL)
 	assert.Equal(t, 5, client.rateLimit)
 	assert.NotNil(t, client.limiters)
+	assert.NotNil(t, client.priceLimiters)
 }

@@ -384,3 +384,38 @@ func TestDecideCompetitorFollow(t *testing.T) {
 		assert.Equal(t, "no_competitor_price", d.SkipReason)
 	})
 }
+
+func TestAutoPricingRequiresAbsoluteGuardrails(t *testing.T) {
+	t.Run("relative floor is not accepted for unattended decreases", func(t *testing.T) {
+		in := PriceEngineInputs{
+			Current:          price(1000, 0, 1000),
+			Economics:        domain.ProductEconomics{},
+			Stock:            1000,
+			StockKnown:       true,
+			SalesUnitsPerDay: 0,
+		}
+		params := domain.StrategyParams{
+			PriceApplyMode:     domain.PriceApplyModeAuto,
+			MaxDiscountPercent: 30,
+			StepPercent:        3,
+			OverstockDays:      60,
+		}
+		d := DecideInventoryDemand(in, params)
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "missing_cost_price", d.SkipReason)
+	})
+
+	t.Run("peak auto increase requires an absolute ceiling", func(t *testing.T) {
+		minPrice := int64(500)
+		in := PriceEngineInputs{Current: price(1000, 0, 1000)}
+		params := domain.StrategyParams{
+			PriceApplyMode:    domain.PriceApplyModeAuto,
+			MinPriceRub:       &minPrice,
+			StepPercent:       3,
+			PeakUpliftPercent: 8,
+		}
+		d := DecidePeakHours(in, params, 1)
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "max_price_required_for_increase", d.SkipReason)
+	})
+}

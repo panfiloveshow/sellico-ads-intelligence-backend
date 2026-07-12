@@ -1427,7 +1427,7 @@ var mskLocation = time.FixedZone("MSK", 3*60*60)
 
 // parseReportDateTime extracts the full order timestamp (MSK). ok=false means
 // the row has no time-of-day (date-only) — heatmap aggregation must skip it,
-// otherwise every such order lands in a fake 00:00 peak.
+// otherwise every such order lands in a misleading 00:00 peak.
 func parseReportDateTime(value string) (t time.Time, ok bool) {
 	if value == "" {
 		return time.Time{}, false

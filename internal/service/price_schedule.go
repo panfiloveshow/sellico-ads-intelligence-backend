@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +22,9 @@ const scheduleClaimBatch = 200
 // set (delta_percent only in v1) it auto-creates a paired inverse revert entry.
 func (s *RepricerService) CreateSchedule(ctx context.Context, actorID, workspaceID uuid.UUID, in domain.PriceScheduleInput) (*domain.PriceScheduleEntry, error) {
 	if err := validateScheduleInput(in, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	if err := s.requireCabinetInWorkspace(ctx, workspaceID, in.SellerCabinetID); err != nil {
 		return nil, err
 	}
 	row, err := s.queries.CreatePriceScheduleEntry(ctx, sqlcgen.CreatePriceScheduleEntryParams{
@@ -40,23 +45,41 @@ func (s *RepricerService) CreateSchedule(ctx context.Context, actorID, workspace
 		return nil, err
 	}
 
-	// Auto-revert: exact inverse delta at revert_at.
+	// Auto-revert: exact inverse delta at revert_at. The repository is not exposed
+	// through a transaction here, so a failed pair creation is compensated by
+	// making the primary non-executable and returning the error to the caller.
 	if in.RevertAt != nil {
 		primaryID := uuidFromPgtype(row.ID)
-		inverse := inverseDeltaPercent(in.AdjustmentValue)
+		signed := signedScheduleDelta(in.AdjustmentValue, in.Direction)
+		inverse := inverseDeltaPercent(signed)
+		revertDirection := domain.PriceDirectionUp
+		if inverse < 0 {
+			revertDirection = domain.PriceDirectionDown
+		}
 		if _, err := s.queries.CreatePriceScheduleEntry(ctx, sqlcgen.CreatePriceScheduleEntryParams{
 			WorkspaceID:     uuidToPgtype(workspaceID),
 			SellerCabinetID: uuidToPgtype(in.SellerCabinetID),
 			ScopeType:       in.ScopeType,
 			ProductIds:      in.ProductIDs,
 			AdjustmentType:  domain.PriceAdjustDeltaPercent,
-			AdjustmentValue: inverse,
+			AdjustmentValue: math.Abs(inverse),
+			Direction:       textToPgtype(revertDirection),
 			ScheduledAt:     pgtype.Timestamptz{Time: *in.RevertAt, Valid: true},
 			RevertOf:        uuidToPgtypePtr(&primaryID),
 			Comment:         textToPgtype("auto-revert of " + primaryID.String()),
 			CreatedBy:       uuidToPgtypePtr(&actorID),
 		}); err != nil {
-			s.logger.Warn().Err(err).Msg("failed to create auto-revert schedule entry")
+			compensationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_, compensationErr := s.queries.UpdatePriceScheduleEntryStatus(compensationCtx, sqlcgen.UpdatePriceScheduleEntryStatusParams{
+				ID:     row.ID,
+				Status: domain.PriceScheduleFailed,
+				Error:  pgtype.Text{String: "auto-revert pair creation failed", Valid: true},
+			})
+			if compensationErr != nil {
+				return nil, fmt.Errorf("create auto-revert: %w; disable primary schedule: %v", err, compensationErr)
+			}
+			return nil, fmt.Errorf("create auto-revert: %w", err)
 		}
 	}
 
@@ -107,6 +130,17 @@ func (s *RepricerService) CancelSchedule(ctx context.Context, workspaceID, entry
 // workspaces. Returns the number executed.
 func (s *RepricerService) ExecuteDueSchedules(ctx context.Context, now time.Time) (int, error) {
 	executed := 0
+	deferred := make([]uuid.UUID, 0)
+	defer func() {
+		for _, entryID := range deferred {
+			if _, err := s.queries.UpdatePriceScheduleEntryStatus(context.WithoutCancel(ctx), sqlcgen.UpdatePriceScheduleEntryStatusParams{
+				ID:     uuidToPgtype(entryID),
+				Status: domain.PriceSchedulePlanned,
+			}); err != nil {
+				s.logger.Error().Err(err).Str("schedule_entry_id", entryID.String()).Msg("failed to requeue paused price schedule")
+			}
+		}
+	}()
 	for i := 0; i < scheduleClaimBatch; i++ {
 		row, err := s.queries.ClaimDuePriceScheduleEntry(ctx, pgtype.Timestamptz{Time: now, Valid: true})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -115,43 +149,69 @@ func (s *RepricerService) ExecuteDueSchedules(ctx context.Context, now time.Time
 		if err != nil {
 			return executed, err
 		}
-		s.executeScheduleEntry(ctx, row)
+		if s.executeScheduleEntry(ctx, row) {
+			deferred = append(deferred, uuidFromPgtype(row.ID))
+			continue
+		}
 		executed++
 	}
 	return executed, nil
 }
 
-func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.PriceScheduleEntry) {
+// executeScheduleEntry returns true when a paused entry must be requeued.
+func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.PriceScheduleEntry) bool {
 	entryID := uuidFromPgtype(row.ID)
 	workspaceID := uuidFromPgtype(row.WorkspaceID)
 	cabinetID := uuidFromPgtype(row.SellerCabinetID)
+	if row.RevertOf.Valid {
+		primary, err := s.queries.GetPriceScheduleEntry(ctx, row.RevertOf)
+		if err != nil || uuidFromPgtype(primary.WorkspaceID) != workspaceID {
+			s.failSchedule(ctx, entryID, "auto-revert primary schedule not found")
+			return false
+		}
+		switch autoRevertPrimaryDisposition(primary.Status) {
+		case "defer":
+			return true
+		case "reject":
+			s.failSchedule(ctx, entryID, "auto-revert primary schedule did not complete")
+			return false
+		}
+	}
+	if err := s.requireCabinetInWorkspace(ctx, workspaceID, cabinetID); err != nil {
+		s.failSchedule(ctx, entryID, "seller cabinet does not belong to schedule workspace")
+		return false
+	}
 
 	// Freeze switch: a paused cabinet defers its scheduled entries (they stay
 	// 'planned' and fire once unfrozen).
 	if paused, err := s.queries.PausedCabinets(ctx, row.WorkspaceID); err == nil {
 		if _, frozen := paused[cabinetID.String()]; frozen {
-			return
+			return true
 		}
 	}
 
 	prices, err := s.queries.ListProductPricesByCabinet(ctx, row.SellerCabinetID)
 	if err != nil {
 		s.failSchedule(ctx, entryID, err.Error())
-		return
+		return false
 	}
 	floors := s.marginFloors(ctx, workspaceID)
 
 	targetNm := map[int64]bool{}
-	if row.ScopeType == domain.PriceScopeList {
+	if row.ScopeType == domain.PriceScopeList || row.ScopeType == domain.PriceScopeProduct {
 		for _, nm := range row.ProductIds {
 			targetNm[nm] = true
 		}
 	}
 
-	adj := domain.ManualPriceAdjustment{Type: row.AdjustmentType, Value: row.AdjustmentValue}
+	adjustmentValue := row.AdjustmentValue
+	if row.AdjustmentType == domain.PriceAdjustDeltaPercent {
+		adjustmentValue = signedScheduleDelta(row.AdjustmentValue, row.Direction.String)
+	}
+	adj := domain.ManualPriceAdjustment{Type: row.AdjustmentType, Value: adjustmentValue}
 	var intents []priceChangeIntent
 	for _, p := range prices {
-		if row.ScopeType == domain.PriceScopeList && !targetNm[p.WbProductID] {
+		if !scheduleIncludesProduct(row.ScopeType, targetNm, p.WbProductID) {
 			continue
 		}
 		cur := productPriceFromSqlc(p)
@@ -180,11 +240,15 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 			ScheduleEntryID: &eid,
 		})
 	}
+	if !hasApplicablePriceChanges(intents) {
+		s.failSchedule(ctx, entryID, "no applicable price changes")
+		return false
+	}
 
 	taskIDs, err := s.applyIntents(ctx, workspaceID, intents)
 	if err != nil {
 		s.failSchedule(ctx, entryID, err.Error())
-		return
+		return false
 	}
 	if _, err := s.queries.UpdatePriceScheduleEntryStatus(ctx, sqlcgen.UpdatePriceScheduleEntryStatusParams{
 		ID:              uuidToPgtype(entryID),
@@ -193,6 +257,18 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 	}); err != nil {
 		s.logger.Warn().Err(err).Msg("failed to mark schedule entry done")
 	}
+	return false
+}
+
+func (s *RepricerService) requireCabinetInWorkspace(ctx context.Context, workspaceID, cabinetID uuid.UUID) error {
+	if cabinetID == uuid.Nil {
+		return apperror.New(apperror.ErrValidation, "seller_cabinet_id is required")
+	}
+	cabinet, err := s.queries.GetSellerCabinetByID(ctx, uuidToPgtype(cabinetID))
+	if err != nil || uuidFromPgtype(cabinet.WorkspaceID) != workspaceID {
+		return apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+	}
+	return nil
 }
 
 func (s *RepricerService) failSchedule(ctx context.Context, entryID uuid.UUID, reason string) {
@@ -214,11 +290,38 @@ func validateScheduleInput(in domain.PriceScheduleInput, now time.Time) error {
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid scope_type")
 	}
-	if in.ScopeType == domain.PriceScopeList && len(in.ProductIDs) == 0 {
-		return apperror.New(apperror.ErrValidation, "scope_type=list requires product_ids")
+	switch in.ScopeType {
+	case domain.PriceScopeAll:
+		if len(in.ProductIDs) != 0 {
+			return apperror.New(apperror.ErrValidation, "scope_type=all does not accept product_ids")
+		}
+	case domain.PriceScopeProduct:
+		if len(in.ProductIDs) != 1 || in.ProductIDs[0] <= 0 {
+			return apperror.New(apperror.ErrValidation, "scope_type=product requires exactly one positive product_id")
+		}
+	case domain.PriceScopeList:
+		if err := validateScheduleProductIDs(in.ProductIDs); err != nil {
+			return err
+		}
 	}
 	switch in.AdjustmentType {
-	case domain.PriceAdjustDeltaPercent, domain.PriceAdjustTargetRub:
+	case domain.PriceAdjustDeltaPercent:
+		if in.Direction != domain.PriceDirectionUp && in.Direction != domain.PriceDirectionDown {
+			return apperror.New(apperror.ErrValidation, "delta_percent requires direction up or down")
+		}
+		if in.AdjustmentValue <= 0 {
+			return apperror.New(apperror.ErrValidation, "delta_percent adjustment_value must be positive")
+		}
+		if err := validatePriceAdjustment(domain.ManualPriceAdjustment{Type: in.AdjustmentType, Value: in.AdjustmentValue}, true); err != nil {
+			return err
+		}
+	case domain.PriceAdjustTargetRub:
+		if in.Direction != "" {
+			return apperror.New(apperror.ErrValidation, "target_rub does not accept direction")
+		}
+		if err := validatePriceAdjustment(domain.ManualPriceAdjustment{Type: in.AdjustmentType, Value: in.AdjustmentValue}, true); err != nil {
+			return err
+		}
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid adjustment_type")
 	}
@@ -235,6 +338,50 @@ func validateScheduleInput(in domain.PriceScheduleInput, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+func validateScheduleProductIDs(ids []int64) error {
+	if len(ids) == 0 {
+		return apperror.New(apperror.ErrValidation, "scope_type=list requires product_ids")
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return apperror.New(apperror.ErrValidation, "product_ids must be positive")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return apperror.New(apperror.ErrValidation, "product_ids must be unique")
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+func signedScheduleDelta(value float64, direction string) float64 {
+	value = math.Abs(value)
+	if direction == domain.PriceDirectionDown {
+		return -value
+	}
+	return value
+}
+
+func scheduleIncludesProduct(scopeType string, targetNm map[int64]bool, nm int64) bool {
+	return scopeType == domain.PriceScopeAll || targetNm[nm]
+}
+
+func autoRevertPrimaryDisposition(status string) string {
+	switch status {
+	case domain.PriceScheduleDone:
+		return "execute"
+	case domain.PriceSchedulePlanned, domain.PriceScheduleExecuting:
+		return "defer"
+	default:
+		return "reject"
+	}
+}
+
+func hasApplicablePriceChanges(intents []priceChangeIntent) bool {
+	return len(intents) > 0
 }
 
 // inverseDeltaPercent returns the delta that exactly undoes a delta_percent move:

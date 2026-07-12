@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +17,7 @@ import (
 const (
 	priceVelocityLookbackDays = 14
 	economicsPageSize         = 1000
+	maxRepricerPriceAge       = 2 * time.Hour
 )
 
 // repricerData is the per-workspace snapshot the engine reads.
@@ -29,6 +32,8 @@ type repricerData struct {
 	drrByNm           map[int64]float64 // ad DRR % over the lookback window
 	intensityByNm     map[int64]float64 // current MSK-slot order intensity 0..1 (price_peak_hours)
 	competitorByNm    map[int64]int64   // competitor median price, rubles (price_competitor_follow)
+	categoryByNm      map[int64]string
+	commissionByNm    map[int64]float64 // conservative WB tariff fallback when product economics has no commission
 	pausedCabinets    map[string]bool   // cabinets whose repricer is frozen (no auto-apply)
 }
 
@@ -61,7 +66,7 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 
 	// Freshest possible baseline before deciding.
 	if _, syncErr := s.SyncPrices(ctx, workspaceID); syncErr != nil {
-		s.logger.Warn().Err(syncErr).Str("workspace_id", workspaceID.String()).Msg("price sync before run failed")
+		return 0, fmt.Errorf("fresh price baseline required: %w", syncErr)
 	}
 
 	data, err := s.loadRepricerData(ctx, workspaceID, priceStrategies)
@@ -70,7 +75,12 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 	}
 
 	written := 0
-	var autoIntents []priceChangeIntent
+	type productKey struct {
+		cabinet uuid.UUID
+		nm      int64
+	}
+	autoByProduct := make(map[productKey]priceChangeIntent)
+	conflictingAuto := make(map[productKey]struct{})
 	for _, st := range priceStrategies {
 		params := st.Params.MergedPriceParams()
 		// Freeze switch: a paused cabinet keeps producing recommendations but
@@ -82,7 +92,22 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 				continue
 			}
 			if auto {
-				autoIntents = append(autoIntents, s.intentFromDecision(st, nm, decision, ctxInfo, data))
+				key := productKey{cabinet: st.SellerCabinetID, nm: nm}
+				if _, conflict := conflictingAuto[key]; conflict {
+					continue
+				}
+				intent := s.intentFromDecision(st, nm, decision, ctxInfo, data)
+				if previous, exists := autoByProduct[key]; exists {
+					if previous.NewPriceRub == intent.NewPriceRub && previous.NewDiscount == intent.NewDiscount {
+						continue
+					}
+					delete(autoByProduct, key)
+					conflictingAuto[key] = struct{}{}
+					written--
+					s.logger.Warn().Int64("wb_product_id", nm).Msg("conflicting auto repricer decisions skipped")
+					continue
+				}
+				autoByProduct[key] = intent
 				written++
 				continue
 			}
@@ -92,6 +117,10 @@ func (s *RepricerService) RunForWorkspace(ctx context.Context, workspaceID uuid.
 			}
 			written++
 		}
+	}
+	autoIntents := make([]priceChangeIntent, 0, len(autoByProduct))
+	for _, intent := range autoByProduct {
+		autoIntents = append(autoIntents, intent)
 	}
 	if len(autoIntents) > 0 {
 		if _, err := s.applyIntents(ctx, workspaceID, autoIntents); err != nil {
@@ -132,7 +161,7 @@ func (s *RepricerService) targetNmIDs(st domain.Strategy, data *repricerData) []
 			bound = append(bound, nm)
 		}
 	}
-	if len(bound) > 0 {
+	if len(st.Bindings) > 0 {
 		return bound
 	}
 	all := make([]int64, 0, len(data.pricesByNm))
@@ -149,6 +178,9 @@ func (s *RepricerService) targetNmIDs(st domain.Strategy, data *repricerData) []
 func (s *RepricerService) evaluateProduct(ctx context.Context, workspaceID uuid.UUID, st domain.Strategy, params domain.StrategyParams, nm int64, data *repricerData) (PriceDecision, *domain.PriceChangeDecisionContext, bool) {
 	price, ok := data.pricesByNm[nm]
 	if !ok {
+		return PriceDecision{}, nil, false
+	}
+	if price.SyncedAt.IsZero() || time.Since(price.SyncedAt) > maxRepricerPriceAge {
 		return PriceDecision{}, nil, false
 	}
 	// Guardrails that short-circuit before the engine.
@@ -181,6 +213,9 @@ func (s *RepricerService) evaluateProduct(ctx context.Context, workspaceID uuid.
 		StockKnown:         stock.known,
 		SalesUnitsPerDay:   data.velocityByNm[nm],
 		HasActiveCampaigns: data.hasActiveCampaign[nm],
+	}
+	if commission, ok := data.commissionByNm[nm]; ok {
+		in.CommissionFallbackPercent = &commission
 	}
 	if drr, ok := data.drrByNm[nm]; ok {
 		in.DRR = &drr
@@ -256,6 +291,8 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 		drrByNm:           map[int64]float64{},
 		intensityByNm:     map[int64]float64{},
 		competitorByNm:    map[int64]int64{},
+		categoryByNm:      map[int64]string{},
+		commissionByNm:    map[int64]float64{},
 		pausedCabinets:    map[string]bool{},
 	}
 
@@ -308,19 +345,62 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 		for _, row := range prices {
 			data.pricesByNm[row.WbProductID] = productPriceFromSqlc(row)
 		}
-		products, err := s.queries.ListProductsBySellerCabinet(ctx, sqlcgen.ListProductsBySellerCabinetParams{
-			SellerCabinetID: uuidToPgtype(cabinetID),
-			Limit:           priceListPageSize,
-			Offset:          0,
-		})
+		for offset := int32(0); ; offset += priceListPageSize {
+			products, err := s.queries.ListProductsBySellerCabinet(ctx, sqlcgen.ListProductsBySellerCabinetParams{
+				SellerCabinetID: uuidToPgtype(cabinetID),
+				Limit:           priceListPageSize,
+				Offset:          offset,
+			})
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range products {
+				data.nmByProductID[uuidFromPgtype(p.ID)] = p.WbProductID
+				if p.Category.Valid {
+					data.categoryByNm[p.WbProductID] = strings.TrimSpace(strings.ToLower(p.Category.String))
+				}
+				if p.StockTotal.Valid {
+					data.stockByNm[p.WbProductID] = stockInfo{units: int64(p.StockTotal.Int32), known: true}
+				}
+			}
+			if len(products) < priceListPageSize {
+				break
+			}
+		}
+	}
+
+	// Use the highest real WB commission candidate for the matching subject as a
+	// conservative fallback. This protects the margin when the exact seller model
+	// is not present in product economics instead of inventing a lower commission.
+	type tariffKey struct {
+		cabinet uuid.UUID
+		subject string
+	}
+	tariffs := map[tariffKey]float64{}
+	for offset := int32(0); ; offset += economicsPageSize {
+		rows, err := s.queries.ListWBCommissionTariffsByWorkspace(ctx, uuidToPgtype(workspaceID), economicsPageSize, offset)
 		if err != nil {
 			return nil, err
 		}
-		for _, p := range products {
-			data.nmByProductID[uuidFromPgtype(p.ID)] = p.WbProductID
-			if p.StockTotal.Valid {
-				data.stockByNm[p.WbProductID] = stockInfo{units: int64(p.StockTotal.Int32), known: true}
+		for _, row := range rows {
+			if commission, ok := conservativeCommission(row); ok {
+				key := tariffKey{cabinet: uuidFromPgtype(row.SellerCabinetID), subject: strings.TrimSpace(strings.ToLower(row.SubjectName))}
+				if commission > tariffs[key] {
+					tariffs[key] = commission
+				}
 			}
+		}
+		if len(rows) < economicsPageSize {
+			break
+		}
+	}
+	for nm, category := range data.categoryByNm {
+		price, ok := data.pricesByNm[nm]
+		if !ok || category == "" {
+			continue
+		}
+		if commission, ok := tariffs[tariffKey{cabinet: price.SellerCabinetID, subject: category}]; ok {
+			data.commissionByNm[nm] = commission
 		}
 	}
 
@@ -416,4 +496,15 @@ func (s *RepricerService) loadRepricerData(ctx context.Context, workspaceID uuid
 	}
 
 	return data, nil
+}
+
+func conservativeCommission(row sqlcgen.WBCommissionTariff) (float64, bool) {
+	values := []pgtype.Float8{row.KGVPBooking, row.KGVPPickup, row.KGVPSupplier, row.KGVPSupplierExpress, row.KGVPMarketplace}
+	max := 0.0
+	for _, value := range values {
+		if value.Valid && value.Float64 > max {
+			max = value.Float64
+		}
+	}
+	return max, max > 0
 }

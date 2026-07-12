@@ -81,4 +81,23 @@ var (
 		Name:      "active",
 		Help:      "Number of workspaces with recent sync activity.",
 	})
+
+	// RepricerUploadsTotal counts repricer upload lifecycle events by outcome.
+	// Outcomes are intentionally low-cardinality (for example accepted, applied,
+	// partial, submit_failed, link_failed and poll_timeout).
+	RepricerUploadsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sellico",
+		Subsystem: "repricer",
+		Name:      "uploads_total",
+		Help:      "Total repricer upload lifecycle events by outcome.",
+	}, []string{"outcome"})
+
+	// RepricerStateRecoveriesTotal counts abandoned repricer states repaired by
+	// the polling recovery pass.
+	RepricerStateRecoveriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sellico",
+		Subsystem: "repricer",
+		Name:      "state_recoveries_total",
+		Help:      "Total stale repricer states recovered by state type.",
+	}, []string{"state"})
 )

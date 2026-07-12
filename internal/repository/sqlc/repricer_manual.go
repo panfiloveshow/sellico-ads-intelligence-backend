@@ -468,13 +468,48 @@ const createPriceUploadTask = `
 INSERT INTO price_upload_tasks (workspace_id, seller_cabinet_id, wb_task_id, status, items_count)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (seller_cabinet_id, wb_task_id) DO UPDATE
-SET status = EXCLUDED.status, items_count = EXCLUDED.items_count, updated_at = now()
+SET items_count = GREATEST(price_upload_tasks.items_count, EXCLUDED.items_count), updated_at = now()
 RETURNING id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, poll_count,
     last_polled_at, completed_at, error, created_at, updated_at
 `
 
 func (q *Queries) CreatePriceUploadTask(ctx context.Context, arg CreatePriceUploadTaskParams) (PriceUploadTask, error) {
 	row := q.db.QueryRow(ctx, createPriceUploadTask, arg.WorkspaceID, arg.SellerCabinetID, arg.WbTaskID, arg.Status, arg.ItemsCount)
+	return scanPriceUploadTask(row)
+}
+
+// CreatePriceUploadTaskAndLinkChanges records the WB task and links all locally
+// reserved changes in one SQL statement. On a duplicate WB task, its terminal
+// status is preserved instead of being reset to uploaded.
+const createPriceUploadTaskAndLinkChanges = `
+WITH task AS (
+  INSERT INTO price_upload_tasks (workspace_id, seller_cabinet_id, wb_task_id, status, items_count)
+  VALUES ($1, $2, $3, $4, $5)
+  ON CONFLICT (seller_cabinet_id, wb_task_id) DO UPDATE
+  SET items_count = GREATEST(price_upload_tasks.items_count, EXCLUDED.items_count),
+      updated_at = now()
+  RETURNING id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, poll_count,
+      last_polled_at, completed_at, error, created_at, updated_at
+), linked AS (
+  UPDATE price_changes
+  SET upload_task_id = (SELECT id FROM task),
+      wb_status = CASE (SELECT status FROM task)
+        WHEN 'applied' THEN 'applied'
+        WHEN 'failed' THEN 'failed'
+        ELSE 'uploaded'
+      END,
+      updated_at = now()
+  WHERE id = ANY($6::uuid[]) AND wb_status = 'pending'
+  RETURNING id
+)
+SELECT id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, poll_count,
+    last_polled_at, completed_at, error, created_at, updated_at
+FROM task
+`
+
+func (q *Queries) CreatePriceUploadTaskAndLinkChanges(ctx context.Context, arg CreatePriceUploadTaskParams, changeIDs []pgtype.UUID) (PriceUploadTask, error) {
+	row := q.db.QueryRow(ctx, createPriceUploadTaskAndLinkChanges,
+		arg.WorkspaceID, arg.SellerCabinetID, arg.WbTaskID, arg.Status, arg.ItemsCount, changeIDs)
 	return scanPriceUploadTask(row)
 }
 
@@ -619,6 +654,8 @@ INSERT INTO price_changes (workspace_id, seller_cabinet_id, strategy_id, schedul
     new_discount_percent, min_price_rub, reason, source, wb_status, can_rollback, rollback_of,
     decision_context, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+ON CONFLICT (seller_cabinet_id, wb_product_id) WHERE wb_status IN ('pending', 'uploaded')
+DO NOTHING
 RETURNING ` + priceChangeColumns
 
 func (q *Queries) CreatePriceChange(ctx context.Context, arg CreatePriceChangeParams) (PriceChange, error) {
@@ -660,6 +697,60 @@ WHERE upload_task_id = $1
 func (q *Queries) UpdatePriceChangesStatusByTask(ctx context.Context, uploadTaskID pgtype.UUID, status string) error {
 	_, err := q.db.Exec(ctx, updatePriceChangesStatusByTask, uploadTaskID, status)
 	return err
+}
+
+// UpdatePriceChangeStatusByTaskAndNmID records a per-good result for partial WB tasks.
+func (q *Queries) UpdatePriceChangeStatusByTaskAndNmID(ctx context.Context, uploadTaskID pgtype.UUID, wbProductID int64, status string, errorText pgtype.Text) error {
+	_, err := q.db.Exec(ctx, `UPDATE price_changes
+		SET wb_status = $3, error = $4, updated_at = now()
+		WHERE upload_task_id = $1 AND wb_product_id = $2`, uploadTaskID, wbProductID, status, errorText)
+	return err
+}
+
+// RecoverStaleRepricerState makes abandoned local reservations retryable and
+// releases schedule claims left behind by a crashed worker.
+func (q *Queries) RecoverStaleRepricerState(ctx context.Context, staleBefore pgtype.Timestamptz) (pendingFailed, schedulesReleased int64, err error) {
+	tag, err := q.db.Exec(ctx, `UPDATE price_changes
+		SET wb_status = 'failed', error = 'stale_pending_recovered', updated_at = now()
+		WHERE wb_status = 'pending' AND upload_task_id IS NULL AND updated_at < $1`, staleBefore)
+	if err != nil {
+		return 0, 0, err
+	}
+	pendingFailed = tag.RowsAffected()
+	tag, err = q.db.Exec(ctx, `UPDATE price_schedule_entries
+		SET status = 'planned', error = 'stale_executing_recovered', updated_at = now()
+		WHERE status = 'executing' AND updated_at < $1`, staleBefore)
+	if err != nil {
+		return pendingFailed, 0, err
+	}
+	return pendingFailed, tag.RowsAffected(), nil
+}
+
+func (q *Queries) GetProductPriceForRollback(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64) (ProductPrice, error) {
+	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, wb_product_id, price_rub,
+		discount_percent, club_discount_percent, discounted_price_rub, editable_size_price, synced_at, updated_at
+		FROM product_prices
+		WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3`, workspaceID, sellerCabinetID, wbProductID)
+	var i ProductPrice
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.WbProductID, &i.PriceRub,
+		&i.DiscountPercent, &i.ClubDiscountPercent, &i.DiscountedPriceRub, &i.EditableSizePrice,
+		&i.SyncedAt, &i.UpdatedAt)
+	return i, err
+}
+
+func (q *Queries) HasNewerActivePriceChange(ctx context.Context, workspaceID pgtype.UUID, wbProductID int64, originalID pgtype.UUID) (bool, error) {
+	var exists bool
+	err := q.db.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1
+		FROM price_changes newer
+		JOIN price_changes original ON original.id = $3
+		WHERE newer.workspace_id = $1
+		  AND newer.wb_product_id = $2
+		  AND newer.id <> original.id
+		  AND newer.created_at > original.created_at
+		  AND newer.wb_status IN ('pending', 'uploaded', 'applied')
+	)`, workspaceID, wbProductID, originalID).Scan(&exists)
+	return exists, err
 }
 
 const getPriceChange = `SELECT ` + priceChangeColumns + ` FROM price_changes WHERE id = $1`

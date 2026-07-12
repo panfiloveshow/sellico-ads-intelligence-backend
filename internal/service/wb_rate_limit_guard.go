@@ -28,7 +28,17 @@ const (
 	wbEndpointPricesUpload     = "prices_upload"
 	wbEndpointPricesPoll       = "prices_poll"
 	wbEndpointPricesQuarantine = "prices_quarantine"
+	wbEndpointPricesShared     = "prices_shared"
 )
+
+func wbRateLimitStorageKey(endpoint string) string {
+	switch endpoint {
+	case wbEndpointPricesList, wbEndpointPricesUpload, wbEndpointPricesPoll, wbEndpointPricesQuarantine:
+		return wbEndpointPricesShared
+	default:
+		return endpoint
+	}
+}
 
 func wbEndpointFallbackDelay(endpoint string) time.Duration {
 	switch endpoint {

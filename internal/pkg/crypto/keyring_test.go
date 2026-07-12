@@ -48,7 +48,8 @@ func TestDecryptWithKeyring_LegacyUnversionedStillWorks(t *testing.T) {
 	// Simulate data encrypted before versioning was introduced (no prefix).
 	legacy, err := Encrypt("legacy-token", k1)
 	require.NoError(t, err)
-	assert.False(t, strings.HasPrefix(legacy, "v"), "legacy ciphertext shouldn't carry version prefix")
+	version, _ := stripVersion(legacy)
+	assert.Zero(t, version, "legacy ciphertext shouldn't carry a valid version prefix")
 
 	pt, err := DecryptWithKeyring(legacy, kr)
 	require.NoError(t, err)
@@ -78,9 +79,9 @@ func TestDecrypt_AcceptsVersionedCiphertext(t *testing.T) {
 
 func TestStripVersion_Robust(t *testing.T) {
 	cases := []struct {
-		in        string
-		wantVer   int
-		wantPay   string
+		in      string
+		wantVer int
+		wantPay string
 	}{
 		{"v1:abc", 1, "abc"},
 		{"v42:longerpayload", 42, "longerpayload"},

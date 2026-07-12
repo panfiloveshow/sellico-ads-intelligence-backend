@@ -138,7 +138,11 @@ func resolveFloor(in PriceEngineInputs, params domain.StrategyParams) (int64, st
 	if params.MinPriceRub != nil && *params.MinPriceRub > 0 {
 		return *params.MinPriceRub, ""
 	}
-	if current := in.Current.EffectivePriceRub(); current > 0 && params.MaxDiscountPercent > 0 {
+	// A relative floor moves down together with the current price and therefore
+	// cannot protect unattended automation from cumulative discount compounding.
+	// Keep it for dry-run guidance only; auto mode requires economics or an
+	// explicit absolute minimum.
+	if current := in.Current.EffectivePriceRub(); current > 0 && params.MaxDiscountPercent > 0 && params.PriceApplyMode != domain.PriceApplyModeAuto {
 		return int64(math.Round(float64(current) * (1 - params.MaxDiscountPercent/100))), ""
 	}
 	return 0, reason
@@ -292,6 +296,14 @@ func DecidePeakHours(in PriceEngineInputs, params domain.StrategyParams, intensi
 	}
 	if target < floor {
 		target = floor
+	}
+	if target > current {
+		if p.MaxPriceRub == nil && p.PriceApplyMode == domain.PriceApplyModeAuto {
+			return skip("max_price_required_for_increase")
+		}
+		if p.MaxPriceRub != nil && target > *p.MaxPriceRub {
+			target = *p.MaxPriceRub
+		}
 	}
 
 	// Cap the per-run move to step%.

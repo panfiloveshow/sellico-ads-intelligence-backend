@@ -27,6 +27,7 @@ tags:
   - name: Extension
   - name: Settings
   - name: Events
+  - name: Repricer
 paths:
   /health/live:
     get:
@@ -2907,6 +2908,252 @@ paths:
                 type: string
                 description: "SSE event stream (event: type\\ndata: JSON\\n\\n)"
 
+  # --- Repricer (WB price management) ---
+  /api/v1/prices:
+    get:
+      tags: [Repricer]
+      summary: List products with their current WB prices
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/SellerCabinetIdQuery"
+      responses:
+        "200":
+          description: Price catalog page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductCatalogListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/prices/sync:
+    post:
+      tags: [Repricer]
+      summary: Enqueue a WB price synchronization
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      responses:
+        "202": { description: Synchronization enqueued }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/prices/bulk:
+    post:
+      tags: [Repricer]
+      summary: Apply manual price changes to explicit products or a scope
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManualPriceBulkRequest" }
+      responses:
+        "200":
+          description: Bulk request accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceBulkResultEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/prices/quarantine:
+    get:
+      tags: [Repricer]
+      summary: List active WB price quarantine records
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      responses:
+        "200":
+          description: Quarantined products
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceQuarantineListEnvelope" }
+  /api/v1/prices/cabinets-status:
+    get:
+      tags: [Repricer]
+      summary: List WB price-scope readiness for seller cabinets
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      responses:
+        "200":
+          description: Cabinet price-scope statuses
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinetPricesScopeListEnvelope" }
+  /api/v1/prices/heatmap:
+    get:
+      tags: [Repricer]
+      summary: Get the 7 by 24 order heatmap used for price scheduling
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/SellerCabinetIdQueryRequired"
+        - name: wb_product_id
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - name: metric
+          in: query
+          schema: { type: string, enum: [units, orders, revenue], default: units }
+      responses:
+        "200":
+          description: Orders heatmap
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrdersHeatmapEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/prices/health:
+    get:
+      tags: [Repricer]
+      summary: Get repricer health for one cabinet
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/SellerCabinetIdQueryRequired"
+      responses:
+        "200":
+          description: Repricer health
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepricerHealthEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/prices/pause:
+    post:
+      tags: [Repricer]
+      summary: Pause or resume automatic repricing for a cabinet
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RepricerPauseRequest" }
+      responses:
+        "200": { description: Pause state updated }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/price-changes:
+    get:
+      tags: [Repricer]
+      summary: List repricer price-change history
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: wb_product_id
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: source
+          in: query
+          schema: { type: string, enum: [strategy, manual, rollback, schedule] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [recommended, pending, uploaded, applied, failed, rolled_back] }
+      responses:
+        "200":
+          description: Price-change page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceChangeListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/price-changes/{changeId}/rollback:
+    post:
+      tags: [Repricer]
+      summary: Roll back an applied price change
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: changeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rollback accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceChangeEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/price-upload-tasks:
+    get:
+      tags: [Repricer]
+      summary: List recent WB price upload tasks
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Upload-task page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceUploadTaskListEnvelope" }
+  /api/v1/price-schedules:
+    get:
+      tags: [Repricer]
+      summary: List scheduled price changes
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: status
+          in: query
+          schema: { type: string, enum: [planned, executing, done, failed, canceled] }
+      responses:
+        "200":
+          description: Price-schedule page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceScheduleListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+    post:
+      tags: [Repricer]
+      summary: Schedule a future price change
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PriceScheduleInput" }
+      responses:
+        "201":
+          description: Price schedule created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PriceScheduleEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/price-schedules/{scheduleId}:
+    delete:
+      tags: [Repricer]
+      summary: Cancel a planned price schedule
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: scheduleId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Schedule canceled }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/repricer/run:
+    post:
+      tags: [Repricer]
+      summary: Enqueue an immediate repricer automation run
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      responses:
+        "202": { description: Repricer run enqueued }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2970,6 +3217,19 @@ components:
       schema:
         type: string
         format: date
+    SellerCabinetIdQuery:
+      name: seller_cabinet_id
+      in: query
+      schema:
+        type: string
+        format: uuid
+    SellerCabinetIdQueryRequired:
+      name: seller_cabinet_id
+      in: query
+      required: true
+      schema:
+        type: string
+        format: uuid
     RecommendationType:
       name: type
       in: query
@@ -4722,3 +4982,245 @@ components:
             $ref: "#/components/schemas/Competitor"
         meta:
           $ref: "#/components/schemas/Meta"
+
+    ProductCatalogItem:
+      type: object
+      required: [wb_product_id, title, has_price]
+      properties:
+        wb_product_id: { type: integer, format: int64 }
+        title: { type: string }
+        brand: { type: string, nullable: true }
+        image_url: { type: string, format: uri, nullable: true }
+        stock_total: { type: integer, nullable: true }
+        price_rub: { type: integer, format: int64, nullable: true }
+        discount_percent: { type: integer, nullable: true }
+        club_discount_percent: { type: integer, nullable: true }
+        discounted_price_rub: { type: integer, format: int64, nullable: true }
+        editable_size_price: { type: boolean, nullable: true }
+        has_price: { type: boolean }
+        synced_at: { type: string, format: date-time, nullable: true }
+        showcase_price_rub: { type: integer, format: int64, nullable: true }
+        showcase_basic_rub: { type: integer, format: int64, nullable: true }
+        spp_percent: { type: integer, nullable: true }
+
+    ProductCatalogListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ProductCatalogItem" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    ManualPriceBulkItem:
+      type: object
+      required: [wb_product_id]
+      properties:
+        wb_product_id: { type: integer, format: int64, minimum: 1 }
+        target_price_rub: { type: integer, format: int64, minimum: 1 }
+        discount_percent: { type: integer, minimum: 0, maximum: 95 }
+
+    ManualPriceBulkRequest:
+      type: object
+      description: Supply either items, or scope together with adjustment.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ManualPriceBulkItem" }
+        scope:
+          type: object
+          properties:
+            all: { type: boolean }
+            seller_cabinet_id: { type: string, format: uuid }
+        adjustment:
+          type: object
+          required: [type, value]
+          properties:
+            type: { type: string, enum: [percent, absolute, target_rub] }
+            value: { type: number, format: double }
+        comment: { type: string }
+        force: { type: boolean, default: false }
+
+    PriceBulkResultEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            accepted: { type: integer }
+            skipped: { type: integer }
+            task_ids:
+              type: array
+              items: { type: string, format: uuid }
+
+    PriceQuarantineListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              seller_cabinet_id: { type: string, format: uuid }
+              wb_product_id: { type: integer, format: int64 }
+              old_price_rub: { type: integer, format: int64, nullable: true }
+              new_price_rub: { type: integer, format: int64, nullable: true }
+              detected_at: { type: string, format: date-time }
+              resolved_at: { type: string, format: date-time, nullable: true }
+
+    CabinetPricesScopeListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              seller_cabinet_id: { type: string, format: uuid }
+              name: { type: string }
+              prices_scope_status: { type: string, enum: [unknown, ok, missing] }
+              prices_scope_checked_at: { type: string, format: date-time, nullable: true }
+
+    OrdersHeatmapEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            date_from: { type: string, format: date }
+            date_to: { type: string, format: date }
+            metric: { type: string, enum: [units, orders, revenue] }
+            days:
+              type: array
+              items:
+                type: object
+                properties:
+                  day_of_week: { type: integer, minimum: 1, maximum: 7 }
+                  day_label: { type: string }
+                  hours:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        hour: { type: integer, minimum: 0, maximum: 23 }
+                        orders: { type: integer, format: int64 }
+                        units: { type: integer, format: int64 }
+                        revenue_rub: { type: integer, format: int64 }
+                        value: { type: integer, format: int64 }
+                        intensity: { type: number, minimum: 0, maximum: 1 }
+
+    RepricerHealthEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            products: { type: integer }
+            with_price: { type: integer }
+            active_strategies: { type: integer }
+            applied_today: { type: integer }
+            recommendations: { type: integer }
+            failed_today: { type: integer }
+            last_sync_at: { type: string, format: date-time, nullable: true }
+            paused_until: { type: string, format: date-time, nullable: true }
+
+    RepricerPauseRequest:
+      type: object
+      required: [seller_cabinet_id]
+      properties:
+        seller_cabinet_id: { type: string, format: uuid }
+        until: { type: string, format: date-time, nullable: true }
+
+    PriceChange:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        wb_product_id: { type: integer, format: int64 }
+        old_price_rub: { type: integer, format: int64 }
+        new_price_rub: { type: integer, format: int64 }
+        old_discount_percent: { type: integer }
+        new_discount_percent: { type: integer }
+        min_price_rub: { type: integer, format: int64, nullable: true }
+        reason: { type: string }
+        source: { type: string, enum: [strategy, manual, rollback, schedule] }
+        wb_status: { type: string, enum: [recommended, pending, uploaded, applied, failed, rolled_back] }
+        error: { type: string, nullable: true }
+        can_rollback: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PriceChangeEnvelope:
+      type: object
+      properties:
+        data: { $ref: "#/components/schemas/PriceChange" }
+
+    PriceChangeListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/PriceChange" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    PriceUploadTaskListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              seller_cabinet_id: { type: string, format: uuid }
+              wb_task_id: { type: integer, format: int64 }
+              status: { type: string, enum: [uploaded, processing, applied, partial, failed] }
+              items_count: { type: integer }
+              poll_count: { type: integer }
+              completed_at: { type: string, format: date-time, nullable: true }
+              error: { type: string, nullable: true }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    PriceScheduleInput:
+      type: object
+      required: [seller_cabinet_id, scope_type, adjustment_type, adjustment_value, scheduled_at]
+      properties:
+        seller_cabinet_id: { type: string, format: uuid }
+        scope_type: { type: string, enum: [product, list, all] }
+        product_ids:
+          type: array
+          items: { type: integer, format: int64, minimum: 1 }
+        adjustment_type: { type: string, enum: [target_rub, delta_percent] }
+        adjustment_value: { type: number, format: double }
+        direction: { type: string, enum: [up, down] }
+        scheduled_at: { type: string, format: date-time }
+        revert_at: { type: string, format: date-time, nullable: true }
+        revert_to_previous: { type: boolean }
+        comment: { type: string }
+
+    PriceSchedule:
+      allOf:
+        - $ref: "#/components/schemas/PriceScheduleInput"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            status: { type: string, enum: [planned, executing, done, failed, canceled] }
+            executed_task_ids:
+              type: array
+              items: { type: string, format: uuid }
+            error: { type: string, nullable: true }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+
+    PriceScheduleEnvelope:
+      type: object
+      properties:
+        data: { $ref: "#/components/schemas/PriceSchedule" }
+
+    PriceScheduleListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/PriceSchedule" }
+        meta: { $ref: "#/components/schemas/Meta" }

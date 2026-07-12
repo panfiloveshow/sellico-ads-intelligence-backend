@@ -70,7 +70,10 @@ type Client struct {
 	logger                   zerolog.Logger
 
 	limiters *boundedLRU[*rate.Limiter]
-	breakers *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
+	// Prices & Discounts has a separate shared account bucket (10 requests per
+	// 6 seconds) across list/upload/poll/quarantine endpoints.
+	priceLimiters *boundedLRU[*rate.Limiter]
+	breakers      *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
 }
 
 // NewClient creates a new WB API client from the application config.
@@ -114,6 +117,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		normQueryInterBatchDelay: 7 * time.Second,
 		logger:                   logger.With().Str("component", "wb_client").Logger(),
 		limiters:                 newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
+		priceLimiters:            newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		breakers:                 newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
 }
@@ -211,6 +215,18 @@ func (c *Client) limiterForToken(token string) *rate.Limiter {
 	return lim
 }
 
+func (c *Client) priceLimiterForToken(token string) *rate.Limiter {
+	if lim, ok := c.priceLimiters.Get(token); ok {
+		return lim
+	}
+	// One request every 600ms is the conservative form of WB's documented
+	// account-wide 10 requests / 6 seconds bucket and prevents endpoint bursts
+	// from starving polling or uploads.
+	lim := rate.NewLimiter(rate.Every(600*time.Millisecond), 1)
+	c.priceLimiters.Set(token, lim)
+	return lim
+}
+
 // breakerForToken returns a per-token circuit breaker (audit fix: HIGH #9).
 // Same bounded-LRU semantics as limiterForToken.
 func (c *Client) breakerForToken(token string) *gobreaker.CircuitBreaker[[]byte] {
@@ -299,6 +315,9 @@ func (c *Client) doContentRequest(ctx context.Context, method, path, token strin
 func (c *Client) doPricesRequest(ctx context.Context, method, path, token string, body io.Reader) (*http.Response, []byte, error) {
 	var resp *http.Response
 	start := time.Now()
+	if err := c.priceLimiterForToken(token).Wait(ctx); err != nil {
+		return nil, nil, fmt.Errorf("prices rate limiter wait: %w", err)
+	}
 
 	cb := c.breakerForToken(token)
 	result, err := cb.Execute(func() ([]byte, error) {

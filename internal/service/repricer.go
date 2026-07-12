@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -81,11 +82,13 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 	}
 
 	total := 0
+	var syncErrors []error
 	for _, cabinet := range cabinets {
 		cabinetID := uuidFromPgtype(cabinet.ID)
 		token, decErr := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 		if decErr != nil {
 			s.logger.Warn().Err(decErr).Str("cabinet_id", cabinetID.String()).Msg("failed to decrypt cabinet token")
+			syncErrors = append(syncErrors, fmt.Errorf("cabinet %s token: %w", cabinetID, decErr))
 			continue
 		}
 
@@ -101,6 +104,7 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 		// Prices (scope-gated / rate-limited).
 		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesList) {
 			s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("prices list cooling down, skipping prices for cabinet")
+			syncErrors = append(syncErrors, fmt.Errorf("cabinet %s prices endpoint is cooling down", cabinetID))
 			continue
 		}
 		count, syncErr := s.syncCabinetPrices(ctx, workspaceID, cabinetID, token)
@@ -108,16 +112,18 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 			if errors.Is(syncErr, wb.ErrPricesScopeMissing) {
 				s.markCabinetScope(ctx, cabinetID, domain.PricesScopeMissing)
 				s.logger.Warn().Str("cabinet_id", cabinetID.String()).Msg("cabinet token missing prices scope")
+				syncErrors = append(syncErrors, fmt.Errorf("cabinet %s: %w", cabinetID, syncErr))
 				continue
 			}
 			s.recordPricesRateLimit(ctx, cabinetID, wbEndpointPricesList, syncErr)
 			s.logger.Warn().Err(syncErr).Str("cabinet_id", cabinetID.String()).Msg("price sync failed for cabinet")
+			syncErrors = append(syncErrors, fmt.Errorf("cabinet %s price sync: %w", cabinetID, syncErr))
 			continue
 		}
 		s.markCabinetScope(ctx, cabinetID, domain.PricesScopeOK)
 		total += count
 	}
-	return total, nil
+	return total, errors.Join(syncErrors...)
 }
 
 // enrichCabinetProducts refreshes products (title, brand, image) from WB content
@@ -527,13 +533,24 @@ func (s *RepricerService) SyncQuarantine(ctx context.Context, workspaceID uuid.U
 		if decErr != nil {
 			continue
 		}
-		goods, listErr := s.wbClient.ListQuarantineGoods(ctx, token, priceListPageSize, 0)
-		if listErr != nil {
-			if errors.Is(listErr, wb.ErrPricesScopeMissing) {
-				s.markCabinetScope(ctx, cabinetID, domain.PricesScopeMissing)
-				continue
+		goods := make([]wb.QuarantineGood, 0)
+		quarantineSyncFailed := false
+		for offset := 0; ; offset += priceListPageSize {
+			page, listErr := s.wbClient.ListQuarantineGoods(ctx, token, priceListPageSize, offset)
+			if listErr != nil {
+				if errors.Is(listErr, wb.ErrPricesScopeMissing) {
+					s.markCabinetScope(ctx, cabinetID, domain.PricesScopeMissing)
+				}
+				s.recordPricesRateLimit(ctx, cabinetID, wbEndpointPricesQuarantine, listErr)
+				quarantineSyncFailed = true
+				break
 			}
-			s.recordPricesRateLimit(ctx, cabinetID, wbEndpointPricesQuarantine, listErr)
+			goods = append(goods, page...)
+			if len(page) < priceListPageSize {
+				break
+			}
+		}
+		if quarantineSyncFailed {
 			continue
 		}
 		present := make([]int64, 0, len(goods))
@@ -617,7 +634,7 @@ func (s *RepricerService) markCabinetScope(ctx context.Context, cabinetID uuid.U
 
 // pricesEndpointCoolingDown reports whether a persisted rate-limit window is still active.
 func (s *RepricerService) pricesEndpointCoolingDown(ctx context.Context, cabinetID uuid.UUID, endpoint string) bool {
-	limit, err := s.queries.GetWBAPIRateLimit(ctx, uuidToPgtype(cabinetID), endpoint)
+	limit, err := s.queries.GetWBAPIRateLimit(ctx, uuidToPgtype(cabinetID), wbRateLimitStorageKey(endpoint))
 	if errors.Is(err, pgx.ErrNoRows) || err != nil {
 		return false
 	}
@@ -640,7 +657,7 @@ func (s *RepricerService) recordPricesRateLimit(ctx context.Context, cabinetID u
 	}
 	if upErr := s.queries.UpsertWBAPIRateLimit(ctx, sqlcgen.UpsertWBAPIRateLimitParams{
 		SellerCabinetID:   uuidToPgtype(cabinetID),
-		EndpointKey:       endpoint,
+		EndpointKey:       wbRateLimitStorageKey(endpoint),
 		NextAllowedAt:     pgtype.Timestamptz{Time: next, Valid: true},
 		RetryAfterSeconds: int32(math.Ceil(delay.Seconds())),
 		LastStatus:        429,
