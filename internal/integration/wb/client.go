@@ -230,16 +230,39 @@ func (c *Client) priceLimiterForToken(token string) *rate.Limiter {
 // breakerForToken returns a per-token circuit breaker (audit fix: HIGH #9).
 // Same bounded-LRU semantics as limiterForToken.
 func (c *Client) breakerForToken(token string) *gobreaker.CircuitBreaker[[]byte] {
+	return c.breakerForTokenScope(token, "core")
+}
+
+// breakerForTokenScope keeps failures in independent WB API operations from
+// blocking one another. In particular, a throttled goods-list sync must not
+// prevent polling the result of an already submitted price upload.
+func (c *Client) breakerForTokenScope(token, scope string) *gobreaker.CircuitBreaker[[]byte] {
 	key := token
 	if len(key) > 20 {
 		key = key[:20]
 	}
+	key = scope + ":" + key
 	if cb, ok := c.breakers.Get(key); ok {
 		return cb
 	}
 	cb := newCircuitBreaker("wb-api-" + key)
 	c.breakers.Set(key, cb)
 	return cb
+}
+
+func priceBreakerScope(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/api/v2/history/"), strings.HasPrefix(path, "/api/v2/buffer/"):
+		return "prices-poll"
+	case strings.HasPrefix(path, "/api/v2/list/"):
+		return "prices-list"
+	case strings.HasPrefix(path, "/api/v2/upload/"):
+		return "prices-upload"
+	case strings.HasPrefix(path, "/api/v2/quarantine/"):
+		return "prices-quarantine"
+	default:
+		return "prices-other"
+	}
 }
 
 // doRequest executes an HTTP request with circuit breaker, retry logic, rate-limiting, and logging.
@@ -319,7 +342,7 @@ func (c *Client) doPricesRequest(ctx context.Context, method, path, token string
 		return nil, nil, fmt.Errorf("prices rate limiter wait: %w", err)
 	}
 
-	cb := c.breakerForToken(token)
+	cb := c.breakerForTokenScope(token, priceBreakerScope(path))
 	result, err := cb.Execute(func() ([]byte, error) {
 		r, b, e := c.doRequestInnerURL(ctx, method, c.pricesURL+path, token, body)
 		resp = r

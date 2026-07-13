@@ -114,6 +114,38 @@ func TestGetPriceTaskHistory_Status(t *testing.T) {
 	assert.Equal(t, 3, st.Status)
 }
 
+func TestPriceListBreakerDoesNotBlockUploadPolling(t *testing.T) {
+	withFastWBRetryTiming(t)
+	var listCalls, pollCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/list/goods/filter":
+			listCalls++
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":true,"errorText":"too many requests"}`))
+		case "/api/v2/history/tasks":
+			pollCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"data":{"uploadID":123456,"status":3},"error":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newPricesTestClient(server.URL)
+	for i := 0; i < 5; i++ {
+		_, err := client.ListGoodsPrices(context.Background(), "tok", 1000, 0, nil)
+		require.Error(t, err)
+	}
+	require.GreaterOrEqual(t, listCalls, 5)
+
+	status, err := client.GetPriceTaskHistory(context.Background(), "tok", 123456)
+	require.NoError(t, err)
+	assert.Equal(t, 3, status.Status)
+	assert.Equal(t, 1, pollCalls)
+}
+
 func TestListPriceTaskHistoryGoods_UsesUploadID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v2/history/goods/task", r.URL.Path)
