@@ -18,13 +18,13 @@ type Runtime struct {
 	server         *asynq.Server
 	repricerServer *asynq.Server
 	scheduler      *asynq.Scheduler
-	client        *asynq.Client
-	inspector     *asynq.Inspector
-	queries       *sqlcgen.Queries
-	queues        []string
-	metricsCancel context.CancelFunc
-	logger        zerolog.Logger
-	mux           *asynq.ServeMux
+	client         *asynq.Client
+	inspector      *asynq.Inspector
+	queries        *sqlcgen.Queries
+	queues         []string
+	metricsCancel  context.CancelFunc
+	logger         zerolog.Logger
+	mux            *asynq.ServeMux
 }
 
 func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, repricer *service.RepricerService, economicsSync *service.SellicoEconomicsSyncService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
@@ -109,14 +109,20 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		StrictPriority:  true,
 	})
 
-	// Dedicated server for the repricer queue with its own slot, so the
+	// Dedicated server for repricer queues with its own slot, so the
 	// user-interactive sync/bulk/run never waits behind a long-running WB-sync
-	// task (which holds the main server's single slot for minutes). Concurrency 1
-	// here too — the repricer's own WB rate-limit guard serializes its calls.
+	// task (which holds the main server's single slot for minutes). Upload-result
+	// polling has strict priority: a long catalog sync must never leave products
+	// locked in "uploaded" and reject subsequent edits. Concurrency 1 here too —
+	// the repricer's own WB rate-limit guard serializes its calls.
 	repricerServer := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency:     1,
 		ShutdownTimeout: 30 * time.Second,
-		Queues:          map[string]int{QueueRepricer: 1},
+		Queues: map[string]int{
+			QueueRepricerPoll: 10,
+			QueueRepricer:     1,
+		},
+		StrictPriority: true,
 	})
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
@@ -148,7 +154,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		{"0 6 * * *", TaskSweepRepricerDigest, QueueRepricer},
 		// Mirror Sellico cost data into product_economics (feeds margin-floor).
 		{"@every 6h", TaskSweepSellicoEconomics, QueueRepricer},
-		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricer},
+		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricerPoll},
 		{cfg.RepricerScheduleInterval, TaskExecutePriceSchedule, QueueRepricer},
 		{syncInterval, TaskSweepCollectKeywords, QueueSemantics},
 		{syncInterval, TaskSweepExtractCompetitors, QueueCompetitors},
@@ -176,9 +182,9 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		client:         client,
 		inspector:      inspector,
 		queries:        queries,
-		queues:         append(queueNames(queueWeights), QueueRepricer),
+		queues:         append(queueNames(queueWeights), QueueRepricer, QueueRepricerPoll),
 		logger:         logger,
-		mux:       mux,
+		mux:            mux,
 	}, nil
 }
 
@@ -220,6 +226,12 @@ func (r *Runtime) Start() error {
 	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepSyncPrices),
 		asynq.Queue(QueueRepricer), asynq.ProcessIn(15*time.Second), asynq.Unique(30*time.Minute)); err != nil {
 		r.logger.Warn().Err(err).Msg("failed to enqueue startup price sync")
+	}
+	// Reconcile submitted WB uploads before any startup catalog sync. This clears
+	// stale edit locks promptly after deploys or worker restarts.
+	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepPollPriceTasks),
+		asynq.Queue(QueueRepricerPoll), asynq.ProcessIn(3*time.Second), asynq.Unique(time.Minute)); err != nil {
+		r.logger.Warn().Err(err).Msg("failed to enqueue startup price task poll")
 	}
 	// Pull Sellico cost data shortly after boot so margin-floor has numbers.
 	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepSellicoEconomics),

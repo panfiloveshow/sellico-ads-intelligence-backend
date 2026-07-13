@@ -62,6 +62,7 @@ const (
 	QueueRecommendations = "recommendation-generation"
 	QueueExports         = "export-generation"
 	QueueRepricer        = "repricer"
+	QueueRepricerPoll    = "repricer-poll"
 )
 
 type WorkspaceTaskPayload struct {

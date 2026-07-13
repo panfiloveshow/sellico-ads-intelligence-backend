@@ -457,7 +457,7 @@ func (p *Processor) HandleRepricer(ctx context.Context, task *asynq.Task) error 
 }
 
 func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task) error {
-	return p.runSweep(ctx, TaskSweepPollPriceTasks, TaskPollPriceTasks, QueueRepricer)
+	return p.runSweep(ctx, TaskSweepPollPriceTasks, TaskPollPriceTasks, QueueRepricerPoll)
 }
 
 // HandleSweepSyncPrices refreshes the WB catalog (names/images) and prices for
