@@ -102,9 +102,9 @@ func TestUploadPriceTask_BatchTooLarge(t *testing.T) {
 func TestGetPriceTaskHistory_Status(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v2/history/tasks", r.URL.Path)
-		assert.Equal(t, "123456", r.URL.Query().Get("taskID"))
+		assert.Equal(t, "123456", r.URL.Query().Get("uploadID"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"data":{"id":123456,"status":3},"error":false}`))
+		w.Write([]byte(`{"data":{"uploadID":123456,"status":3},"error":false}`))
 	}))
 	defer server.Close()
 
@@ -112,6 +112,23 @@ func TestGetPriceTaskHistory_Status(t *testing.T) {
 	st, err := client.GetPriceTaskHistory(context.Background(), "tok", 123456)
 	require.NoError(t, err)
 	assert.Equal(t, 3, st.Status)
+}
+
+func TestListPriceTaskHistoryGoods_UsesUploadID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/history/goods/task", r.URL.Path)
+		assert.Equal(t, "123456", r.URL.Query().Get("uploadID"))
+		assert.Equal(t, "1000", r.URL.Query().Get("limit"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":{"uploadID":123456,"historyGoods":[{"nmID":111,"price":1000,"discount":30,"status":3}]},"error":false}`))
+	}))
+	defer server.Close()
+
+	client := newPricesTestClient(server.URL)
+	goods, err := client.ListPriceTaskHistoryGoods(context.Background(), "tok", 123456, 1000, 0)
+	require.NoError(t, err)
+	require.Len(t, goods, 1)
+	assert.Equal(t, int64(111), goods[0].NmID)
 }
 
 func TestListQuarantineGoods(t *testing.T) {

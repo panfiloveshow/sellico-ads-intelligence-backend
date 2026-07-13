@@ -108,8 +108,8 @@ type priceUploadResponse struct {
 // Verify field names against the live API on first integration and adjust here only.
 type priceTaskStatusResponse struct {
 	Data struct {
-		ID     int64 `json:"id"`
-		Status int   `json:"status"`
+		UploadID int64 `json:"uploadID"`
+		Status   int   `json:"status"`
 	} `json:"data"`
 	Error     bool   `json:"error"`
 	ErrorText string `json:"errorText"`
@@ -233,17 +233,17 @@ func (c *Client) UploadPriceTask(ctx context.Context, token string, items []Pric
 }
 
 // GetPriceTaskHistory returns the final processing status of an upload task.
-func (c *Client) GetPriceTaskHistory(ctx context.Context, token string, taskID int64) (*PriceTaskStatus, error) {
-	return c.priceTaskStatus(ctx, token, "/api/v2/history/tasks", taskID)
+func (c *Client) GetPriceTaskHistory(ctx context.Context, token string, uploadID int64) (*PriceTaskStatus, error) {
+	return c.priceTaskStatus(ctx, token, "/api/v2/history/tasks", uploadID)
 }
 
 // GetPriceTaskBuffer returns the pending (not-yet-finalized) status of an upload task.
-func (c *Client) GetPriceTaskBuffer(ctx context.Context, token string, taskID int64) (*PriceTaskStatus, error) {
-	return c.priceTaskStatus(ctx, token, "/api/v2/buffer/tasks", taskID)
+func (c *Client) GetPriceTaskBuffer(ctx context.Context, token string, uploadID int64) (*PriceTaskStatus, error) {
+	return c.priceTaskStatus(ctx, token, "/api/v2/buffer/tasks", uploadID)
 }
 
-func (c *Client) priceTaskStatus(ctx context.Context, token, base string, taskID int64) (*PriceTaskStatus, error) {
-	path := fmt.Sprintf("%s?taskID=%d", base, taskID)
+func (c *Client) priceTaskStatus(ctx context.Context, token, base string, uploadID int64) (*PriceTaskStatus, error) {
+	path := fmt.Sprintf("%s?uploadID=%d", base, uploadID)
 	resp, body, err := c.doPricesRequest(ctx, http.MethodGet, path, token, nil)
 	if err != nil {
 		return nil, classifyPricesError(resp, err)
@@ -255,16 +255,16 @@ func (c *Client) priceTaskStatus(ctx context.Context, token, base string, taskID
 	if parsed.Error {
 		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("wb price task status error: %s", parsed.ErrorText))
 	}
-	return &PriceTaskStatus{ID: parsed.Data.ID, Status: parsed.Data.Status}, nil
+	return &PriceTaskStatus{ID: parsed.Data.UploadID, Status: parsed.Data.Status}, nil
 }
 
 // ListPriceTaskHistoryGoods returns per-product results (incl. error text) for a
 // processed upload task. limit ≤ 1000.
-func (c *Client) ListPriceTaskHistoryGoods(ctx context.Context, token string, taskID int64, limit, offset int) ([]PriceTaskGood, error) {
+func (c *Client) ListPriceTaskHistoryGoods(ctx context.Context, token string, uploadID int64, limit, offset int) ([]PriceTaskGood, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
-	path := fmt.Sprintf("/api/v2/history/goods/task?taskID=%d&limit=%d&offset=%d", taskID, limit, offset)
+	path := fmt.Sprintf("/api/v2/history/goods/task?uploadID=%d&limit=%d&offset=%d", uploadID, limit, offset)
 	resp, body, err := c.doPricesRequest(ctx, http.MethodGet, path, token, nil)
 	if err != nil {
 		return nil, classifyPricesError(resp, err)
