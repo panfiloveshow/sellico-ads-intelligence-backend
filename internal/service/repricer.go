@@ -317,7 +317,8 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 	showcaseCache.mu.Unlock()
 
 	if len(missing) > 0 {
-		if fetched, err := s.wbClient.ShowcaseByNmIDs(ctx, missing); err == nil {
+		fetched, err := s.wbClient.ShowcaseByNmIDs(ctx, missing)
+		if len(fetched) > 0 {
 			showcaseCache.mu.Lock()
 			exp := time.Now().Add(showcaseTTL)
 			for nm, sc := range fetched {
@@ -325,7 +326,8 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 				cached[nm] = sc
 			}
 			showcaseCache.mu.Unlock()
-		} else {
+		}
+		if err != nil {
 			s.logger.Warn().Err(err).Msg("catalog showcase enrichment failed")
 		}
 	}
@@ -354,11 +356,33 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 			basic := sc.BasicRub
 			items[i].ShowcaseBasicRub = &basic
 		}
-		if sc.SppPercent > 0 {
-			spp := sc.SppPercent
+		if spp := catalogSppPercent(items[i], sc.BuyerRub); spp > 0 {
 			items[i].SppPercent = &spp
 		}
 	}
+}
+
+// catalogSppPercent compares the public buyer price with the seller's current
+// effective price. card.wb.ru basic includes the seller discount and therefore
+// cannot be used as the СПП denominator.
+func catalogSppPercent(item domain.ProductCatalogItem, buyerRub int64) int {
+	if buyerRub <= 0 {
+		return 0
+	}
+	sellerRub := int64(0)
+	if item.DiscountedPriceRub != nil {
+		sellerRub = *item.DiscountedPriceRub
+	} else if item.PriceRub != nil {
+		discount := 0
+		if item.DiscountPercent != nil {
+			discount = *item.DiscountPercent
+		}
+		sellerRub = effectiveOf(*item.PriceRub, discount)
+	}
+	if sellerRub <= 0 || buyerRub >= sellerRub {
+		return 0
+	}
+	return int(math.Round((1 - float64(buyerRub)/float64(sellerRub)) * 100))
 }
 
 // SetPause freezes (or unfreezes) a cabinet's repricer auto-apply until the

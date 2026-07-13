@@ -58,7 +58,7 @@ func (s *RepricerService) applyIntents(ctx context.Context, workspaceID uuid.UUI
 	for cabinetID, cabinetIntents := range byCabinet {
 		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesUpload) {
 			s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("prices upload cooling down, skipping cabinet")
-			applyErrs = append(applyErrs, fmt.Errorf("cabinet %s: prices upload cooling down", cabinetID))
+			applyErrs = append(applyErrs, fmt.Errorf("cabinet %s: %w", cabinetID, apperror.New(apperror.ErrRateLimited, "prices upload is temporarily cooling down")))
 			metrics.RepricerUploadsTotal.WithLabelValues("skipped_cooldown").Inc()
 			continue
 		}
@@ -175,6 +175,9 @@ func (s *RepricerService) createPendingChange(ctx context.Context, workspaceID u
 		DecisionContext:    ctxJSON,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, apperror.New(apperror.ErrConflict, "a price change is already in progress for this product")
+		}
 		return uuid.Nil, err
 	}
 	return uuidFromPgtype(row.ID), nil

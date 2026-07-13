@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -148,7 +149,8 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 // writeAppError maps an AppError to the appropriate HTTP response.
 func writeAppError(w http.ResponseWriter, err error) {
-	if appErr, ok := err.(*apperror.AppError); ok {
+	var appErr *apperror.AppError
+	if errors.As(err, &appErr) {
 		dto.WriteError(w, appErr.Status, appErr.Code, appErr.Message)
 		return
 	}

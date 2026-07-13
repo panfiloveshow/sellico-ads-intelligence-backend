@@ -3,6 +3,7 @@ package wb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,10 +16,9 @@ import (
 // Showcase is the public (tokenless) storefront price for one product, taken
 // from card.wb.ru. All *Rub fields are integer rubles.
 type Showcase struct {
-	Name       string
-	BasicRub   int64 // base/struck price (before the seller discount)
-	BuyerRub   int64 // retail price after the seller discount (card.wb.ru product)
-	SppPercent int   // seller discount = (1 - BuyerRub/BasicRub) * 100
+	Name     string
+	BasicRub int64 // base/struck price before the seller discount
+	BuyerRub int64 // buyer-facing storefront price after WB discounts
 }
 
 // showcaseDest is the RF geo (delivery point); prices are only returned for
@@ -45,6 +45,7 @@ type wbShowcaseResponse struct {
 // failed chunk is skipped, partial results are returned.
 func (c *Client) ShowcaseByNmIDs(ctx context.Context, nmIDs []int64) (map[int64]Showcase, error) {
 	out := make(map[int64]Showcase, len(nmIDs))
+	var chunkErrs []error
 	if len(nmIDs) == 0 {
 		return out, nil
 	}
@@ -68,6 +69,7 @@ func (c *Client) ShowcaseByNmIDs(ctx context.Context, nmIDs []int64) (map[int64]
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			c.logger.Warn().Err(err).Msg("showcase: build request failed")
+			chunkErrs = append(chunkErrs, fmt.Errorf("build showcase request: %w", err))
 			continue
 		}
 		req.Header.Set("Accept", "*/*")
@@ -75,17 +77,20 @@ func (c *Client) ShowcaseByNmIDs(ctx context.Context, nmIDs []int64) (map[int64]
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			c.logger.Warn().Err(err).Int("count", len(chunk)).Msg("showcase: request failed")
+			chunkErrs = append(chunkErrs, fmt.Errorf("request showcase chunk: %w", err))
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			c.logger.Warn().Int("status", resp.StatusCode).Int("count", len(chunk)).Msg("showcase: non-OK response")
+			chunkErrs = append(chunkErrs, fmt.Errorf("showcase request returned HTTP %d", resp.StatusCode))
 			continue
 		}
 		var parsed wbShowcaseResponse
 		if err := json.Unmarshal(body, &parsed); err != nil {
 			c.logger.Warn().Err(err).Msg("showcase: unmarshal failed")
+			chunkErrs = append(chunkErrs, fmt.Errorf("decode showcase response: %w", err))
 			continue
 		}
 		for _, p := range parsed.Products {
@@ -98,19 +103,14 @@ func (c *Client) ShowcaseByNmIDs(ctx context.Context, nmIDs []int64) (map[int64]
 				basic := p.Sizes[0].Price.Basic
 				buyer := p.Sizes[0].Price.Product
 				if basic > 0 && buyer > 0 {
-					spp := int(math.Round((1 - float64(buyer)/float64(basic)) * 100))
-					if spp < 0 {
-						spp = 0
-					}
 					sc.BasicRub = int64(math.Round(float64(basic) / 100))
 					sc.BuyerRub = int64(math.Round(float64(buyer) / 100))
-					sc.SppPercent = spp
 				}
 			}
 			out[p.ID] = sc
 		}
 	}
-	return out, nil
+	return out, errors.Join(chunkErrs...)
 }
 
 // WBImageURL builds the WB CDN thumbnail URL directly from an nmID (no token).

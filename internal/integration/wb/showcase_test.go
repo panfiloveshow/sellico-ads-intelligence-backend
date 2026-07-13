@@ -11,8 +11,7 @@ import (
 )
 
 // card.wb.ru returns prices in kopecks under sizes[0].price.{basic,product}.
-// СПП = (1 - product/basic) * 100. Pins the kopeck->rub + СПП math.
-func TestShowcaseByNmIDs_ComputesSppAndRubles(t *testing.T) {
+func TestShowcaseByNmIDs_ConvertsPricesToRubles(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/cards/v4/detail", r.URL.Path)
 		assert.Equal(t, "170516317;222", r.URL.Query().Get("nm"))
@@ -31,12 +30,24 @@ func TestShowcaseByNmIDs_ComputesSppAndRubles(t *testing.T) {
 	got := res[170516317]
 	assert.Equal(t, int64(2252), got.BasicRub) // 225200 kop -> 2252 rub
 	assert.Equal(t, int64(913), got.BuyerRub)  // 91300 kop -> 913 rub
-	assert.Equal(t, 59, got.SppPercent)        // round((1-913/2252)*100) = 59
 	assert.Equal(t, "Набор специй", got.Name)
 
 	// Out of stock: name kept, no price/СПП.
 	assert.Equal(t, "Нет в наличии", res[222].Name)
 	assert.Zero(t, res[222].BuyerRub)
+}
+
+func TestShowcaseByNmIDs_ReturnsChunkError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	res, err := client.ShowcaseByNmIDs(context.Background(), []int64{170516317})
+
+	require.Error(t, err)
+	assert.Empty(t, res)
 }
 
 func TestWBImageURL(t *testing.T) {
