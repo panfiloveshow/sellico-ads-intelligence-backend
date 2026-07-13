@@ -135,13 +135,16 @@ type CatalogRow struct {
 	ClubDiscountPercent pgtype.Int4
 	DiscountedPriceRub  pgtype.Int8
 	EditableSizePrice   pgtype.Bool
+	SppPercent          pgtype.Float8
+	CustomerPriceRub    pgtype.Int8
 	SyncedAt            pgtype.Timestamptz
 }
 
 const listCatalogWithPrices = `
 SELECT p.wb_product_id, p.title, p.brand, p.image_url, p.stock_total,
     pp.price_rub, pp.discount_percent, pp.club_discount_percent,
-    pp.discounted_price_rub, pp.editable_size_price, pp.synced_at
+    pp.discounted_price_rub, pp.editable_size_price, pp.spp_percent,
+    pp.customer_price_rub, pp.synced_at
 FROM products p
 LEFT JOIN product_prices pp
     ON pp.workspace_id = p.workspace_id AND pp.wb_product_id = p.wb_product_id
@@ -162,12 +165,26 @@ func (q *Queries) ListCatalogWithPrices(ctx context.Context, workspaceID, seller
 		var i CatalogRow
 		if err := rows.Scan(&i.WbProductID, &i.Title, &i.Brand, &i.ImageUrl, &i.StockTotal,
 			&i.PriceRub, &i.DiscountPercent, &i.ClubDiscountPercent, &i.DiscountedPriceRub,
-			&i.EditableSizePrice, &i.SyncedAt); err != nil {
+			&i.EditableSizePrice, &i.SppPercent, &i.CustomerPriceRub, &i.SyncedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
 	return items, rows.Err()
+}
+
+// UpdateProductPriceSPP stores the price presentation calculated by Sellico's
+// unit economics. Missing fields preserve their previous value so a partial
+// upstream row cannot erase a known buyer price.
+func (q *Queries) UpdateProductPriceSPP(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64, sppPercent pgtype.Float8, customerPriceRub pgtype.Int8) error {
+	_, err := q.db.Exec(ctx, `
+UPDATE product_prices
+SET spp_percent = COALESCE($4, spp_percent),
+    customer_price_rub = COALESCE($5, customer_price_rub),
+    updated_at = now()
+WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3`,
+		workspaceID, sellerCabinetID, wbProductID, sppPercent, customerPriceRub)
+	return err
 }
 
 // ---------------------------------------------------------------------------

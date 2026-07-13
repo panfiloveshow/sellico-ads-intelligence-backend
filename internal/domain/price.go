@@ -199,9 +199,9 @@ type ProductCatalogItem struct {
 
 	// Storefront (card.wb.ru, tokenless) — buyer-facing price + СПП, shown when
 	// the seller price isn't synced. All *Rub fields are integer rubles.
-	ShowcasePriceRub *int64 `json:"showcase_price_rub,omitempty"` // buyer price (after СПП)
-	ShowcaseBasicRub *int64 `json:"showcase_basic_rub,omitempty"` // seller price (before СПП)
-	SppPercent       *int   `json:"spp_percent,omitempty"`        // WB loyalty discount %
+	ShowcasePriceRub *int64   `json:"showcase_price_rub,omitempty"` // buyer price (after СПП)
+	ShowcaseBasicRub *int64   `json:"showcase_basic_rub,omitempty"` // seller price (before СПП)
+	SppPercent       *float64 `json:"spp_percent,omitempty"`        // WB loyalty discount %
 }
 
 // Orders heatmap: 7×24 matrix (ISO day-of-week × MSK hour) of order activity,
@@ -254,9 +254,9 @@ type RepricerHealth struct {
 	Products         int        `json:"products"`
 	WithPrice        int        `json:"with_price"`
 	ActiveStrategies int        `json:"active_strategies"`
-	AppliedToday     int        `json:"applied_today"`     // price changes applied in the last 24h
-	Recommendations  int        `json:"recommendations"`   // dry-run recommendations pending, last 24h
-	FailedToday      int        `json:"failed_today"`      // failed uploads, last 24h
+	AppliedToday     int        `json:"applied_today"`   // price changes applied in the last 24h
+	Recommendations  int        `json:"recommendations"` // dry-run recommendations pending, last 24h
+	FailedToday      int        `json:"failed_today"`    // failed uploads, last 24h
 	LastSyncAt       *time.Time `json:"last_sync_at,omitempty"`
 	PausedUntil      *time.Time `json:"paused_until,omitempty"`
 }

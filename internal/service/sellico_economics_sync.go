@@ -90,8 +90,29 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 			continue
 		}
 		imported += result.Imported
+		for _, row := range rows {
+			spp, customer := importedPricePresentation(row)
+			if !spp.Valid && !customer.Valid {
+				continue
+			}
+			if err := s.queries.UpdateProductPriceSPP(ctx, uuidToPgtype(workspaceID), cab.ID, row.NmID, spp, customer); err != nil {
+				s.logger.Warn().Err(err).Int64("nm_id", row.NmID).Msg("import sellico SPP failed")
+			}
+		}
 	}
 	return imported, nil
+}
+
+func importedPricePresentation(row sellico.WBUnitEconomics) (pgtype.Float8, pgtype.Int8) {
+	spp := pgtype.Float8{}
+	if row.SppPercent != nil && *row.SppPercent >= 0 && *row.SppPercent <= 100 {
+		spp = pgtype.Float8{Float64: *row.SppPercent, Valid: true}
+	}
+	customer := pgtype.Int8{}
+	if row.CustomerPrice != nil && *row.CustomerPrice > 0 {
+		customer = pgtype.Int8{Int64: int64(math.Round(*row.CustomerPrice)), Valid: true}
+	}
+	return spp, customer
 }
 
 // buildEconomicsInputs maps Sellico rows to product_economics inputs. Costs are

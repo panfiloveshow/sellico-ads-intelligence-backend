@@ -16,6 +16,8 @@ type WBUnitEconomics struct {
 	CostPrice         float64
 	CommissionPercent *float64
 	TaxPercent        *float64
+	SppPercent        *float64
+	CustomerPrice     *float64
 }
 
 // ListWBUnitEconomics fetches cost/commission/tax by nmID for one Sellico
@@ -56,6 +58,8 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 			CostPrice         json.Number  `json:"cost_price"`
 			CommissionPercent *json.Number `json:"commission_percent"`
 			TaxPercent        *json.Number `json:"tax_percent"`
+			SppPercent        *json.Number `json:"spp_percent"`
+			CustomerPrice     *json.Number `json:"customer_price"`
 		} `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -81,6 +85,16 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 		if it.TaxPercent != nil {
 			if v, err := it.TaxPercent.Float64(); err == nil {
 				row.TaxPercent = &v
+			}
+		}
+		if it.SppPercent != nil {
+			if v, err := it.SppPercent.Float64(); err == nil && v >= 0 && v <= 100 {
+				row.SppPercent = &v
+			}
+		}
+		if it.CustomerPrice != nil {
+			if v, err := it.CustomerPrice.Float64(); err == nil && v > 0 {
+				row.CustomerPrice = &v
 			}
 		}
 		out = append(out, row)

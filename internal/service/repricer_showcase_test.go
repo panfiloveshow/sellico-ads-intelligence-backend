@@ -16,13 +16,13 @@ func TestCatalogSppPercentUsesCurrentSellerPrice(t *testing.T) {
 		DiscountedPriceRub: &current,
 	}
 
-	assert.Equal(t, 43, catalogSppPercent(item, 338))
+	assert.Equal(t, 43.1, catalogSppPercent(item, 338))
 }
 
 func TestCatalogSppPercentFallsBackToCalculatedEffectivePrice(t *testing.T) {
 	base, discount := int64(1000), 20
 	item := domain.ProductCatalogItem{PriceRub: &base, DiscountPercent: &discount}
 
-	assert.Equal(t, 10, catalogSppPercent(item, 720))
+	assert.Equal(t, 10.0, catalogSppPercent(item, 720))
 	assert.Zero(t, catalogSppPercent(item, 800))
 }

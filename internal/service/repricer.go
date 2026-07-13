@@ -271,6 +271,14 @@ func (s *RepricerService) ListCatalog(ctx context.Context, workspaceID uuid.UUID
 			v := r.EditableSizePrice.Bool
 			item.EditableSizePrice = &v
 		}
+		if r.SppPercent.Valid {
+			v := r.SppPercent.Float64
+			item.SppPercent = &v
+		}
+		if r.CustomerPriceRub.Valid {
+			v := r.CustomerPriceRub.Int64
+			item.ShowcasePriceRub = &v
+		}
 		if r.SyncedAt.Valid {
 			t := r.SyncedAt.Time
 			item.SyncedAt = &t
@@ -308,6 +316,9 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 
 	showcaseCache.mu.Lock()
 	for _, it := range items {
+		if it.ShowcasePriceRub != nil && it.SppPercent != nil {
+			continue
+		}
 		if e, ok := showcaseCache.data[it.WBProductID]; ok && e.expiry.After(now) {
 			cached[it.WBProductID] = e.sc
 		} else {
@@ -348,7 +359,7 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 		// Stock comes only from real WB Statistics (products.stock_total). The
 		// card.wb.ru storefront quantity is a capped, geo-limited number that
 		// misleads (shows ~44 when the cabinet has hundreds), so it's not used.
-		if sc.BuyerRub > 0 {
+		if items[i].ShowcasePriceRub == nil && sc.BuyerRub > 0 {
 			buyer := sc.BuyerRub
 			items[i].ShowcasePriceRub = &buyer
 		}
@@ -356,8 +367,10 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 			basic := sc.BasicRub
 			items[i].ShowcaseBasicRub = &basic
 		}
-		if spp := catalogSppPercent(items[i], sc.BuyerRub); spp > 0 {
-			items[i].SppPercent = &spp
+		if items[i].SppPercent == nil {
+			if spp := catalogSppPercent(items[i], sc.BuyerRub); spp > 0 {
+				items[i].SppPercent = &spp
+			}
 		}
 	}
 }
@@ -365,7 +378,7 @@ func (s *RepricerService) enrichCatalogShowcase(ctx context.Context, items []dom
 // catalogSppPercent compares the public buyer price with the seller's current
 // effective price. card.wb.ru basic includes the seller discount and therefore
 // cannot be used as the СПП denominator.
-func catalogSppPercent(item domain.ProductCatalogItem, buyerRub int64) int {
+func catalogSppPercent(item domain.ProductCatalogItem, buyerRub int64) float64 {
 	if buyerRub <= 0 {
 		return 0
 	}
@@ -382,7 +395,7 @@ func catalogSppPercent(item domain.ProductCatalogItem, buyerRub int64) int {
 	if sellerRub <= 0 || buyerRub >= sellerRub {
 		return 0
 	}
-	return int(math.Round((1 - float64(buyerRub)/float64(sellerRub)) * 100))
+	return math.Round((1-float64(buyerRub)/float64(sellerRub))*10000) / 100
 }
 
 // SetPause freezes (or unfreezes) a cabinet's repricer auto-apply until the
