@@ -489,6 +489,9 @@ func (s *RepricerService) ListChanges(ctx context.Context, workspaceID uuid.UUID
 		Limit:       f.Limit,
 		Offset:      f.Offset,
 	}
+	if f.SellerCabinetID != nil {
+		arg.SellerCabinetID = uuidToPgtype(*f.SellerCabinetID)
+	}
 	if f.WBProductID != nil {
 		arg.WbProductID = pgtype.Int8{Int64: *f.WBProductID, Valid: true}
 	}
@@ -510,8 +513,12 @@ func (s *RepricerService) ListChanges(ctx context.Context, workspaceID uuid.UUID
 }
 
 // ListUploadTasks returns recent upload tasks for a workspace.
-func (s *RepricerService) ListUploadTasks(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.PriceUploadTask, error) {
-	rows, err := s.queries.ListPriceUploadTasksByWorkspace(ctx, uuidToPgtype(workspaceID), limit, offset)
+func (s *RepricerService) ListUploadTasks(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.PriceUploadTask, error) {
+	cabinet := pgtype.UUID{}
+	if cabinetID != nil {
+		cabinet = uuidToPgtype(*cabinetID)
+	}
+	rows, err := s.queries.ListPriceUploadTasksByWorkspace(ctx, uuidToPgtype(workspaceID), cabinet, limit, offset)
 	if err != nil {
 		return nil, err
 	}

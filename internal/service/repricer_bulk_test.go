@@ -3,13 +3,16 @@ package service
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
+	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
 func TestApplyAdjustment(t *testing.T) {
@@ -54,6 +57,8 @@ func TestValidateManualPriceBulkRequest_StrictModesAndScopes(t *testing.T) {
 		{name: "items only", req: domain.ManualPriceBulkRequest{Items: []domain.ManualPriceBulkItem{{WBProductID: 1, TargetPriceRub: &target}}}},
 		{name: "all scope", req: domain.ManualPriceBulkRequest{Scope: &domain.ManualPriceBulkScope{All: true}, Adjustment: validAdjustment}},
 		{name: "cabinet scope", req: domain.ManualPriceBulkRequest{Scope: &domain.ManualPriceBulkScope{SellerCabinetID: &cabinetID}, Adjustment: validAdjustment}},
+		{name: "selected products in cabinet", req: domain.ManualPriceBulkRequest{Scope: &domain.ManualPriceBulkScope{SellerCabinetID: &cabinetID, ProductIDs: []int64{1, 2}}, Adjustment: validAdjustment}},
+		{name: "selected products require cabinet", req: domain.ManualPriceBulkRequest{Scope: &domain.ManualPriceBulkScope{ProductIDs: []int64{1}}, Adjustment: validAdjustment}, wantErr: true},
 		{name: "empty request", req: domain.ManualPriceBulkRequest{}, wantErr: true},
 		{name: "items and scope", req: domain.ManualPriceBulkRequest{Items: []domain.ManualPriceBulkItem{{WBProductID: 1, TargetPriceRub: &target}}, Scope: &domain.ManualPriceBulkScope{All: true}}, wantErr: true},
 		{name: "items and adjustment", req: domain.ManualPriceBulkRequest{Items: []domain.ManualPriceBulkItem{{WBProductID: 1, TargetPriceRub: &target}}, Adjustment: validAdjustment}, wantErr: true},
@@ -73,6 +78,60 @@ func TestValidateManualPriceBulkRequest_StrictModesAndScopes(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestSelectedProductScopeRejectsAnotherCabinet(t *testing.T) {
+	requested := uuid.New()
+	other := domain.ProductPrice{SellerCabinetID: uuid.New(), WBProductID: 101}
+	require.False(t, priceBelongsToCabinet(other, requested))
+	require.True(t, priceBelongsToCabinet(domain.ProductPrice{SellerCabinetID: requested}, requested))
+}
+
+func TestOverlayLatestPriceIntentsUsesActiveIntentOverStaleCatalog(t *testing.T) {
+	now := time.Now().UTC()
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	prices := map[int64]domain.ProductPrice{
+		101: {
+			WorkspaceID:     workspaceID,
+			SellerCabinetID: cabinetID,
+			WBProductID:     101,
+			PriceRub:        1000,
+			DiscountPercent: 10,
+			SyncedAt:        now,
+		},
+	}
+	overlayLatestPriceIntents(prices, []sqlcgen.PriceChange{{
+		WorkspaceID:        uuidToPgtype(workspaceID),
+		SellerCabinetID:    uuidToPgtype(cabinetID),
+		WbProductID:        101,
+		NewPriceRub:        900,
+		NewDiscountPercent: 15,
+		WbStatus:           domain.PriceStatusUploaded,
+		CreatedAt:          pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+		UpdatedAt:          pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+	}})
+
+	require.Equal(t, int64(900), prices[101].PriceRub)
+	require.Equal(t, 15, prices[101].DiscountPercent)
+}
+
+func TestOverlayLatestPriceIntentsDoesNotReplaceNewerSyncWithLateAppliedPoll(t *testing.T) {
+	now := time.Now().UTC()
+	prices := map[int64]domain.ProductPrice{101: {
+		WBProductID: 101,
+		PriceRub:    1200,
+		SyncedAt:    now,
+	}}
+	overlayLatestPriceIntents(prices, []sqlcgen.PriceChange{{
+		WbProductID: 101,
+		NewPriceRub: 900,
+		WbStatus:    domain.PriceStatusApplied,
+		CreatedAt:   pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		UpdatedAt:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+	}})
+
+	require.Equal(t, int64(1200), prices[101].PriceRub)
 }
 
 func TestValidatePriceAdjustmentBounds(t *testing.T) {

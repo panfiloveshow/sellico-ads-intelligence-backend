@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"time"
 
@@ -27,7 +26,7 @@ func (s *RepricerService) CreateSchedule(ctx context.Context, actorID, workspace
 	if err := s.requireCabinetInWorkspace(ctx, workspaceID, in.SellerCabinetID); err != nil {
 		return nil, err
 	}
-	row, err := s.queries.CreatePriceScheduleEntry(ctx, sqlcgen.CreatePriceScheduleEntryParams{
+	primaryParams := sqlcgen.CreatePriceScheduleEntryParams{
 		WorkspaceID:      uuidToPgtype(workspaceID),
 		SellerCabinetID:  uuidToPgtype(in.SellerCabinetID),
 		ScopeType:        in.ScopeType,
@@ -40,47 +39,30 @@ func (s *RepricerService) CreateSchedule(ctx context.Context, actorID, workspace
 		RevertToPrevious: in.RevertToPrevious,
 		Comment:          textToPgtype(in.Comment),
 		CreatedBy:        uuidToPgtypePtr(&actorID),
-	})
-	if err != nil {
-		return nil, err
 	}
-
-	// Auto-revert: exact inverse delta at revert_at. The repository is not exposed
-	// through a transaction here, so a failed pair creation is compensated by
-	// making the primary non-executable and returning the error to the caller.
+	var row sqlcgen.PriceScheduleEntry
+	var err error
 	if in.RevertAt != nil {
-		primaryID := uuidFromPgtype(row.ID)
 		signed := signedScheduleDelta(in.AdjustmentValue, in.Direction)
 		inverse := inverseDeltaPercent(signed)
 		revertDirection := domain.PriceDirectionUp
 		if inverse < 0 {
 			revertDirection = domain.PriceDirectionDown
 		}
-		if _, err := s.queries.CreatePriceScheduleEntry(ctx, sqlcgen.CreatePriceScheduleEntryParams{
-			WorkspaceID:     uuidToPgtype(workspaceID),
-			SellerCabinetID: uuidToPgtype(in.SellerCabinetID),
-			ScopeType:       in.ScopeType,
-			ProductIds:      in.ProductIDs,
+		revertParams := sqlcgen.CreatePriceScheduleEntryParams{
 			AdjustmentType:  domain.PriceAdjustDeltaPercent,
 			AdjustmentValue: math.Abs(inverse),
 			Direction:       textToPgtype(revertDirection),
 			ScheduledAt:     pgtype.Timestamptz{Time: *in.RevertAt, Valid: true},
-			RevertOf:        uuidToPgtypePtr(&primaryID),
-			Comment:         textToPgtype("auto-revert of " + primaryID.String()),
+			Comment:         textToPgtype("automatic price revert"),
 			CreatedBy:       uuidToPgtypePtr(&actorID),
-		}); err != nil {
-			compensationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			_, compensationErr := s.queries.UpdatePriceScheduleEntryStatus(compensationCtx, sqlcgen.UpdatePriceScheduleEntryStatusParams{
-				ID:     row.ID,
-				Status: domain.PriceScheduleFailed,
-				Error:  pgtype.Text{String: "auto-revert pair creation failed", Valid: true},
-			})
-			if compensationErr != nil {
-				return nil, fmt.Errorf("create auto-revert: %w; disable primary schedule: %v", err, compensationErr)
-			}
-			return nil, fmt.Errorf("create auto-revert: %w", err)
 		}
+		row, err = s.queries.CreatePriceSchedulePair(ctx, primaryParams, revertParams)
+	} else {
+		row, err = s.queries.CreatePriceScheduleEntry(ctx, primaryParams)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	entry := priceScheduleEntryFromSqlc(row)
@@ -88,12 +70,16 @@ func (s *RepricerService) CreateSchedule(ctx context.Context, actorID, workspace
 }
 
 // ListSchedules returns schedule entries for a workspace (optionally by status).
-func (s *RepricerService) ListSchedules(ctx context.Context, workspaceID uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error) {
+func (s *RepricerService) ListSchedules(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error) {
+	cabinet := pgtype.UUID{}
+	if cabinetID != nil {
+		cabinet = uuidToPgtype(*cabinetID)
+	}
 	statusFilter := pgtype.Text{}
 	if status != "" {
 		statusFilter = pgtype.Text{String: status, Valid: true}
 	}
-	rows, err := s.queries.ListPriceScheduleEntriesByWorkspace(ctx, uuidToPgtype(workspaceID), statusFilter, limit, offset)
+	rows, err := s.queries.ListPriceScheduleEntriesByWorkspace(ctx, uuidToPgtype(workspaceID), cabinet, statusFilter, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +149,7 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 	entryID := uuidFromPgtype(row.ID)
 	workspaceID := uuidFromPgtype(row.WorkspaceID)
 	cabinetID := uuidFromPgtype(row.SellerCabinetID)
+	var primaryScheduleID *uuid.UUID
 	if row.RevertOf.Valid {
 		primary, err := s.queries.GetPriceScheduleEntry(ctx, row.RevertOf)
 		if err != nil || uuidFromPgtype(primary.WorkspaceID) != workspaceID {
@@ -176,6 +163,8 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 			s.failSchedule(ctx, entryID, "auto-revert primary schedule did not complete")
 			return false
 		}
+		id := uuidFromPgtype(row.RevertOf)
+		primaryScheduleID = &id
 	}
 	if err := s.requireCabinetInWorkspace(ctx, workspaceID, cabinetID); err != nil {
 		s.failSchedule(ctx, entryID, "seller cabinet does not belong to schedule workspace")
@@ -195,7 +184,29 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 		s.failSchedule(ctx, entryID, err.Error())
 		return false
 	}
+	priceByNm := make(map[int64]domain.ProductPrice, len(prices))
+	for _, price := range prices {
+		priceByNm[price.WbProductID] = productPriceFromSqlc(price)
+	}
+	latest, err := s.queries.ListLatestPriceIntents(ctx, row.WorkspaceID, row.SellerCabinetID)
+	if err != nil {
+		s.failSchedule(ctx, entryID, err.Error())
+		return false
+	}
+	overlayLatestPriceIntents(priceByNm, latest)
 	floors := s.marginFloors(ctx, workspaceID)
+	if primaryScheduleID != nil {
+		intents, reason, err := s.buildExactScheduleRevert(ctx, row, priceByNm, latest, floors, *primaryScheduleID)
+		if err != nil {
+			s.failSchedule(ctx, entryID, err.Error())
+			return false
+		}
+		if reason != "" {
+			s.failSchedule(ctx, entryID, reason)
+			return false
+		}
+		return s.enqueueScheduleIntents(ctx, row, intents)
+	}
 
 	targetNm := map[int64]bool{}
 	if row.ScopeType == domain.PriceScopeList || row.ScopeType == domain.PriceScopeProduct {
@@ -210,11 +221,10 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 	}
 	adj := domain.ManualPriceAdjustment{Type: row.AdjustmentType, Value: adjustmentValue}
 	var intents []priceChangeIntent
-	for _, p := range prices {
-		if !scheduleIncludesProduct(row.ScopeType, targetNm, p.WbProductID) {
+	for _, cur := range priceByNm {
+		if !scheduleIncludesProduct(row.ScopeType, targetNm, cur.WBProductID) {
 			continue
 		}
-		cur := productPriceFromSqlc(p)
 		newBase := applyAdjustment(cur.PriceRub, adj)
 		if newBase <= 0 {
 			continue
@@ -240,24 +250,75 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 			ScheduleEntryID: &eid,
 		})
 	}
+	return s.enqueueScheduleIntents(ctx, row, intents)
+}
+
+func (s *RepricerService) enqueueScheduleIntents(ctx context.Context, row sqlcgen.PriceScheduleEntry, intents []priceChangeIntent) bool {
+	entryID := uuidFromPgtype(row.ID)
+	workspaceID := uuidFromPgtype(row.WorkspaceID)
 	if !hasApplicablePriceChanges(intents) {
 		s.failSchedule(ctx, entryID, "no applicable price changes")
 		return false
 	}
-
-	taskIDs, err := s.applyIntents(ctx, workspaceID, intents)
-	if err != nil {
+	result, err := s.enqueueAndApplyIntents(ctx, workspaceID, intents)
+	if err != nil && result.Accepted == 0 {
 		s.failSchedule(ctx, entryID, err.Error())
 		return false
 	}
-	if _, err := s.queries.UpdatePriceScheduleEntryStatus(ctx, sqlcgen.UpdatePriceScheduleEntryStatusParams{
-		ID:              uuidToPgtype(entryID),
-		Status:          domain.PriceScheduleDone,
-		ExecutedTaskIds: uuidsToPgtype(taskIDs),
-	}); err != nil {
-		s.logger.Warn().Err(err).Msg("failed to mark schedule entry done")
+	if result.Accepted == 0 {
+		s.failSchedule(ctx, entryID, "price change intent was not saved")
+		return false
+	}
+	if err != nil {
+		s.logger.Warn().Err(err).Str("schedule_entry_id", entryID.String()).Msg("scheduled price intents saved with deferred upload work")
+	}
+	if _, aggregateErr := s.queries.AggregatePriceSchedulesByWorkspace(ctx, row.WorkspaceID); aggregateErr != nil {
+		s.logger.Warn().Err(aggregateErr).Msg("failed to aggregate scheduled price changes")
 	}
 	return false
+}
+
+func (s *RepricerService) buildExactScheduleRevert(ctx context.Context, row sqlcgen.PriceScheduleEntry, prices map[int64]domain.ProductPrice, latest []sqlcgen.PriceChange, floors map[int64]int64, primaryScheduleID uuid.UUID) ([]priceChangeIntent, string, error) {
+	primaryChanges, err := s.queries.ListPriceChangesByScheduleEntry(ctx, row.WorkspaceID, uuidToPgtype(primaryScheduleID))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(primaryChanges) == 0 {
+		return nil, "auto-revert primary has no price changes", nil
+	}
+	latestByNm := make(map[int64]sqlcgen.PriceChange, len(latest))
+	for _, change := range latest {
+		latestByNm[change.WbProductID] = change
+	}
+	entryID := uuidFromPgtype(row.ID)
+	intents := make([]priceChangeIntent, 0, len(primaryChanges))
+	for _, primary := range primaryChanges {
+		last, ok := latestByNm[primary.WbProductID]
+		if !ok || uuidFromPgtype(last.ID) != uuidFromPgtype(primary.ID) || primary.WbStatus != domain.PriceStatusApplied {
+			return nil, "auto-revert canceled because a newer price change exists", nil
+		}
+		current, ok := prices[primary.WbProductID]
+		if !ok || current.PriceRub != primary.NewPriceRub || current.DiscountPercent != int(primary.NewDiscountPercent) {
+			return nil, "auto-revert canceled because the current WB price changed", nil
+		}
+		floor := floors[primary.WbProductID]
+		if floor > 0 && effectiveOf(primary.OldPriceRub, int(primary.OldDiscountPercent)) < floor {
+			return nil, "auto-revert canceled because the previous price is below the current margin floor", nil
+		}
+		intents = append(intents, priceChangeIntent{
+			CabinetID:       uuidFromPgtype(primary.SellerCabinetID),
+			NmID:            primary.WbProductID,
+			OldPriceRub:     current.PriceRub,
+			NewPriceRub:     primary.OldPriceRub,
+			OldDiscount:     current.DiscountPercent,
+			NewDiscount:     int(primary.OldDiscountPercent),
+			MinPriceRub:     floor,
+			Reason:          "scheduled exact price revert",
+			Source:          domain.PriceSourceSchedule,
+			ScheduleEntryID: &entryID,
+		})
+	}
+	return intents, "", nil
 }
 
 func (s *RepricerService) requireCabinetInWorkspace(ctx context.Context, workspaceID, cabinetID uuid.UUID) error {

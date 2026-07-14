@@ -5,9 +5,11 @@ import (
 	"math"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
+	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
 const (
@@ -37,6 +39,11 @@ func (s *RepricerService) ApplyManualBulk(ctx context.Context, actorID, workspac
 	for _, row := range prices {
 		priceByNm[row.WbProductID] = productPriceFromSqlc(row)
 	}
+	latest, err := s.queries.ListLatestPriceIntents(ctx, uuidToPgtype(workspaceID), pgtype.UUID{})
+	if err != nil {
+		return nil, err
+	}
+	overlayLatestPriceIntents(priceByNm, latest)
 	floorByNm := s.marginFloors(ctx, workspaceID)
 
 	var intents []priceChangeIntent
@@ -89,22 +96,42 @@ func (s *RepricerService) ApplyManualBulk(ctx context.Context, actorID, workspac
 			}
 			appendIntent(cur, newBase, newDiscount, "manual bulk item")
 		}
+	} else if len(req.Scope.ProductIDs) > 0 {
+		requestedCabinetID := *req.Scope.SellerCabinetID
+		for _, nm := range req.Scope.ProductIDs {
+			cur, ok := priceByNm[nm]
+			if !ok || !priceBelongsToCabinet(cur, requestedCabinetID) {
+				skipped++
+				continue
+			}
+			newBase := applyAdjustment(cur.PriceRub, *req.Adjustment)
+			appendIntent(cur, newBase, cur.DiscountPercent, "manual selected-products adjustment")
+		}
 	} else {
-		for nm, cur := range priceByNm {
+		for _, cur := range priceByNm {
 			if req.Scope.SellerCabinetID != nil && cur.SellerCabinetID != *req.Scope.SellerCabinetID {
 				continue
 			}
 			newBase := applyAdjustment(cur.PriceRub, *req.Adjustment)
 			appendIntent(cur, newBase, cur.DiscountPercent, "manual bulk adjustment")
-			_ = nm
 		}
 	}
 
-	taskIDs, err := s.applyIntents(ctx, workspaceID, intents)
-	if err != nil {
+	applyResult, err := s.enqueueAndApplyIntents(ctx, workspaceID, intents)
+	if err != nil && applyResult.Accepted == 0 {
 		return nil, err
 	}
-	return &domain.PriceBulkResult{Accepted: len(intents), Skipped: skipped, TaskIDs: taskIDs}, nil
+	if err != nil {
+		s.logger.Warn().Err(err).Int("accepted", applyResult.Accepted).Int("queued", applyResult.Queued).Int("failed", applyResult.Failed).Msg("manual price changes were saved with partial delivery errors")
+	}
+	skipped += len(intents) - applyResult.Accepted
+	return &domain.PriceBulkResult{
+		Accepted: applyResult.Accepted,
+		Queued:   applyResult.Queued,
+		Failed:   applyResult.Failed,
+		Skipped:  skipped,
+		TaskIDs:  applyResult.TaskIDs,
+	}, nil
 }
 
 func validateManualPriceBulkRequest(req domain.ManualPriceBulkRequest) error {
@@ -143,12 +170,50 @@ func validateManualPriceBulkRequest(req domain.ManualPriceBulkRequest) error {
 	if req.Adjustment == nil {
 		return apperror.New(apperror.ErrValidation, "scope requires an adjustment")
 	}
-	allScope := req.Scope.All && req.Scope.SellerCabinetID == nil
-	cabinetScope := !req.Scope.All && req.Scope.SellerCabinetID != nil
-	if !allScope && !cabinetScope {
-		return apperror.New(apperror.ErrValidation, "scope must select either all products or one seller cabinet")
+	allScope := req.Scope.All && req.Scope.SellerCabinetID == nil && len(req.Scope.ProductIDs) == 0
+	cabinetScope := !req.Scope.All && req.Scope.SellerCabinetID != nil && len(req.Scope.ProductIDs) == 0
+	productScope := !req.Scope.All && req.Scope.SellerCabinetID != nil && len(req.Scope.ProductIDs) > 0
+	if !allScope && !cabinetScope && !productScope {
+		return apperror.New(apperror.ErrValidation, "scope must select all products, one seller cabinet, or product_ids")
+	}
+	if productScope {
+		seen := make(map[int64]struct{}, len(req.Scope.ProductIDs))
+		for _, nmID := range req.Scope.ProductIDs {
+			if nmID <= 0 {
+				return apperror.New(apperror.ErrValidation, "scope product_ids must be positive")
+			}
+			if _, exists := seen[nmID]; exists {
+				return apperror.New(apperror.ErrValidation, "scope product_ids must not contain duplicates")
+			}
+			seen[nmID] = struct{}{}
+		}
 	}
 	return validatePriceAdjustment(*req.Adjustment, false)
+}
+
+func priceBelongsToCabinet(price domain.ProductPrice, cabinetID uuid.UUID) bool {
+	return price.SellerCabinetID == cabinetID
+}
+
+// overlayLatestPriceIntents keeps relative changes chained to the latest real
+// persisted intent while product_prices is waiting for the next WB sync.
+func overlayLatestPriceIntents(prices map[int64]domain.ProductPrice, latest []sqlcgen.PriceChange) {
+	for _, row := range latest {
+		cur, hasSyncedPrice := prices[row.WbProductID]
+		active := row.WbStatus == domain.PriceStatusPending || row.WbStatus == domain.PriceStatusSubmitting || row.WbStatus == domain.PriceStatusSubmitUnknown || row.WbStatus == domain.PriceStatusUploaded
+		if hasSyncedPrice && !active && !row.CreatedAt.Time.After(cur.SyncedAt) {
+			continue
+		}
+		prices[row.WbProductID] = domain.ProductPrice{
+			WorkspaceID:     uuidFromPgtype(row.WorkspaceID),
+			SellerCabinetID: uuidFromPgtype(row.SellerCabinetID),
+			WBProductID:     row.WbProductID,
+			PriceRub:        row.NewPriceRub,
+			DiscountPercent: int(row.NewDiscountPercent),
+			SyncedAt:        row.UpdatedAt.Time,
+			UpdatedAt:       row.UpdatedAt.Time,
+		}
+	}
 }
 
 func validatePriceAdjustment(adj domain.ManualPriceAdjustment, allowDelta bool) error {

@@ -27,11 +27,11 @@ type priceServicer interface {
 	ListChanges(ctx context.Context, workspaceID uuid.UUID, f domain.PriceChangeFilter) ([]domain.PriceChange, error)
 	CountChanges(ctx context.Context, workspaceID uuid.UUID, f domain.PriceChangeFilter) (int64, error)
 	Rollback(ctx context.Context, actorID, workspaceID, changeID uuid.UUID) (*domain.PriceChange, error)
-	ListUploadTasks(ctx context.Context, workspaceID uuid.UUID, limit, offset int32) ([]domain.PriceUploadTask, error)
-	CountUploadTasks(ctx context.Context, workspaceID uuid.UUID) (int64, error)
+	ListUploadTasks(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, limit, offset int32) ([]domain.PriceUploadTask, error)
+	CountUploadTasks(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID) (int64, error)
 	CreateSchedule(ctx context.Context, actorID, workspaceID uuid.UUID, in domain.PriceScheduleInput) (*domain.PriceScheduleEntry, error)
-	ListSchedules(ctx context.Context, workspaceID uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error)
-	CountSchedules(ctx context.Context, workspaceID uuid.UUID, status string) (int64, error)
+	ListSchedules(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, status string, limit, offset int32) ([]domain.PriceScheduleEntry, error)
+	CountSchedules(ctx context.Context, workspaceID uuid.UUID, cabinetID *uuid.UUID, status string) (int64, error)
 	CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error
 	ListQuarantine(ctx context.Context, workspaceID uuid.UUID) ([]domain.PriceQuarantineGood, error)
 	OrdersHeatmap(ctx context.Context, workspaceID, cabinetID uuid.UUID, wbProductID int64, from, to time.Time, metric string) (*domain.OrdersHeatmap, error)
@@ -265,7 +265,7 @@ func (h *PriceHandler) ListChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := q.Get("status")
-	if !allowedValue(status, "", domain.PriceStatusRecommended, domain.PriceStatusPending, domain.PriceStatusUploaded, domain.PriceStatusApplied, domain.PriceStatusFailed, domain.PriceStatusRolledBack) {
+	if !allowedValue(status, "", domain.PriceStatusRecommended, domain.PriceStatusPending, domain.PriceStatusSubmitting, domain.PriceStatusSubmitUnknown, domain.PriceStatusUploaded, domain.PriceStatusApplied, domain.PriceStatusFailed, domain.PriceStatusRolledBack) {
 		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid price change status")
 		return
 	}
@@ -275,6 +275,12 @@ func (h *PriceHandler) ListChanges(w http.ResponseWriter, r *http.Request) {
 		Limit:  int32(pg.PerPage),
 		Offset: int32(pg.Offset()),
 	}
+	cabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil || (cabinetID != nil && *cabinetID == uuid.Nil) {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid seller_cabinet_id")
+		return
+	}
+	f.SellerCabinetID = cabinetID
 	if nm := q.Get("wb_product_id"); nm != "" {
 		v, err := strconv.ParseInt(nm, 10, 64)
 		if err != nil || v <= 0 {
@@ -325,12 +331,17 @@ func (h *PriceHandler) ListUploadTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	total, err := h.service.CountUploadTasks(r.Context(), workspaceID)
+	cabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil || (cabinetID != nil && *cabinetID == uuid.Nil) {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid seller_cabinet_id")
+		return
+	}
+	total, err := h.service.CountUploadTasks(r.Context(), workspaceID, cabinetID)
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
-	items, err := h.service.ListUploadTasks(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	items, err := h.service.ListUploadTasks(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -376,12 +387,17 @@ func (h *PriceHandler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	total, err := h.service.CountSchedules(r.Context(), workspaceID, status)
+	cabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
+	if err != nil || (cabinetID != nil && *cabinetID == uuid.Nil) {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid seller_cabinet_id")
+		return
+	}
+	total, err := h.service.CountSchedules(r.Context(), workspaceID, cabinetID, status)
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
-	items, err := h.service.ListSchedules(r.Context(), workspaceID, status, int32(pg.PerPage), int32(pg.Offset()))
+	items, err := h.service.ListSchedules(r.Context(), workspaceID, cabinetID, status, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return

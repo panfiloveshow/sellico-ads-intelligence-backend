@@ -3040,6 +3040,7 @@ paths:
         - $ref: "#/components/parameters/WorkspaceHeader"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/SellerCabinetIdQuery"
         - name: wb_product_id
           in: query
           schema: { type: integer, format: int64, minimum: 1 }
@@ -3048,7 +3049,7 @@ paths:
           schema: { type: string, enum: [strategy, manual, rollback, schedule] }
         - name: status
           in: query
-          schema: { type: string, enum: [recommended, pending, uploaded, applied, failed, rolled_back] }
+          schema: { type: string, enum: [recommended, pending, submitting, submit_unknown, uploaded, applied, failed, rolled_back] }
       responses:
         "200":
           description: Price-change page
@@ -3085,6 +3086,7 @@ paths:
         - $ref: "#/components/parameters/WorkspaceHeader"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/SellerCabinetIdQuery"
       responses:
         "200":
           description: Upload-task page
@@ -3100,6 +3102,7 @@ paths:
         - $ref: "#/components/parameters/WorkspaceHeader"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/SellerCabinetIdQuery"
         - name: status
           in: query
           schema: { type: string, enum: [planned, executing, done, failed, canceled] }
@@ -5031,6 +5034,9 @@ components:
           properties:
             all: { type: boolean }
             seller_cabinet_id: { type: string, format: uuid }
+            product_ids:
+              type: array
+              items: { type: integer, format: int64, minimum: 1 }
         adjustment:
           type: object
           required: [type, value]
@@ -5047,6 +5053,8 @@ components:
           type: object
           properties:
             accepted: { type: integer }
+            queued: { type: integer }
+            failed: { type: integer }
             skipped: { type: integer }
             task_ids:
               type: array
@@ -5144,7 +5152,7 @@ components:
         min_price_rub: { type: integer, format: int64, nullable: true }
         reason: { type: string }
         source: { type: string, enum: [strategy, manual, rollback, schedule] }
-        wb_status: { type: string, enum: [recommended, pending, uploaded, applied, failed, rolled_back] }
+        wb_status: { type: string, enum: [recommended, pending, submitting, submit_unknown, uploaded, applied, failed, rolled_back] }
         error: { type: string, nullable: true }
         can_rollback: { type: boolean }
         created_at: { type: string, format: date-time }

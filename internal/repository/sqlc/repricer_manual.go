@@ -2,9 +2,11 @@ package sqlcgen
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -516,18 +518,37 @@ WITH task AS (
         ELSE 'uploaded'
       END,
       updated_at = now()
-  WHERE id = ANY($6::uuid[]) AND wb_status = 'pending'
-  RETURNING id
+  WHERE id = ANY($6::uuid[]) AND wb_status = 'submitting'
+  RETURNING id, schedule_entry_id
+), attached AS (
+  UPDATE price_schedule_entries schedule
+  SET executed_task_ids = CASE
+        WHEN (SELECT id FROM task) = ANY(COALESCE(schedule.executed_task_ids, '{}'::uuid[]))
+          THEN schedule.executed_task_ids
+        ELSE array_append(COALESCE(schedule.executed_task_ids, '{}'::uuid[]), (SELECT id FROM task))
+      END,
+      updated_at = now()
+  WHERE schedule.id IN (
+    SELECT DISTINCT schedule_entry_id FROM linked WHERE schedule_entry_id IS NOT NULL
+  )
+    AND schedule.status = 'executing'
+  RETURNING schedule.id
 )
 SELECT id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, poll_count,
-    last_polled_at, completed_at, error, created_at, updated_at
+    last_polled_at, completed_at, error, created_at, updated_at,
+    (SELECT count(*) FROM linked)
 FROM task
 `
 
-func (q *Queries) CreatePriceUploadTaskAndLinkChanges(ctx context.Context, arg CreatePriceUploadTaskParams, changeIDs []pgtype.UUID) (PriceUploadTask, error) {
+func (q *Queries) CreatePriceUploadTaskAndLinkChanges(ctx context.Context, arg CreatePriceUploadTaskParams, changeIDs []pgtype.UUID) (PriceUploadTask, int64, error) {
 	row := q.db.QueryRow(ctx, createPriceUploadTaskAndLinkChanges,
 		arg.WorkspaceID, arg.SellerCabinetID, arg.WbTaskID, arg.Status, arg.ItemsCount, changeIDs)
-	return scanPriceUploadTask(row)
+	var task PriceUploadTask
+	var linked int64
+	err := row.Scan(&task.ID, &task.WorkspaceID, &task.SellerCabinetID, &task.WbTaskID, &task.Status,
+		&task.ItemsCount, &task.PollCount, &task.LastPolledAt, &task.CompletedAt, &task.Error,
+		&task.CreatedAt, &task.UpdatedAt, &linked)
+	return task, linked, err
 }
 
 type UpdatePriceUploadTaskParams struct {
@@ -550,6 +571,95 @@ RETURNING id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, 
 func (q *Queries) UpdatePriceUploadTask(ctx context.Context, arg UpdatePriceUploadTaskParams) (PriceUploadTask, error) {
 	row := q.db.QueryRow(ctx, updatePriceUploadTask, arg.ID, arg.Status, arg.PollCount, arg.CompletedAt, arg.Error)
 	return scanPriceUploadTask(row)
+}
+
+const finalizePriceUploadTask = `
+WITH terminal_task AS (
+  UPDATE price_upload_tasks
+  SET status = $3, completed_at = now(), error = $5,
+      last_polled_at = now(), updated_at = now()
+  WHERE id = $1 AND workspace_id = $2 AND status IN ('uploaded', 'processing')
+  RETURNING id
+), terminal_changes AS (
+  UPDATE price_changes
+  SET wb_status = $4, error = $5, updated_at = now()
+  WHERE upload_task_id = (SELECT id FROM terminal_task)
+    AND wb_status IN ('submitting', 'uploaded')
+  RETURNING rollback_of, wb_status
+), rolled_back AS (
+  UPDATE price_changes original
+  SET wb_status = 'rolled_back', updated_at = now()
+  FROM terminal_changes child
+  WHERE child.rollback_of = original.id AND child.wb_status = 'applied'
+  RETURNING original.id
+)
+SELECT EXISTS (SELECT 1 FROM terminal_task)
+`
+
+func (q *Queries) FinalizePriceUploadTask(ctx context.Context, taskID, workspaceID pgtype.UUID, taskStatus, changeStatus string, errorText pgtype.Text) (bool, error) {
+	var transitioned bool
+	err := q.db.QueryRow(ctx, finalizePriceUploadTask, taskID, workspaceID, taskStatus, changeStatus, errorText).Scan(&transitioned)
+	return transitioned, err
+}
+
+const finalizePartialPriceUploadTask = `
+WITH task_scope AS (
+  SELECT id FROM price_upload_tasks
+  WHERE id = $1 AND workspace_id = $2 AND status IN ('uploaded', 'processing', 'partial')
+), terminal_task AS (
+  UPDATE price_upload_tasks
+  SET status = 'partial', completed_at = now(), error = 'partial errors',
+      last_polled_at = now(), updated_at = now()
+  WHERE id = $1 AND workspace_id = $2 AND status IN ('uploaded', 'processing')
+  RETURNING id
+), terminal_changes AS (
+  UPDATE price_changes
+  SET wb_status = CASE
+        WHEN wb_product_id = ANY($3::bigint[]) THEN 'failed'
+        ELSE 'applied'
+      END,
+      error = CASE
+        WHEN wb_product_id = ANY($3::bigint[])
+          THEN ($4::text[])[array_position($3::bigint[], wb_product_id)]
+        ELSE NULL
+      END,
+      updated_at = now()
+  WHERE upload_task_id = (SELECT id FROM task_scope)
+    AND wb_status IN ('submitting', 'uploaded')
+  RETURNING rollback_of, wb_status
+), rolled_back AS (
+  UPDATE price_changes original
+  SET wb_status = 'rolled_back', updated_at = now()
+  FROM terminal_changes child
+  WHERE child.rollback_of = original.id AND child.wb_status = 'applied'
+  RETURNING original.id
+)
+SELECT EXISTS (SELECT 1 FROM terminal_task)
+`
+
+func (q *Queries) FinalizePartialPriceUploadTask(ctx context.Context, taskID, workspaceID pgtype.UUID, failedNmIDs []int64, failureReasons []string) (bool, error) {
+	var transitioned bool
+	err := q.db.QueryRow(ctx, finalizePartialPriceUploadTask, taskID, workspaceID, failedNmIDs, failureReasons).Scan(&transitioned)
+	return transitioned, err
+}
+
+const bumpPriceUploadTaskPoll = `
+UPDATE price_upload_tasks
+SET status = 'processing', poll_count = poll_count + 1, error = $4,
+    last_polled_at = now(), updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+  AND status IN ('uploaded', 'processing')
+  AND poll_count = $3
+RETURNING id
+`
+
+func (q *Queries) BumpPriceUploadTaskPoll(ctx context.Context, taskID, workspaceID pgtype.UUID, expectedPollCount int32, errorText pgtype.Text) (bool, error) {
+	var id pgtype.UUID
+	err := q.db.QueryRow(ctx, bumpPriceUploadTaskPoll, taskID, workspaceID, expectedPollCount, errorText).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 const listPendingPriceUploadTasks = `
@@ -582,12 +692,13 @@ SELECT id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, pol
     last_polled_at, completed_at, error, created_at, updated_at
 FROM price_upload_tasks
 WHERE workspace_id = $1
+  AND ($2::uuid IS NULL OR seller_cabinet_id = $2)
 ORDER BY created_at DESC
-LIMIT $2 OFFSET $3
+LIMIT $3 OFFSET $4
 `
 
-func (q *Queries) ListPriceUploadTasksByWorkspace(ctx context.Context, workspaceID pgtype.UUID, limit, offset int32) ([]PriceUploadTask, error) {
-	rows, err := q.db.Query(ctx, listPriceUploadTasksByWorkspace, workspaceID, limit, offset)
+func (q *Queries) ListPriceUploadTasksByWorkspace(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, limit, offset int32) ([]PriceUploadTask, error) {
+	rows, err := q.db.Query(ctx, listPriceUploadTasksByWorkspace, workspaceID, sellerCabinetID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -621,6 +732,7 @@ type PriceChange struct {
 	StrategyID         pgtype.UUID        `json:"strategy_id"`
 	ScheduleEntryID    pgtype.UUID        `json:"schedule_entry_id"`
 	UploadTaskID       pgtype.UUID        `json:"upload_task_id"`
+	SubmissionBatchID  pgtype.UUID        `json:"submission_batch_id"`
 	WbProductID        int64              `json:"wb_product_id"`
 	OldPriceRub        int64              `json:"old_price_rub"`
 	NewPriceRub        int64              `json:"new_price_rub"`
@@ -661,9 +773,16 @@ type CreatePriceChangeParams struct {
 }
 
 const priceChangeColumns = `id, workspace_id, seller_cabinet_id, strategy_id, schedule_entry_id,
-    upload_task_id, wb_product_id, old_price_rub, new_price_rub, old_discount_percent,
+    upload_task_id, submission_batch_id, wb_product_id, old_price_rub, new_price_rub, old_discount_percent,
     new_discount_percent, min_price_rub, reason, source, wb_status, error, can_rollback,
     rollback_of, decision_context, created_by, created_at, updated_at`
+
+const claimedPriceChangeColumns = `claimed.id, claimed.workspace_id, claimed.seller_cabinet_id,
+    claimed.strategy_id, claimed.schedule_entry_id, claimed.upload_task_id, claimed.submission_batch_id, claimed.wb_product_id,
+    claimed.old_price_rub, claimed.new_price_rub, claimed.old_discount_percent,
+    claimed.new_discount_percent, claimed.min_price_rub, claimed.reason, claimed.source,
+    claimed.wb_status, claimed.error, claimed.can_rollback, claimed.rollback_of,
+    claimed.decision_context, claimed.created_by, claimed.created_at, claimed.updated_at`
 
 const createPriceChange = `
 INSERT INTO price_changes (workspace_id, seller_cabinet_id, strategy_id, schedule_entry_id,
@@ -671,8 +790,6 @@ INSERT INTO price_changes (workspace_id, seller_cabinet_id, strategy_id, schedul
     new_discount_percent, min_price_rub, reason, source, wb_status, can_rollback, rollback_of,
     decision_context, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-ON CONFLICT (seller_cabinet_id, wb_product_id) WHERE wb_status IN ('pending', 'uploaded')
-DO NOTHING
 RETURNING ` + priceChangeColumns
 
 func (q *Queries) CreatePriceChange(ctx context.Context, arg CreatePriceChangeParams) (PriceChange, error) {
@@ -682,6 +799,121 @@ func (q *Queries) CreatePriceChange(ctx context.Context, arg CreatePriceChangePa
 		arg.MinPriceRub, arg.Reason, arg.Source, arg.WbStatus, arg.CanRollback, arg.RollbackOf,
 		arg.DecisionContext, arg.CreatedBy)
 	return scanPriceChange(row)
+}
+
+const enqueuePriceChange = `
+WITH locked AS (
+  SELECT pg_advisory_xact_lock(hashtextextended($2::text || ':' || $5::text, 0))
+), superseded AS (
+  UPDATE price_changes old_intent
+  SET wb_status = 'failed',
+      error = 'superseded by newer price request',
+      updated_at = now()
+  WHERE old_intent.seller_cabinet_id = $2
+    AND old_intent.wb_product_id = $5
+    AND old_intent.wb_status = 'pending'
+    AND EXISTS (SELECT 1 FROM locked)
+  RETURNING old_intent.id, old_intent.schedule_entry_id, old_intent.source
+), inserted AS (
+  INSERT INTO price_changes (workspace_id, seller_cabinet_id, strategy_id, schedule_entry_id,
+      upload_task_id, wb_product_id, old_price_rub, new_price_rub, old_discount_percent,
+      new_discount_percent, min_price_rub, reason, source, wb_status, can_rollback, rollback_of,
+      decision_context, created_by)
+  SELECT $1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, $14, $15, $16
+  FROM locked
+  CROSS JOIN (SELECT count(*) FROM superseded) superseded_dependency
+  RETURNING ` + priceChangeColumns + `
+)
+SELECT ` + priceChangeColumns + ` FROM inserted
+`
+
+func (q *Queries) EnqueuePriceChange(ctx context.Context, arg CreatePriceChangeParams) (PriceChange, error) {
+	row := q.db.QueryRow(ctx, enqueuePriceChange,
+		arg.WorkspaceID, arg.SellerCabinetID, arg.StrategyID, arg.ScheduleEntryID,
+		arg.WbProductID, arg.OldPriceRub, arg.NewPriceRub, arg.OldDiscountPercent, arg.NewDiscountPercent,
+		arg.MinPriceRub, arg.Reason, arg.Source, arg.CanRollback, arg.RollbackOf,
+		arg.DecisionContext, arg.CreatedBy)
+	return scanPriceChange(row)
+}
+
+const claimPendingPriceChanges = `
+WITH candidates AS (
+  SELECT pending.id
+  FROM price_changes pending
+  WHERE pending.workspace_id = $1
+    AND pending.seller_cabinet_id = $2
+    AND pending.wb_status = 'pending'
+    AND NOT EXISTS (
+      SELECT 1 FROM price_changes active
+      WHERE active.seller_cabinet_id = pending.seller_cabinet_id
+        AND active.wb_product_id = pending.wb_product_id
+        AND active.wb_status IN ('submitting', 'submit_unknown', 'uploaded')
+    )
+  ORDER BY pending.created_at
+  FOR UPDATE SKIP LOCKED
+  LIMIT $3
+)
+UPDATE price_changes claimed
+SET wb_status = 'submitting', submission_batch_id = $4, updated_at = now()
+FROM candidates
+WHERE claimed.id = candidates.id AND claimed.wb_status = 'pending'
+RETURNING ` + claimedPriceChangeColumns
+
+func (q *Queries) ClaimPendingPriceChanges(ctx context.Context, workspaceID, sellerCabinetID, submissionBatchID pgtype.UUID, limit int32) ([]PriceChange, error) {
+	rows, err := q.db.Query(ctx, claimPendingPriceChanges, workspaceID, sellerCabinetID, limit, submissionBatchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var changes []PriceChange
+	for rows.Next() {
+		change, err := scanPriceChange(rows)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, change)
+	}
+	return changes, rows.Err()
+}
+
+const claimUnknownPriceChanges = `
+WITH candidate_batch AS (
+  SELECT uncertain.submission_batch_id
+  FROM price_changes uncertain
+  WHERE uncertain.workspace_id = $1
+    AND uncertain.seller_cabinet_id = $2
+    AND uncertain.wb_status = 'submit_unknown'
+    AND uncertain.upload_task_id IS NULL
+    AND uncertain.submission_batch_id IS NOT NULL
+  ORDER BY uncertain.updated_at
+  LIMIT 1
+), locked_batch AS (
+  SELECT pg_advisory_xact_lock(hashtextextended(candidate_batch.submission_batch_id::text, 0))
+  FROM candidate_batch
+)
+UPDATE price_changes claimed
+SET wb_status = 'submitting', updated_at = now()
+FROM candidate_batch, locked_batch
+WHERE claimed.submission_batch_id = candidate_batch.submission_batch_id
+  AND claimed.wb_status = 'submit_unknown'
+  AND claimed.upload_task_id IS NULL
+RETURNING ` + claimedPriceChangeColumns
+
+func (q *Queries) ClaimUnknownPriceChanges(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID) ([]PriceChange, error) {
+	rows, err := q.db.Query(ctx, claimUnknownPriceChanges, workspaceID, sellerCabinetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var changes []PriceChange
+	for rows.Next() {
+		change, err := scanPriceChange(rows)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, change)
+	}
+	return changes, rows.Err()
 }
 
 type UpdatePriceChangeStatusParams struct {
@@ -708,7 +940,7 @@ func (q *Queries) UpdatePriceChangeStatus(ctx context.Context, arg UpdatePriceCh
 const updatePriceChangesStatusByTask = `
 UPDATE price_changes
 SET wb_status = $2, updated_at = now()
-WHERE upload_task_id = $1
+WHERE upload_task_id = $1 AND wb_status IN ('submitting', 'uploaded')
 `
 
 func (q *Queries) UpdatePriceChangesStatusByTask(ctx context.Context, uploadTaskID pgtype.UUID, status string) error {
@@ -720,27 +952,175 @@ func (q *Queries) UpdatePriceChangesStatusByTask(ctx context.Context, uploadTask
 func (q *Queries) UpdatePriceChangeStatusByTaskAndNmID(ctx context.Context, uploadTaskID pgtype.UUID, wbProductID int64, status string, errorText pgtype.Text) error {
 	_, err := q.db.Exec(ctx, `UPDATE price_changes
 		SET wb_status = $3, error = $4, updated_at = now()
-		WHERE upload_task_id = $1 AND wb_product_id = $2`, uploadTaskID, wbProductID, status, errorText)
+		WHERE upload_task_id = $1 AND wb_product_id = $2 AND wb_status IN ('submitting', 'uploaded')`, uploadTaskID, wbProductID, status, errorText)
 	return err
 }
 
-// RecoverStaleRepricerState makes abandoned local reservations retryable and
-// releases schedule claims left behind by a crashed worker.
-func (q *Queries) RecoverStaleRepricerState(ctx context.Context, staleBefore pgtype.Timestamptz) (pendingFailed, schedulesReleased int64, err error) {
+func (q *Queries) FailSubmittingPriceChanges(ctx context.Context, workspaceID pgtype.UUID, ids []pgtype.UUID, reason pgtype.Text) (int64, error) {
 	tag, err := q.db.Exec(ctx, `UPDATE price_changes
-		SET wb_status = 'failed', error = 'stale_pending_recovered', updated_at = now()
-		WHERE wb_status = 'pending' AND upload_task_id IS NULL AND updated_at < $1`, staleBefore)
+		SET wb_status = 'failed', error = $3, updated_at = now()
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+		  AND wb_status = 'submitting' AND upload_task_id IS NULL`, workspaceID, ids, reason)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (q *Queries) MarkSubmittingPriceChangesUnknown(ctx context.Context, workspaceID pgtype.UUID, ids []pgtype.UUID, reason pgtype.Text) (int64, error) {
+	tag, err := q.db.Exec(ctx, `UPDATE price_changes
+		SET wb_status = 'submit_unknown', error = $3, updated_at = now()
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+		  AND wb_status = 'submitting' AND upload_task_id IS NULL`, workspaceID, ids, reason)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+const listClaimablePriceChangeCabinets = `
+SELECT DISTINCT pending.seller_cabinet_id
+FROM price_changes pending
+WHERE pending.workspace_id = $1
+  AND (
+    pending.wb_status = 'submit_unknown'
+    OR (pending.wb_status = 'pending' AND NOT EXISTS (
+    SELECT 1 FROM price_changes active
+    WHERE active.seller_cabinet_id = pending.seller_cabinet_id
+      AND active.wb_product_id = pending.wb_product_id
+      AND active.wb_status IN ('submitting', 'submit_unknown', 'uploaded')
+    ))
+  )
+ORDER BY pending.seller_cabinet_id
+`
+
+func (q *Queries) ListClaimablePriceChangeCabinets(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listClaimablePriceChangeCabinets, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cabinetIDs []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		cabinetIDs = append(cabinetIDs, id)
+	}
+	return cabinetIDs, rows.Err()
+}
+
+func (q *Queries) CountPendingPriceChanges(ctx context.Context, workspaceID pgtype.UUID, ids []pgtype.UUID) (int64, error) {
+	var count int64
+	err := q.db.QueryRow(ctx, `SELECT count(*) FROM price_changes
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+		  AND wb_status IN ('pending', 'submitting', 'submit_unknown')`, workspaceID, ids).Scan(&count)
+	return count, err
+}
+
+func (q *Queries) CountFailedPriceChanges(ctx context.Context, workspaceID pgtype.UUID, ids []pgtype.UUID) (int64, error) {
+	var count int64
+	err := q.db.QueryRow(ctx, `SELECT count(*) FROM price_changes
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND wb_status = 'failed'`, workspaceID, ids).Scan(&count)
+	return count, err
+}
+
+func (q *Queries) ListPriceUploadTaskIDsForChanges(ctx context.Context, workspaceID pgtype.UUID, ids []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, `SELECT DISTINCT upload_task_id
+		FROM price_changes
+		WHERE workspace_id = $1
+		  AND id = ANY($2::uuid[])
+		  AND upload_task_id IS NOT NULL
+		ORDER BY upload_task_id`, workspaceID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var taskIDs []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		taskIDs = append(taskIDs, id)
+	}
+	return taskIDs, rows.Err()
+}
+
+// RecoverStaleRepricerState preserves the original submission batch for an
+// exact idempotent retry. Rows linked to an accepted WB task are never resent.
+func (q *Queries) RecoverStaleRepricerState(ctx context.Context, workspaceID pgtype.UUID, staleBefore pgtype.Timestamptz) (submittingRecovered, schedulesReleased int64, err error) {
+	tag, err := q.db.Exec(ctx, `UPDATE price_changes
+		SET wb_status = 'submit_unknown', error = 'stale_submission_requires_exact_retry', updated_at = now()
+		WHERE workspace_id = $1
+		  AND wb_status = 'submitting'
+		  AND upload_task_id IS NULL
+		  AND submission_batch_id IS NOT NULL
+		  AND updated_at < $2`, workspaceID, staleBefore)
 	if err != nil {
 		return 0, 0, err
 	}
-	pendingFailed = tag.RowsAffected()
-	tag, err = q.db.Exec(ctx, `UPDATE price_schedule_entries
+	submittingRecovered = tag.RowsAffected()
+	tag, err = q.db.Exec(ctx, `UPDATE price_schedule_entries schedule
 		SET status = 'planned', error = 'stale_executing_recovered', updated_at = now()
-		WHERE status = 'executing' AND updated_at < $1`, staleBefore)
+		WHERE schedule.workspace_id = $1
+		  AND schedule.status = 'executing'
+		  AND schedule.updated_at < $2
+		  AND COALESCE(cardinality(schedule.executed_task_ids), 0) = 0
+		  AND NOT EXISTS (
+		    SELECT 1 FROM price_changes change WHERE change.schedule_entry_id = schedule.id
+		  )`, workspaceID, staleBefore)
 	if err != nil {
-		return pendingFailed, 0, err
+		return submittingRecovered, 0, err
 	}
-	return pendingFailed, tag.RowsAffected(), nil
+	return submittingRecovered, tag.RowsAffected(), nil
+}
+
+const listLatestPriceIntents = `
+SELECT DISTINCT ON (seller_cabinet_id, wb_product_id) ` + priceChangeColumns + `
+FROM price_changes
+WHERE workspace_id = $1
+  AND ($2::uuid IS NULL OR seller_cabinet_id = $2)
+  AND wb_status IN ('pending', 'submitting', 'submit_unknown', 'uploaded', 'applied')
+ORDER BY seller_cabinet_id, wb_product_id, created_at DESC, id DESC
+`
+
+func (q *Queries) ListLatestPriceIntents(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID) ([]PriceChange, error) {
+	rows, err := q.db.Query(ctx, listLatestPriceIntents, workspaceID, sellerCabinetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var changes []PriceChange
+	for rows.Next() {
+		change, err := scanPriceChange(rows)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, change)
+	}
+	return changes, rows.Err()
+}
+
+func (q *Queries) ListPriceChangesByScheduleEntry(ctx context.Context, workspaceID, scheduleEntryID pgtype.UUID) ([]PriceChange, error) {
+	rows, err := q.db.Query(ctx, `SELECT `+priceChangeColumns+`
+		FROM price_changes
+		WHERE workspace_id = $1 AND schedule_entry_id = $2
+		ORDER BY created_at, id`, workspaceID, scheduleEntryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var changes []PriceChange
+	for rows.Next() {
+		change, err := scanPriceChange(rows)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, change)
+	}
+	return changes, rows.Err()
 }
 
 func (q *Queries) GetProductPriceForRollback(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64) (ProductPrice, error) {
@@ -765,7 +1145,7 @@ func (q *Queries) HasNewerActivePriceChange(ctx context.Context, workspaceID pgt
 		  AND newer.wb_product_id = $2
 		  AND newer.id <> original.id
 		  AND newer.created_at > original.created_at
-		  AND newer.wb_status IN ('pending', 'uploaded', 'applied')
+		  AND newer.wb_status IN ('pending', 'submitting', 'submit_unknown', 'uploaded', 'applied')
 	)`, workspaceID, wbProductID, originalID).Scan(&exists)
 	return exists, err
 }
@@ -780,31 +1160,33 @@ func (q *Queries) GetPriceChange(ctx context.Context, id pgtype.UUID) (PriceChan
 // ListPriceChanges filters by workspace and optional product/source/status/date window.
 // Nil/zero optional filters are ignored.
 type ListPriceChangesParams struct {
-	WorkspaceID pgtype.UUID
-	WbProductID pgtype.Int8
-	Source      pgtype.Text
-	WbStatus    pgtype.Text
-	CreatedFrom pgtype.Timestamptz
-	CreatedTo   pgtype.Timestamptz
-	Limit       int32
-	Offset      int32
+	WorkspaceID     pgtype.UUID
+	SellerCabinetID pgtype.UUID
+	WbProductID     pgtype.Int8
+	Source          pgtype.Text
+	WbStatus        pgtype.Text
+	CreatedFrom     pgtype.Timestamptz
+	CreatedTo       pgtype.Timestamptz
+	Limit           int32
+	Offset          int32
 }
 
 const listPriceChanges = `
 SELECT ` + priceChangeColumns + `
 FROM price_changes
 WHERE workspace_id = $1
-  AND ($2::bigint IS NULL OR wb_product_id = $2)
-  AND ($3::text IS NULL OR source = $3)
-  AND ($4::text IS NULL OR wb_status = $4)
-  AND ($5::timestamptz IS NULL OR created_at >= $5)
-  AND ($6::timestamptz IS NULL OR created_at <= $6)
+  AND ($2::uuid IS NULL OR seller_cabinet_id = $2)
+  AND ($3::bigint IS NULL OR wb_product_id = $3)
+  AND ($4::text IS NULL OR source = $4)
+  AND ($5::text IS NULL OR wb_status = $5)
+  AND ($6::timestamptz IS NULL OR created_at >= $6)
+  AND ($7::timestamptz IS NULL OR created_at <= $7)
 ORDER BY created_at DESC
-LIMIT $7 OFFSET $8
+LIMIT $8 OFFSET $9
 `
 
 func (q *Queries) ListPriceChanges(ctx context.Context, arg ListPriceChangesParams) ([]PriceChange, error) {
-	rows, err := q.db.Query(ctx, listPriceChanges, arg.WorkspaceID, arg.WbProductID, arg.Source,
+	rows, err := q.db.Query(ctx, listPriceChanges, arg.WorkspaceID, arg.SellerCabinetID, arg.WbProductID, arg.Source,
 		arg.WbStatus, arg.CreatedFrom, arg.CreatedTo, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
@@ -825,7 +1207,7 @@ func (q *Queries) ListPriceChanges(ctx context.Context, arg ListPriceChangesPara
 const countRecentPriceChangesByProduct = `
 SELECT count(*) FROM price_changes
 WHERE workspace_id = $1 AND wb_product_id = $2 AND created_at >= $3
-  AND wb_status IN ('recommended', 'pending', 'uploaded', 'applied')
+  AND wb_status IN ('recommended', 'pending', 'submitting', 'submit_unknown', 'uploaded', 'applied')
 `
 
 func (q *Queries) CountRecentPriceChangesByProduct(ctx context.Context, workspaceID pgtype.UUID, wbProductID int64, since pgtype.Timestamptz) (int64, error) {
@@ -834,11 +1216,11 @@ func (q *Queries) CountRecentPriceChangesByProduct(ctx context.Context, workspac
 	return n, err
 }
 
-// HasInFlightPriceChange reports whether a product has a pending/uploaded change.
+// HasInFlightPriceChange reports whether a product has a local or WB-bound change.
 const hasInFlightPriceChange = `
 SELECT EXISTS (
   SELECT 1 FROM price_changes
-  WHERE workspace_id = $1 AND wb_product_id = $2 AND wb_status IN ('pending', 'uploaded')
+  WHERE workspace_id = $1 AND wb_product_id = $2 AND wb_status IN ('pending', 'submitting', 'submit_unknown', 'uploaded')
 )
 `
 
@@ -849,7 +1231,11 @@ func (q *Queries) HasInFlightPriceChange(ctx context.Context, workspaceID pgtype
 }
 
 // HasRollbackChild reports whether a change already has a rollback pointing at it.
-const hasRollbackChild = `SELECT EXISTS (SELECT 1 FROM price_changes WHERE rollback_of = $1)`
+const hasRollbackChild = `SELECT EXISTS (
+  SELECT 1 FROM price_changes
+  WHERE rollback_of = $1
+    AND wb_status IN ('pending', 'submitting', 'submit_unknown', 'uploaded', 'applied')
+)`
 
 func (q *Queries) HasRollbackChild(ctx context.Context, changeID pgtype.UUID) (bool, error) {
 	var exists bool
@@ -860,7 +1246,7 @@ func (q *Queries) HasRollbackChild(ctx context.Context, changeID pgtype.UUID) (b
 func scanPriceChange(row rowScanner) (PriceChange, error) {
 	var i PriceChange
 	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.StrategyID, &i.ScheduleEntryID,
-		&i.UploadTaskID, &i.WbProductID, &i.OldPriceRub, &i.NewPriceRub, &i.OldDiscountPercent,
+		&i.UploadTaskID, &i.SubmissionBatchID, &i.WbProductID, &i.OldPriceRub, &i.NewPriceRub, &i.OldDiscountPercent,
 		&i.NewDiscountPercent, &i.MinPriceRub, &i.Reason, &i.Source, &i.WbStatus, &i.Error,
 		&i.CanRollback, &i.RollbackOf, &i.DecisionContext, &i.CreatedBy, &i.CreatedAt, &i.UpdatedAt)
 	return i, err
@@ -1034,6 +1420,35 @@ func (q *Queries) CreatePriceScheduleEntry(ctx context.Context, arg CreatePriceS
 	return scanPriceScheduleEntry(row)
 }
 
+const createPriceSchedulePair = `
+WITH primary_entry AS (
+  INSERT INTO price_schedule_entries (workspace_id, seller_cabinet_id, scope_type, product_ids,
+      adjustment_type, adjustment_value, direction, scheduled_at, revert_at, revert_to_previous,
+      revert_of, comment, created_by)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12)
+  RETURNING ` + priceScheduleColumns + `
+), revert_entry AS (
+  INSERT INTO price_schedule_entries (workspace_id, seller_cabinet_id, scope_type, product_ids,
+      adjustment_type, adjustment_value, direction, scheduled_at, revert_of, comment, created_by)
+  SELECT workspace_id, seller_cabinet_id, scope_type, product_ids,
+      $13, $14, $15, $16, id, $17, $18
+  FROM primary_entry
+  RETURNING id
+)
+SELECT ` + priceScheduleColumns + ` FROM primary_entry
+CROSS JOIN (SELECT count(*) FROM revert_entry) revert_dependency
+`
+
+func (q *Queries) CreatePriceSchedulePair(ctx context.Context, primary, revert CreatePriceScheduleEntryParams) (PriceScheduleEntry, error) {
+	row := q.db.QueryRow(ctx, createPriceSchedulePair,
+		primary.WorkspaceID, primary.SellerCabinetID, primary.ScopeType, primary.ProductIds,
+		primary.AdjustmentType, primary.AdjustmentValue, primary.Direction, primary.ScheduledAt,
+		primary.RevertAt, primary.RevertToPrevious, primary.Comment, primary.CreatedBy,
+		revert.AdjustmentType, revert.AdjustmentValue, revert.Direction, revert.ScheduledAt,
+		revert.Comment, revert.CreatedBy)
+	return scanPriceScheduleEntry(row)
+}
+
 const listDuePriceScheduleEntries = `
 SELECT ` + priceScheduleColumns + `
 FROM price_schedule_entries
@@ -1063,13 +1478,14 @@ const listPriceScheduleEntriesByWorkspace = `
 SELECT ` + priceScheduleColumns + `
 FROM price_schedule_entries
 WHERE workspace_id = $1
-  AND ($2::text IS NULL OR status = $2)
-ORDER BY scheduled_at
-LIMIT $3 OFFSET $4
+  AND ($2::uuid IS NULL OR seller_cabinet_id = $2)
+  AND ($3::text IS NULL OR status = $3)
+ORDER BY scheduled_at DESC
+LIMIT $4 OFFSET $5
 `
 
-func (q *Queries) ListPriceScheduleEntriesByWorkspace(ctx context.Context, workspaceID pgtype.UUID, status pgtype.Text, limit, offset int32) ([]PriceScheduleEntry, error) {
-	rows, err := q.db.Query(ctx, listPriceScheduleEntriesByWorkspace, workspaceID, status, limit, offset)
+func (q *Queries) ListPriceScheduleEntriesByWorkspace(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, status pgtype.Text, limit, offset int32) ([]PriceScheduleEntry, error) {
+	rows, err := q.db.Query(ctx, listPriceScheduleEntriesByWorkspace, workspaceID, sellerCabinetID, status, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -1106,11 +1522,79 @@ SET status = $2,
     error = $4,
     updated_at = now()
 WHERE id = $1
+  AND status NOT IN ('done', 'failed', 'canceled')
 RETURNING ` + priceScheduleColumns
 
 func (q *Queries) UpdatePriceScheduleEntryStatus(ctx context.Context, arg UpdatePriceScheduleEntryStatusParams) (PriceScheduleEntry, error) {
 	row := q.db.QueryRow(ctx, updatePriceScheduleEntryStatus, arg.ID, arg.Status, arg.ExecutedTaskIds, arg.Error)
 	return scanPriceScheduleEntry(row)
+}
+
+const aggregatePriceSchedules = `
+WITH decisions AS (
+  SELECT schedule.id,
+    EXISTS (
+      SELECT 1 FROM price_changes change
+      WHERE change.schedule_entry_id = schedule.id AND change.wb_status = 'failed'
+    ) OR EXISTS (
+      SELECT 1 FROM price_upload_tasks task
+      WHERE task.id = ANY(COALESCE(schedule.executed_task_ids, '{}'::uuid[]))
+        AND task.status IN ('partial', 'failed')
+    ) AS has_failure,
+    EXISTS (SELECT 1 FROM price_changes change WHERE change.schedule_entry_id = schedule.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM price_changes change
+        WHERE change.schedule_entry_id = schedule.id
+          AND change.wb_status IN ('pending', 'submitting', 'submit_unknown', 'uploaded')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM price_upload_tasks task
+        WHERE task.id = ANY(COALESCE(schedule.executed_task_ids, '{}'::uuid[]))
+          AND task.status IN ('uploaded', 'processing')
+      )
+      AND (
+        COALESCE(cardinality(schedule.executed_task_ids), 0) > 0
+        OR EXISTS (
+          SELECT 1 FROM price_changes change
+          WHERE change.schedule_entry_id = schedule.id AND change.wb_status = 'failed'
+        )
+      ) AS all_terminal
+  FROM price_schedule_entries schedule
+  WHERE schedule.workspace_id = $1
+    AND schedule.status = 'executing'
+    AND ($2::uuid IS NULL OR schedule.executed_task_ids @> ARRAY[$2::uuid])
+), aggregated AS (
+  UPDATE price_schedule_entries schedule
+  SET status = CASE
+        WHEN decisions.all_terminal AND decisions.has_failure THEN 'failed'
+        WHEN decisions.all_terminal THEN 'done'
+        ELSE 'executing'
+      END,
+      error = CASE
+        WHEN decisions.all_terminal AND decisions.has_failure THEN COALESCE(schedule.error, 'one or more WB price changes failed')
+        WHEN decisions.all_terminal THEN NULL
+        ELSE schedule.error
+      END,
+      updated_at = now()
+  FROM decisions
+  WHERE schedule.id = decisions.id AND schedule.status = 'executing'
+  RETURNING schedule.id
+)
+SELECT count(*) FROM aggregated
+`
+
+func (q *Queries) AggregatePriceSchedules(ctx context.Context, workspaceID, taskID pgtype.UUID) (int64, error) {
+	var count int64
+	err := q.db.QueryRow(ctx, aggregatePriceSchedules, workspaceID, taskID).Scan(&count)
+	return count, err
+}
+
+func (q *Queries) AggregatePriceSchedulesByTaskID(ctx context.Context, workspaceID, taskID pgtype.UUID) (int64, error) {
+	return q.AggregatePriceSchedules(ctx, workspaceID, taskID)
+}
+
+func (q *Queries) AggregatePriceSchedulesByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
+	return q.AggregatePriceSchedules(ctx, workspaceID, pgtype.UUID{})
 }
 
 // ClaimDuePriceScheduleEntry atomically flips one planned+due entry to 'executing'

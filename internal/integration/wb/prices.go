@@ -17,6 +17,19 @@ import (
 // Callers mark the cabinet capability instead of failing the whole workspace.
 var ErrPricesScopeMissing = errors.New("wb token missing prices scope")
 
+// PriceUploadOutcomeUnknownError means WB may have accepted the write, but the
+// client did not receive a definitive response. Retrying the exact values is
+// safe because the prices API reports duplicate uploads as HTTP 208.
+type PriceUploadOutcomeUnknownError struct{ Err error }
+
+func (e *PriceUploadOutcomeUnknownError) Error() string { return e.Err.Error() }
+func (e *PriceUploadOutcomeUnknownError) Unwrap() error { return e.Err }
+
+func IsPriceUploadOutcomeUnknown(err error) bool {
+	var target *PriceUploadOutcomeUnknownError
+	return errors.As(err, &target)
+}
+
 // GoodsPrice is a product's current price/discount as reported by
 // GET /api/v2/list/goods/filter. All *_rub-derived amounts are integer rubles.
 type GoodsPrice struct {
@@ -217,17 +230,24 @@ func (c *Client) UploadPriceTask(ctx context.Context, token string, items []Pric
 	// 208 = duplicate upload; WB still returns a body with the existing task id.
 	dup := resp != nil && resp.StatusCode == http.StatusAlreadyReported
 	if reqErr != nil && !dup {
-		return 0, false, classifyPricesError(resp, reqErr)
+		classified := classifyPricesError(resp, reqErr)
+		if resp == nil || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			return 0, false, &PriceUploadOutcomeUnknownError{Err: classified}
+		}
+		return 0, false, classified
 	}
 
 	var parsed priceUploadResponse
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &parsed); err != nil {
-			return 0, dup, fmt.Errorf("unmarshal price upload response: %w", err)
+			return 0, dup, &PriceUploadOutcomeUnknownError{Err: fmt.Errorf("unmarshal price upload response: %w", err)}
 		}
 	}
 	if parsed.Error && !dup {
 		return 0, false, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("wb price upload error: %s", parsed.ErrorText))
+	}
+	if parsed.Data.ID <= 0 {
+		return 0, dup, &PriceUploadOutcomeUnknownError{Err: errors.New("WB price upload response has no task id")}
 	}
 	return parsed.Data.ID, dup || parsed.Data.AlreadyExists, nil
 }

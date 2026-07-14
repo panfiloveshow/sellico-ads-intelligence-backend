@@ -194,4 +194,5 @@ func TestUploadPriceTask_RateLimited(t *testing.T) {
 	_, _, err := client.UploadPriceTask(context.Background(), "tok", []PriceUpdateItem{{NmID: 1, Price: 100}})
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limited"))
+	assert.True(t, IsPriceUploadOutcomeUnknown(err))
 }

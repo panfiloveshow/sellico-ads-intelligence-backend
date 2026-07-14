@@ -5,9 +5,23 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
+
+func TestTerminalPriceTaskResultTreatsWBCanceledAsFailed(t *testing.T) {
+	t.Parallel()
+
+	result, terminal := terminalPriceTaskResult(4)
+	require.True(t, terminal)
+	require.Equal(t, domain.PriceTaskFailed, result.taskStatus)
+	require.Equal(t, domain.PriceStatusFailed, result.changeStatus)
+	require.Equal(t, "canceled_by_wb", result.reason)
+
+	_, terminal = terminalPriceTaskResult(2)
+	require.False(t, terminal)
+}
 
 func TestPartialPriceGoodFailure(t *testing.T) {
 	t.Parallel()

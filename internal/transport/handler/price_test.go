@@ -59,11 +59,11 @@ func (*stubPriceService) Rollback(context.Context, uuid.UUID, uuid.UUID, uuid.UU
 	return nil, nil
 }
 
-func (*stubPriceService) ListUploadTasks(context.Context, uuid.UUID, int32, int32) ([]domain.PriceUploadTask, error) {
+func (*stubPriceService) ListUploadTasks(context.Context, uuid.UUID, *uuid.UUID, int32, int32) ([]domain.PriceUploadTask, error) {
 	return nil, nil
 }
 
-func (s *stubPriceService) CountUploadTasks(context.Context, uuid.UUID) (int64, error) {
+func (s *stubPriceService) CountUploadTasks(context.Context, uuid.UUID, *uuid.UUID) (int64, error) {
 	return s.uploadTasksTotal, nil
 }
 
@@ -71,12 +71,12 @@ func (*stubPriceService) CreateSchedule(context.Context, uuid.UUID, uuid.UUID, d
 	return nil, nil
 }
 
-func (s *stubPriceService) ListSchedules(context.Context, uuid.UUID, string, int32, int32) ([]domain.PriceScheduleEntry, error) {
+func (s *stubPriceService) ListSchedules(context.Context, uuid.UUID, *uuid.UUID, string, int32, int32) ([]domain.PriceScheduleEntry, error) {
 	s.schedulesCalled = true
 	return nil, nil
 }
 
-func (s *stubPriceService) CountSchedules(context.Context, uuid.UUID, string) (int64, error) {
+func (s *stubPriceService) CountSchedules(context.Context, uuid.UUID, *uuid.UUID, string) (int64, error) {
 	return s.schedulesTotal, nil
 }
 

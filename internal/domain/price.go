@@ -16,12 +16,14 @@ const (
 
 // Price change WB statuses.
 const (
-	PriceStatusRecommended = "recommended"
-	PriceStatusPending     = "pending"
-	PriceStatusUploaded    = "uploaded"
-	PriceStatusApplied     = "applied"
-	PriceStatusFailed      = "failed"
-	PriceStatusRolledBack  = "rolled_back"
+	PriceStatusRecommended   = "recommended"
+	PriceStatusPending       = "pending"
+	PriceStatusSubmitting    = "submitting"
+	PriceStatusSubmitUnknown = "submit_unknown"
+	PriceStatusUploaded      = "uploaded"
+	PriceStatusApplied       = "applied"
+	PriceStatusFailed        = "failed"
+	PriceStatusRolledBack    = "rolled_back"
 )
 
 // Price upload task statuses.
@@ -164,6 +166,7 @@ type ManualPriceBulkItem struct {
 type ManualPriceBulkScope struct {
 	All             bool       `json:"all"`
 	SellerCabinetID *uuid.UUID `json:"seller_cabinet_id,omitempty"`
+	ProductIDs      []int64    `json:"product_ids,omitempty"`
 }
 
 // ManualPriceAdjustment is applied to every product in a scope.
@@ -271,16 +274,19 @@ type CabinetPricesScope struct {
 
 // PriceChangeFilter narrows a price-change listing.
 type PriceChangeFilter struct {
-	WBProductID *int64
-	Source      string
-	Status      string
-	Limit       int32
-	Offset      int32
+	SellerCabinetID *uuid.UUID
+	WBProductID     *int64
+	Source          string
+	Status          string
+	Limit           int32
+	Offset          int32
 }
 
 // PriceBulkResult summarizes a manual bulk apply.
 type PriceBulkResult struct {
 	Accepted int         `json:"accepted"`
+	Queued   int         `json:"queued"`
+	Failed   int         `json:"failed"`
 	Skipped  int         `json:"skipped"`
 	TaskIDs  []uuid.UUID `json:"task_ids"`
 }
