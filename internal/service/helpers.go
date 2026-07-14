@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,25 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
+
+func checkedInt32(value int) (int32, error) {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		return 0, fmt.Errorf("value %d is outside int32 range", value)
+	}
+	// #nosec G115 -- the explicit bounds check above guarantees a lossless conversion.
+	return int32(value), nil
+}
+
+func boundedInt32(value int) int32 {
+	if value < math.MinInt32 {
+		return math.MinInt32
+	}
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	// #nosec G115 -- the explicit bounds checks above guarantee a lossless conversion.
+	return int32(value)
+}
 
 // writeAuditLog creates an audit log entry and logs any errors to stderr.
 // Audit log failures should never break business operations, but must be visible.

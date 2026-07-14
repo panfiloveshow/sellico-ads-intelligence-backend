@@ -382,10 +382,10 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		Status:            status,
 		CompletedAt:       pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 		DataThroughDate:   dataThrough,
-		IssueCount:        int32(len(summary.Issues)),
-		WBErrorCount:      int32(summary.WBErrors),
+		IssueCount:        boundedInt32(len(summary.Issues)),
+		WBErrorCount:      boundedInt32(summary.WBErrors),
 		RateLimited:       summary.RateLimited > 0,
-		RetryAfterSeconds: pgtype.Int4{Int32: int32(summary.RetryAfterSeconds), Valid: summary.RetryAfterSeconds > 0},
+		RetryAfterSeconds: pgtype.Int4{Int32: boundedInt32(summary.RetryAfterSeconds), Valid: summary.RetryAfterSeconds > 0},
 		LastError:         pgtype.Text{String: lastError, Valid: lastError != ""},
 	})
 	if completeErr != nil {

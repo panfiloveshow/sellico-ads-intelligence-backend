@@ -440,6 +440,16 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Msg("skipping bid decrease because dynamic WB minimum bid blocked it")
 			continue
 		}
+		oldBid32, oldBidErr := checkedInt32(decision.OldBid)
+		if oldBidErr != nil {
+			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s old bid: %w", binding.ID, oldBidErr))
+			continue
+		}
+		newBid32, newBidErr := checkedInt32(decision.NewBid)
+		if newBidErr != nil {
+			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s new bid: %w", binding.ID, newBidErr))
+			continue
+		}
 
 		automationKey, observationKey := automationBidActionKeys(campaign, targetNMID, decision, observedAt)
 		claimed, claimErr := s.queries.ClaimAutomationBidAction(ctx, sqlcgen.ClaimAutomationBidActionParams{
@@ -494,8 +504,8 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			ProductID:       uuidToPgtypePtr(binding.ProductID),
 			StrategyID:      uuidToPgtype(strategy.ID),
 			Placement:       decision.Placement,
-			OldBid:          int32(decision.OldBid),
-			NewBid:          int32(decision.NewBid),
+			OldBid:          oldBid32,
+			NewBid:          newBid32,
 			Reason:          decision.Reason,
 			Source:          domain.BidSourceStrategy,
 			Acos:            acosVal,
@@ -738,10 +748,18 @@ func (s *BidAutomationService) loadDaypartingRunState(ctx context.Context, strat
 }
 
 func (s *BidAutomationService) saveDaypartingRunState(ctx context.Context, strategy domain.Strategy, binding domain.StrategyBinding, campaignID uuid.UUID, decision *BidDecision, state daypartingRunState) error {
+	baselineBid, err := checkedInt32(state.BaselineBid)
+	if err != nil {
+		return fmt.Errorf("dayparting baseline bid: %w", err)
+	}
+	lastTargetBid, err := checkedInt32(decision.NewBid)
+	if err != nil {
+		return fmt.Errorf("dayparting target bid: %w", err)
+	}
 	return s.queries.UpsertDaypartingState(ctx, sqlcgen.UpsertDaypartingStateParams{
 		StrategyID: uuidToPgtype(strategy.ID), CampaignID: uuidToPgtype(campaignID), ProductID: uuidToPgtypePtr(binding.ProductID),
-		ScopeKey: state.ScopeKey, Placement: decision.Placement, BaselineBid: int32(state.BaselineBid),
-		LastTargetBid: int32(decision.NewBid), LastSlot: state.Slot,
+		ScopeKey: state.ScopeKey, Placement: decision.Placement, BaselineBid: baselineBid,
+		LastTargetBid: lastTargetBid, LastSlot: state.Slot,
 	})
 }
 

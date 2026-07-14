@@ -1129,6 +1129,14 @@ func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, work
 	if err != nil {
 		return nil, err
 	}
+	oldBid32, err := checkedInt32(oldBid)
+	if err != nil {
+		return nil, apperror.New(apperror.ErrValidation, "current bid is outside the supported range")
+	}
+	suggestedBid32, err := checkedInt32(suggestedBid)
+	if err != nil {
+		return nil, apperror.New(apperror.ErrValidation, "suggested bid is outside the supported range")
+	}
 	releaseClaim = false // From this point a transport error may have an uncertain WB outcome.
 	if err := s.wbClient.UpdateCampaignBid(ctx, token, campaign.WbCampaignID, int(campaign.CampaignType), 0, placement, suggestedBid); err != nil {
 		s.recordActionRateLimitFromError(ctx, campaign.SellerCabinetID, wbEndpointCampaignActions, err)
@@ -1143,8 +1151,8 @@ func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, work
 		CampaignID:       rec.CampaignID,
 		RecommendationID: uuidToPgtype(recommendationID),
 		Placement:        placement,
-		OldBid:           int32(oldBid),
-		NewBid:           int32(suggestedBid),
+		OldBid:           oldBid32,
+		NewBid:           suggestedBid32,
 		Reason:           fmt.Sprintf("Applied recommendation %s: %s", rec.Type, rec.Title),
 		Source:           domain.BidSourceRecommendation,
 		WbStatus:         "applied",
