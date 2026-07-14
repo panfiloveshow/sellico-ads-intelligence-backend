@@ -341,7 +341,8 @@ func (h *PriceHandler) ListUploadTasks(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	items, err := h.service.ListUploadTasks(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	limit, offset := pg.SQLLimitOffset()
+	items, err := h.service.ListUploadTasks(r.Context(), workspaceID, cabinetID, limit, offset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -397,7 +398,8 @@ func (h *PriceHandler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	items, err := h.service.ListSchedules(r.Context(), workspaceID, cabinetID, status, int32(pg.PerPage), int32(pg.Offset()))
+	limit, offset := pg.SQLLimitOffset()
+	items, err := h.service.ListSchedules(r.Context(), workspaceID, cabinetID, status, limit, offset)
 	if err != nil {
 		writeAppError(w, err)
 		return

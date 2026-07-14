@@ -1,6 +1,7 @@
 package pagination
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"testing"
@@ -81,4 +82,26 @@ func TestOffset(t *testing.T) {
 func TestParse_ExactMaxPerPage(t *testing.T) {
 	p := Parse(newRequest("per_page=100"))
 	assert.Equal(t, 100, p.PerPage)
+}
+
+func TestSQLLimitOffset(t *testing.T) {
+	tests := []struct {
+		name       string
+		params     Params
+		wantLimit  int32
+		wantOffset int32
+	}{
+		{name: "normal", params: Params{Page: 3, PerPage: 50}, wantLimit: 50, wantOffset: 100},
+		{name: "defaults invalid values", params: Params{}, wantLimit: DefaultPerPage, wantOffset: 0},
+		{name: "caps per page", params: Params{Page: 1, PerPage: MaxPerPage + 1}, wantLimit: MaxPerPage, wantOffset: 0},
+		{name: "caps offset", params: Params{Page: math.MaxInt, PerPage: MaxPerPage}, wantLimit: MaxPerPage, wantOffset: math.MaxInt32 - math.MaxInt32%MaxPerPage},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limit, offset := tt.params.SQLLimitOffset()
+			assert.Equal(t, tt.wantLimit, limit)
+			assert.Equal(t, tt.wantOffset, offset)
+		})
+	}
 }

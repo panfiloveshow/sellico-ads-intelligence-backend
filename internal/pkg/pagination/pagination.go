@@ -1,6 +1,7 @@
 package pagination
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 )
@@ -22,8 +23,32 @@ func (p Params) Offset() int {
 	return (p.Page - 1) * p.PerPage
 }
 
+// SQLLimitOffset returns values bounded to PostgreSQL int4 parameters.
+func (p Params) SQLLimitOffset() (int32, int32) {
+	perPage := p.PerPage
+	if perPage < 1 {
+		perPage = DefaultPerPage
+	}
+	if perPage > MaxPerPage {
+		perPage = MaxPerPage
+	}
+
+	page := p.Page
+	if page < 1 {
+		page = DefaultPage
+	}
+	maxPage := int(math.MaxInt32)/perPage + 1
+	if page > maxPage {
+		page = maxPage
+	}
+	offset := (page - 1) * perPage
+
+	// #nosec G115 -- both values are explicitly bounded to math.MaxInt32 above.
+	return int32(perPage), int32(offset)
+}
+
 // Parse extracts page and per_page from query parameters.
-// Defaults: page=1, per_page=20. Max per_page=100.
+// Defaults: page=1, per_page=20. Max per_page=MaxPerPage.
 // Invalid values fall back to defaults.
 func Parse(r *http.Request) Params {
 	q := r.URL.Query()
