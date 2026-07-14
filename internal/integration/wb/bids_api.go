@@ -56,15 +56,14 @@ func (c *Client) CreateCampaign(ctx context.Context, token string, request Creat
 // WB API endpoint: PATCH /api/advert/v1/bids
 func (c *Client) UpdateCampaignBid(ctx context.Context, token string, wbCampaignID int64, campaignType int, nmID int64, placement string, newBid int) error {
 	_ = campaignType
+	if placement != "combined" && placement != "search" && placement != "recommendations" {
+		return fmt.Errorf("unsupported WB bid placement %q", placement)
+	}
 
 	nmIDs, err := c.resolveCampaignNMIDs(ctx, token, wbCampaignID, nmID)
 	if err != nil {
 		return err
 	}
-	if placement == "" {
-		placement = "search"
-	}
-
 	nmBids := make([]NMBidItem, 0, len(nmIDs))
 	for _, itemNMID := range nmIDs {
 		nmBids = append(nmBids, NMBidItem{
@@ -162,7 +161,9 @@ type ClusterBidItem struct {
 }
 
 type ClusterMinusRequest struct {
-	Items []ClusterMinusItem `json:"items"`
+	AdvertID    int64    `json:"advert_id"`
+	NMID        int64    `json:"nm_id"`
+	NormQueries []string `json:"norm_queries"`
 }
 
 type ClusterMinusListRequest struct {
@@ -185,8 +186,8 @@ type ClusterMinusListItem struct {
 }
 
 type ClusterMinusItem struct {
-	AdvertID  int64  `json:"advert_id"`
-	NMID      int64  `json:"nm_id,omitempty"`
+	AdvertID  int64  `json:"-"`
+	NMID      int64  `json:"-"`
 	NormQuery string `json:"norm_query"`
 }
 
@@ -269,23 +270,29 @@ func (c *Client) GetClusterMinus(ctx context.Context, token string, wbCampaignID
 // SetClusterMinus excludes search query clusters in WB for manual CPM campaigns.
 // WB API endpoint: POST /adv/v0/normquery/set-minus
 func (c *Client) SetClusterMinus(ctx context.Context, token string, wbCampaignID int64, clusters []ClusterMinusItem) error {
-	items := make([]ClusterMinusItem, 0, len(clusters))
+	requests := make([]ClusterMinusRequest, 0, len(clusters))
 	for _, cluster := range clusters {
-		cluster.AdvertID = wbCampaignID
-		if cluster.NormQuery == "" {
+		if cluster.NMID <= 0 || cluster.NormQuery == "" {
 			continue
 		}
-		items = append(items, cluster)
+		requests = append(requests, ClusterMinusRequest{
+			AdvertID:    wbCampaignID,
+			NMID:        cluster.NMID,
+			NormQueries: []string{cluster.NormQuery},
+		})
 	}
-	if len(items) == 0 {
+	if len(requests) == 0 {
 		return errors.New("no normquery clusters to minus")
 	}
-	payload := ClusterMinusRequest{Items: items}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal cluster minus request: %w", err)
-	}
 
-	_, _, err = c.doRequest(ctx, "POST", "/adv/v0/normquery/set-minus", token, bytes.NewReader(body))
-	return err
+	for _, request := range requests {
+		body, err := json.Marshal(request)
+		if err != nil {
+			return fmt.Errorf("marshal cluster minus request: %w", err)
+		}
+		if _, _, err = c.doRequest(ctx, "POST", "/adv/v0/normquery/set-minus", token, bytes.NewReader(body)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

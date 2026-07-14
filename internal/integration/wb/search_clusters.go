@@ -686,19 +686,25 @@ func aggregatedToClusterStats(campaignID int, date string, aggregated map[string
 		sort.Strings(dates)
 		for _, date := range dates {
 			day := entry.daily[date]
+			var currentBid *int64
+			if entry.bid > 0 {
+				bid := entry.bid
+				currentBid = &bid
+			}
 			result = append(result, WBSearchClusterStatDTO{
-				AdvertID:  int64(campaignID),
-				NmID:      entry.nmID,
-				NormQuery: entry.keyword,
-				Date:      day.date,
-				Views:     day.views,
-				Clicks:    day.clicks,
-				Sum:       day.spend,
-				Atbs:      day.atbs,
-				Orders:    day.orders,
-				CPC:       cpcFromSpend(day.spend, day.clicks),
-				CPM:       cpmFromSpend(day.spend, day.views),
-				AvgPos:    avgPosition(day.posSum, day.posN),
+				AdvertID:   int64(campaignID),
+				NmID:       entry.nmID,
+				NormQuery:  entry.keyword,
+				Date:       day.date,
+				Views:      day.views,
+				Clicks:     day.clicks,
+				Sum:        day.spend,
+				Atbs:       day.atbs,
+				Orders:     day.orders,
+				CPC:        cpcFromSpend(day.spend, day.clicks),
+				CPM:        cpmFromSpend(day.spend, day.views),
+				AvgPos:     avgPosition(day.posSum, day.posN),
+				CurrentBid: currentBid,
 			})
 		}
 	}

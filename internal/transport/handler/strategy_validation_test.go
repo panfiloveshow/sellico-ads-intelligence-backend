@@ -49,6 +49,7 @@ func TestValidateStrategyInput_AcceptsValidValues(t *testing.T) {
 		Name:            "ACoS guard",
 		Type:            domain.StrategyTypeACoS,
 		Params: domain.StrategyParams{
+			TargetACoS:          25,
 			MinBid:              100,
 			MaxBid:              500,
 			MaxCPC:              50,

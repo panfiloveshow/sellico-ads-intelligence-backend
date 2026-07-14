@@ -60,6 +60,11 @@ type BidContext struct {
 	HasPosition     bool    // true when real position evidence is available
 	PrevImpressions int64   // impressions of the prior half-window, for the flat-impression pullback rule
 	BuyerPrice      float64 // buyer-facing product price in rubles, for the sacrificial-spend rule
+
+	// Dayparting inputs are persisted per strategy/binding by BidAutomationService.
+	DaypartingBaselineBid int
+	DaypartingSlotApplied bool
+	DecisionTime          time.Time
 }
 
 // BidIncreaseGuardrail blocks scale-up decisions when real readiness data is missing.
@@ -366,7 +371,22 @@ func (e *BidEngine) calculateAntiSlivBid(params domain.StrategyParams, ctx BidCo
 }
 
 func (e *BidEngine) calculateDaypartingBid(params domain.StrategyParams, ctx BidContext) (int, string) {
-	now := time.Now()
+	if ctx.DaypartingSlotApplied {
+		return 0, ""
+	}
+	now := ctx.DecisionTime
+	if now.IsZero() {
+		now = time.Now()
+	}
+	timezone := strings.TrimSpace(params.Timezone)
+	if timezone == "" {
+		timezone = "Europe/Moscow"
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return 0, ""
+	}
+	now = now.In(location)
 	hour := fmt.Sprintf("%d", now.Hour())
 	weekday := fmt.Sprintf("%d", now.Weekday())
 
@@ -378,12 +398,16 @@ func (e *BidEngine) calculateDaypartingBid(params domain.StrategyParams, ctx Bid
 		multiplier *= wdMul
 	}
 
-	if multiplier == 1.0 || multiplier == 0 {
-		return 0, ""
+	baseline := ctx.DaypartingBaselineBid
+	if baseline <= 0 {
+		baseline = ctx.CurrentBid
 	}
 
-	newBid := int(math.Round(float64(ctx.CurrentBid) * multiplier))
-	reason := fmt.Sprintf("Dayparting: hour=%s weekday=%s multiplier=%.2f", hour, weekday, multiplier)
+	newBid := int(math.Round(float64(baseline) * multiplier))
+	if newBid == ctx.CurrentBid {
+		return 0, ""
+	}
+	reason := fmt.Sprintf("Dayparting: timezone=%s hour=%s weekday=%s baseline=%d multiplier=%.2f", timezone, hour, weekday, baseline, multiplier)
 	return newBid, reason
 }
 

@@ -94,8 +94,9 @@ func (c *Client) ListCampaigns(ctx context.Context, token string) ([]WBCampaignD
 	if err != nil {
 		return nil, err
 	}
+	partialErrors := map[int64]string{}
 	if len(adverts) > 0 {
-		adverts = c.enrichAdvertsWithoutNMIDs(ctx, token, adverts)
+		adverts, partialErrors = c.enrichAdvertsWithoutNMIDs(ctx, token, adverts)
 	}
 
 	result := make([]WBCampaignDTO, 0, len(adverts))
@@ -123,6 +124,7 @@ func (c *Client) ListCampaigns(ctx context.Context, token string) ([]WBCampaignD
 			DailyBudget:              rawOptionalInt64(advert.DailyBudget),
 			BidType:                  mapRawBidType(advert.BidType),
 			PaymentType:              paymentType,
+			PartialError:             partialErrors[advertID],
 			NMIDs:                    collectAdvertNMIDs(advert),
 			Products:                 collectAdvertProductSettings(advert),
 			PlacementSearch:          advert.Settings.Placements.Search,
@@ -181,20 +183,23 @@ func (c *Client) fetchAdvertsV2(ctx context.Context, token, path string) ([]wbAd
 	return response.Adverts, nil
 }
 
-func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, adverts []wbAdvertV2) []wbAdvertV2 {
+func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, adverts []wbAdvertV2) ([]wbAdvertV2, map[int64]string) {
 	missingIDs := make([]int64, 0)
 	for _, advert := range adverts {
 		advertID := firstNonZeroInt64(advert.ID, advert.AdvertID)
-		if advertID == 0 || len(collectAdvertNMIDs(advert)) > 0 {
+		// autoParams.nms identifies products but does not contain their bids.
+		// Enrich whenever nm_settings itself is absent, even if NMIDs are known.
+		if advertID == 0 || len(advert.NMSettings) > 0 {
 			continue
 		}
 		missingIDs = append(missingIDs, advertID)
 	}
 	if len(missingIDs) == 0 {
-		return adverts
+		return adverts, nil
 	}
 
 	detailsByID := make(map[int64]wbAdvertV2, len(missingIDs))
+	partialErrors := make(map[int64]string)
 	for start := 0; start < len(missingIDs); start += advertsV2DetailBatchSize {
 		end := start + advertsV2DetailBatchSize
 		if end > len(missingIDs) {
@@ -204,6 +209,9 @@ func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, ad
 		details, err := c.fetchAdvertsV2(ctx, token, path)
 		if err != nil {
 			c.logger.Warn().Err(err).Ints64("advert_ids", missingIDs[start:end]).Msg("failed to enrich WB adverts with nm_settings")
+			for _, advertID := range missingIDs[start:end] {
+				partialErrors[advertID] = fmt.Sprintf("campaign product bid enrichment failed: %v", err)
+			}
 			continue
 		}
 		for _, detail := range details {
@@ -223,7 +231,7 @@ func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, ad
 		}
 		adverts[i] = mergeAdvertV2(adverts[i], detail)
 	}
-	return adverts
+	return adverts, partialErrors
 }
 
 func mergeAdvertV2(base, detail wbAdvertV2) wbAdvertV2 {

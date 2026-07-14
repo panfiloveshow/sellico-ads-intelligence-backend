@@ -65,6 +65,43 @@ func TestBidEngine_AllowsReductionWhenGuardrailDeniesIncrease(t *testing.T) {
 	require.Less(t, decision.NewBid, decision.OldBid)
 }
 
+func TestBidEngineDaypartingUsesPersistedBaselineWithoutCompounding(t *testing.T) {
+	engine := NewBidEngine(zerolog.Nop())
+	strategy := domain.Strategy{Type: domain.StrategyTypeDayparting, Params: domain.StrategyParams{
+		BaseMultiplier: 1, HourlyMultipliers: map[string]float64{"12": 1.2}, Timezone: "Europe/Moscow",
+	}}
+	now := time.Date(2026, 7, 14, 9, 0, 0, 0, time.UTC) // 12:00 Europe/Moscow
+
+	decision := engine.CalculateBid(strategy, BidContext{
+		CurrentBid: 120, DaypartingBaselineBid: 100, DecisionTime: now, Placement: "search",
+	})
+	require.Nil(t, decision, "the persisted target must not be multiplied again")
+
+	decision = engine.CalculateBid(strategy, BidContext{
+		CurrentBid: 100, DaypartingBaselineBid: 100, DecisionTime: now, Placement: "search",
+	})
+	require.NotNil(t, decision)
+	require.Equal(t, 115, decision.NewBid, "common max-change guard still caps the first slot move")
+
+	decision = engine.CalculateBid(strategy, BidContext{
+		CurrentBid: 100, DaypartingBaselineBid: 100, DaypartingSlotApplied: true, DecisionTime: now, Placement: "search",
+	})
+	require.Nil(t, decision)
+}
+
+func TestBidEngineDaypartingUsesMoscowTimezone(t *testing.T) {
+	engine := NewBidEngine(zerolog.Nop())
+	strategy := domain.Strategy{Type: domain.StrategyTypeDayparting, Params: domain.StrategyParams{
+		BaseMultiplier: 1, HourlyMultipliers: map[string]float64{"0": 1.1}, Timezone: "Europe/Moscow",
+	}}
+	decision := engine.CalculateBid(strategy, BidContext{
+		CurrentBid: 100, DaypartingBaselineBid: 100,
+		DecisionTime: time.Date(2026, 7, 13, 21, 30, 0, 0, time.UTC), Placement: "search",
+	})
+	require.NotNil(t, decision)
+	require.Equal(t, 110, decision.NewBid)
+}
+
 func TestProductReputationBidIncreaseBlockReasonUsesOnlyRealWeakSignals(t *testing.T) {
 	require.Contains(t, productReputationBidIncreaseBlockReason(sqlcgen.Product{
 		Rating:       pgtype.Float8{Float64: 3.9, Valid: true},

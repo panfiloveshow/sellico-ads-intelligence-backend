@@ -249,3 +249,41 @@ func TestRequireWriteAccess_NoRoleInContext_WriteMethod(t *testing.T) {
 	assert.False(t, *called)
 	assertForbiddenResponse(t, rec, "role not found in context")
 }
+
+func TestRequireFinancialAccess_DeniesAnalystAndViewerWrites(t *testing.T) {
+	for _, role := range []string{domain.RoleAnalyst, domain.RoleViewer} {
+		t.Run(role, func(t *testing.T) {
+			handler, called := rbacDummyHandler()
+			mw := RequireFinancialAccess()(handler)
+			req := withRole(httptest.NewRequest(http.MethodPost, "/campaigns/1/bids", nil), role)
+			rec := httptest.NewRecorder()
+			mw.ServeHTTP(rec, req)
+			assert.False(t, *called)
+			assertForbiddenResponse(t, rec, "insufficient permissions for financial action")
+		})
+	}
+}
+
+func TestRequireFinancialAccess_AllowsOwnerAndManagerWrites(t *testing.T) {
+	for _, role := range []string{domain.RoleOwner, domain.RoleManager} {
+		t.Run(role, func(t *testing.T) {
+			handler, called := rbacDummyHandler()
+			mw := RequireFinancialAccess()(handler)
+			req := withRole(httptest.NewRequest(http.MethodPost, "/campaigns/1/bids", nil), role)
+			rec := httptest.NewRecorder()
+			mw.ServeHTTP(rec, req)
+			assert.True(t, *called)
+			assert.Equal(t, http.StatusOK, rec.Code)
+		})
+	}
+}
+
+func TestRequireFinancialAccess_AllowsAnalystReads(t *testing.T) {
+	handler, called := rbacDummyHandler()
+	mw := RequireFinancialAccess()(handler)
+	req := withRole(httptest.NewRequest(http.MethodGet, "/strategies", nil), domain.RoleAnalyst)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+	assert.True(t, *called)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}

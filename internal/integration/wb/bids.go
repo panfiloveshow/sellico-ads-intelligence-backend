@@ -1,6 +1,7 @@
 package wb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,22 +24,27 @@ type recommendedBidsResponse struct {
 	} `json:"base"`
 }
 
+type MinimumBidsRequest struct {
+	AdvertID       int64    `json:"advert_id"`
+	NMIDs          []int64  `json:"nm_ids"`
+	PaymentType    string   `json:"payment_type"`
+	PlacementTypes []string `json:"placement_types"`
+}
+
 type minimumBidsResponse struct {
 	Bids []struct {
-		AdvertID int64 `json:"advertId"`
-		NmID     int64 `json:"nmId"`
-		MinBid   int64 `json:"minBid"`
-		Bid      int64 `json:"bid"`
+		NMID int64 `json:"nm_id"`
+		Bids []struct {
+			Type  string `json:"type"`
+			Value int64  `json:"value"`
+		} `json:"bids"`
 	} `json:"bids"`
-	AdvertID int64 `json:"advertId"`
-	NmID     int64 `json:"nmId"`
-	MinBid   int64 `json:"minBid"`
-	Bid      int64 `json:"bid"`
 }
 
 type WBMinimumBidDTO struct {
-	NmID   int64 `json:"nmId"`
-	MinBid int64 `json:"minBid"`
+	NmID      int64  `json:"nmId"`
+	Placement string `json:"placement"`
+	MinBid    int64  `json:"minBid"`
 }
 
 // GetRecommendedBids fetches recommended bids (competitive_bid, leadership_bid) from WB API.
@@ -71,38 +77,35 @@ func (c *Client) GetRecommendedBids(ctx context.Context, token string, campaignI
 }
 
 // GetMinimumBids fetches minimum allowed product bids.
-// WB API endpoint: GET /api/advert/v1/bids/min
-func (c *Client) GetMinimumBids(ctx context.Context, token string, campaignID int, articles []int) ([]WBMinimumBidDTO, error) {
-	values := url.Values{}
-	values.Set("advertId", strconv.Itoa(campaignID))
-	for _, article := range articles {
-		values.Add("nmIds", strconv.Itoa(article))
+// WB API endpoint: POST /api/advert/v1/bids/min
+func (c *Client) GetMinimumBids(ctx context.Context, token string, request MinimumBidsRequest) ([]WBMinimumBidDTO, error) {
+	if request.AdvertID <= 0 || len(request.NMIDs) == 0 || request.PaymentType == "" || len(request.PlacementTypes) == 0 {
+		return nil, apperror.New(apperror.ErrValidation, "advert_id, nm_ids, payment_type and placement_types are required")
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal minimum bids request: %v", err))
 	}
 
-	_, body, err := c.doRequest(ctx, "GET", "/api/advert/v1/bids/min?"+values.Encode(), token, nil)
+	_, responseBody, err := c.doRequest(ctx, "POST", "/api/advert/v1/bids/min", token, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 
 	var response minimumBidsResponse
-	if err := json.Unmarshal(body, &response); err != nil {
+	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal minimum bids: %v", err))
 	}
 
-	result := make([]WBMinimumBidDTO, 0, len(response.Bids)+1)
-	for _, bid := range response.Bids {
-		minBid := bid.MinBid
-		if minBid == 0 {
-			minBid = bid.Bid
+	result := make([]WBMinimumBidDTO, 0, len(response.Bids)*len(request.PlacementTypes))
+	for _, product := range response.Bids {
+		for _, bid := range product.Bids {
+			result = append(result, WBMinimumBidDTO{
+				NmID:      product.NMID,
+				Placement: bid.Type,
+				MinBid:    bid.Value,
+			})
 		}
-		result = append(result, WBMinimumBidDTO{NmID: bid.NmID, MinBid: minBid})
-	}
-	if len(result) == 0 && response.NmID != 0 {
-		minBid := response.MinBid
-		if minBid == 0 {
-			minBid = response.Bid
-		}
-		result = append(result, WBMinimumBidDTO{NmID: response.NmID, MinBid: minBid})
 	}
 	return result, nil
 }

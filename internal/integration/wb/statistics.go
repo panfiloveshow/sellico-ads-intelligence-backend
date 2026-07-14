@@ -200,7 +200,10 @@ func (c *Client) getCampaignStatsBatch(ctx context.Context, token string, campai
 				Int("campaign_id", campaignIDs[0]).
 				Str("path", path).
 				Msg("skipping campaign stats fetch because WB returned 400 for a single advert")
-			return nil, nil
+			// Preserve the per-campaign failure so the caller marks the sync
+			// partial. Treating this as a successful empty response makes stale
+			// analytics indistinguishable from a genuine zero-activity period.
+			return nil, err
 		}
 		return nil, err
 	}

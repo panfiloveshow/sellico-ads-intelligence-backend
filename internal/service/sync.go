@@ -255,8 +255,12 @@ func wbAdvertStatsDateRange(now time.Time) (string, string) {
 		location = time.FixedZone("MSK", 3*60*60)
 	}
 	nowMSK := now.In(location)
-	yesterday := time.Date(nowMSK.Year(), nowMSK.Month(), nowMSK.Day(), 0, 0, 0, 0, location).AddDate(0, 0, -1)
-	return yesterday.AddDate(0, 0, -30).Format(exportDateLayout), yesterday.Format(exportDateLayout)
+	today := time.Date(nowMSK.Year(), nowMSK.Month(), nowMSK.Day(), 0, 0, 0, 0, location)
+	// WB fullstats is refreshed intraday. Persist today's real, provisional
+	// counters as well as completed days; later syncs upsert the same date.
+	// If WB omits today, no invented zero row is created and automation stays
+	// fail-closed because it cannot prove current-day activity.
+	return today.AddDate(0, 0, -30).Format(exportDateLayout), today.Format(exportDateLayout)
 }
 
 type SyncService struct {
@@ -273,6 +277,22 @@ func NewSyncService(queries *sqlcgen.Queries, wbClient WBSyncClient, encryptionK
 		encryptionKey: encryptionKey,
 		logger:        logger.With().Str("component", "sync_service").Logger(),
 	}
+}
+
+// SyncWorkspace runs the complete cabinet pipeline for every connected WB
+// cabinet. It intentionally reuses SyncSingleCabinet so scheduled and manual
+// syncs have identical phase coverage and partial-error semantics.
+func (s *SyncService) SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (SyncSummary, error) {
+	cabinets, err := s.listWorkspaceCabinets(ctx, workspaceID)
+	if err != nil {
+		return SyncSummary{}, err
+	}
+	var summary SyncSummary
+	for _, cabinet := range cabinets {
+		cabinetSummary, _ := s.SyncSingleCabinet(ctx, workspaceID, cabinet.cabinet.ID)
+		summary.merge(cabinetSummary)
+	}
+	return summary, summary.Error()
 }
 
 func (s *SyncService) SyncSingleCabinetPhase(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (SyncSummary, error) {
@@ -325,8 +345,69 @@ func (s *SyncService) SyncSingleCabinetPhase(ctx context.Context, workspaceID, c
 	}
 }
 
-// SyncSingleCabinet syncs campaigns, stats, phrases, products for ONE specific cabinet.
+// SyncSingleCabinet syncs all required data phases for one cabinet and records
+// a cabinet-scoped readiness result. Consumers can therefore fail closed on
+// partial/stale cabinets instead of trusting a workspace-wide timestamp.
 func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (SyncSummary, error) {
+	startedAt := time.Now().UTC()
+	beginErr := s.queries.BeginSellerCabinetSync(ctx, sqlcgen.BeginSellerCabinetSyncParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		WorkspaceID:     uuidToPgtype(workspaceID),
+		StartedAt:       pgtype.Timestamptz{Time: startedAt, Valid: true},
+	})
+
+	summary, runErr := s.syncSingleCabinet(ctx, workspaceID, cabinetID)
+	if runErr != nil && len(summary.Issues) == 0 {
+		summary.addIssue("seller_cabinet.sync", cabinetID.String(), "sync failed: %v", runErr)
+	}
+	if runErr == nil && summary.Cabinets == 0 {
+		summary.addIssue("seller_cabinet.sync", cabinetID.String(), "cabinet is unavailable for sync")
+	}
+	if beginErr != nil {
+		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to mark sync running: %v", beginErr)
+	}
+	status := cabinetSyncReadinessStatus(summary, runErr)
+	lastError := ""
+	if runErr != nil {
+		lastError = runErr.Error()
+	}
+	dataThrough := pgtype.Date{}
+	if summary.DateTo != "" {
+		if parsed, parseErr := time.Parse(exportDateLayout, summary.DateTo); parseErr == nil {
+			dataThrough = pgtype.Date{Time: parsed, Valid: true}
+		}
+	}
+	completeErr := s.queries.CompleteSellerCabinetSync(ctx, sqlcgen.CompleteSellerCabinetSyncParams{
+		SellerCabinetID:   uuidToPgtype(cabinetID),
+		Status:            status,
+		CompletedAt:       pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		DataThroughDate:   dataThrough,
+		IssueCount:        int32(len(summary.Issues)),
+		WBErrorCount:      int32(summary.WBErrors),
+		RateLimited:       summary.RateLimited > 0,
+		RetryAfterSeconds: pgtype.Int4{Int32: int32(summary.RetryAfterSeconds), Valid: summary.RetryAfterSeconds > 0},
+		LastError:         pgtype.Text{String: lastError, Valid: lastError != ""},
+	})
+	if completeErr != nil {
+		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to persist sync readiness: %v", completeErr)
+	}
+	return summary, summary.Error()
+}
+
+func cabinetSyncReadinessStatus(summary SyncSummary, runErr error) string {
+	if runErr == nil && len(summary.Issues) == 0 {
+		return "ready"
+	}
+	if summary.Campaigns+summary.CampaignStats+summary.Phrases+summary.PhraseStats+
+		summary.Products+summary.ProductStats+summary.CampaignBudgets+summary.AdBalances+
+		summary.FinanceDocs+summary.SalesFunnel+summary.BusinessOrders+summary.BusinessSales+
+		summary.CommissionTariffs > 0 {
+		return "partial"
+	}
+	return "failed"
+}
+
+func (s *SyncService) syncSingleCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (SyncSummary, error) {
 	s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("[sync] loading cabinet token")
 	cabinets, err := s.listSingleCabinet(ctx, cabinetID)
 	if err != nil {
@@ -359,6 +440,9 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		snapshot.nmIDsByWBID = make(map[int][]int64, len(campaigns))
 		for _, dto := range campaigns {
 			campaign := wb.MapCampaignDTO(dto, workspaceID, cabinet.cabinet.ID)
+			if dto.PartialError != "" {
+				summary.addIssue("campaigns.enrichment", fmt.Sprintf("%d", campaign.WBCampaignID), "%s", dto.PartialError)
+			}
 			activeWBIDs = append(activeWBIDs, campaign.WBCampaignID)
 			if len(dto.NMIDs) > 0 {
 				snapshot.nmIDsByWBID[dto.AdvertID] = append([]int64(nil), dto.NMIDs...)
@@ -393,12 +477,10 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 			summary.Campaigns++
 		}
 		// Stale cleanup for single cabinet sync
-		if len(activeWBIDs) > 0 {
-			if staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs); staleErr != nil {
-				summary.addIssue("campaigns.stale_cleanup", cabinet.cabinet.ID.String(), "mark stale: %v", staleErr)
-			} else if staleCount > 0 {
-				s.logger.Info().Int64("stale_campaigns", staleCount).Str("cabinet_id", cabinet.cabinet.ID.String()).Msg("marked stale campaigns as deleted")
-			}
+		if staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs); staleErr != nil {
+			summary.addIssue("campaigns.stale_cleanup", cabinet.cabinet.ID.String(), "mark stale: %v", staleErr)
+		} else if staleCount > 0 {
+			s.logger.Info().Int64("stale_campaigns", staleCount).Str("cabinet_id", cabinet.cabinet.ID.String()).Msg("marked stale campaigns as deleted")
 		}
 		s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID))
 	}
@@ -547,6 +629,9 @@ func (s *SyncService) syncCampaignsForCabinet(ctx context.Context, workspaceID u
 	activeWBIDs := make([]int64, 0, len(campaigns))
 	for _, dto := range campaigns {
 		campaign := wb.MapCampaignDTO(dto, workspaceID, cabinet.cabinet.ID)
+		if dto.PartialError != "" {
+			summary.addIssue("campaigns.enrichment", fmt.Sprintf("%d", campaign.WBCampaignID), "%s", dto.PartialError)
+		}
 		activeWBIDs = append(activeWBIDs, campaign.WBCampaignID)
 		row, upsertErr := s.queries.UpsertCampaign(ctx, sqlcgen.UpsertCampaignParams{
 			WorkspaceID:              uuidToPgtype(campaign.WorkspaceID),
@@ -577,12 +662,10 @@ func (s *SyncService) syncCampaignsForCabinet(ctx context.Context, workspaceID u
 		summary.Campaigns++
 	}
 
-	if len(activeWBIDs) > 0 {
-		if staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs); staleErr != nil {
-			summary.addIssue("campaigns.stale_cleanup", cabinet.cabinet.ID.String(), "mark stale: %v", staleErr)
-		} else if staleCount > 0 {
-			s.logger.Info().Int64("stale_campaigns", staleCount).Str("cabinet_id", cabinet.cabinet.ID.String()).Msg("marked stale campaigns as deleted")
-		}
+	if staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs); staleErr != nil {
+		summary.addIssue("campaigns.stale_cleanup", cabinet.cabinet.ID.String(), "mark stale: %v", staleErr)
+	} else if staleCount > 0 {
+		s.logger.Info().Int64("stale_campaigns", staleCount).Str("cabinet_id", cabinet.cabinet.ID.String()).Msg("marked stale campaigns as deleted")
 	}
 	if err := s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID)); err != nil {
 		summary.addIssue("seller_cabinet.sync_mark", cabinet.cabinet.ID.String(), "failed to update sync timestamp: %v", err)
@@ -613,6 +696,9 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 		activeWBIDs := make([]int64, 0, len(campaigns))
 		for _, campaignDTO := range campaigns {
 			campaign := wb.MapCampaignDTO(campaignDTO, workspaceID, cabinet.cabinet.ID)
+			if campaignDTO.PartialError != "" {
+				summary.addIssue("campaigns.enrichment", fmt.Sprintf("%d", campaign.WBCampaignID), "%s", campaignDTO.PartialError)
+			}
 			activeWBIDs = append(activeWBIDs, campaign.WBCampaignID)
 			row, upsertErr := s.queries.UpsertCampaign(ctx, sqlcgen.UpsertCampaignParams{
 				WorkspaceID:              uuidToPgtype(campaign.WorkspaceID),
@@ -651,13 +737,11 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 		}
 
 		// Stale data cleanup: mark campaigns not returned by WB as deleted (audit fix: HIGH #8)
-		if len(activeWBIDs) > 0 {
-			staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs)
-			if staleErr != nil {
-				summary.addIssue("campaigns.stale_cleanup", cabinet.cabinet.ID.String(), "mark stale: %v", staleErr)
-			} else if staleCount > 0 {
-				s.logger.Info().Int64("stale_campaigns", staleCount).Str("cabinet_id", cabinet.cabinet.ID.String()).Msg("marked stale campaigns as deleted")
-			}
+		staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs)
+		if staleErr != nil {
+			summary.addIssue("campaigns.stale_cleanup", cabinet.cabinet.ID.String(), "mark stale: %v", staleErr)
+		} else if staleCount > 0 {
+			s.logger.Info().Int64("stale_campaigns", staleCount).Str("cabinet_id", cabinet.cabinet.ID.String()).Msg("marked stale campaigns as deleted")
 		}
 
 		if err := s.queries.UpdateSellerCabinetLastSynced(ctx, uuidToPgtype(cabinet.cabinet.ID)); err != nil {
@@ -1750,7 +1834,7 @@ func (s *SyncService) upsertPhraseFromNormQueryStat(ctx context.Context, workspa
 		WbClusterID: pgtype.Int8{},
 		WbNormQuery: normQuery,
 		Keyword:     normQuery,
-		CurrentBid:  pgtype.Int8{},
+		CurrentBid:  optionalInt64ToPgInt8(statDTO.CurrentBid),
 		Count:       intPtrToPgInt4(&count),
 	})
 	if upsertErr != nil {

@@ -23,9 +23,9 @@ import (
 
 type campaignActionServicer interface {
 	CreateCampaign(ctx context.Context, workspaceID, actorID uuid.UUID, input service.CreateCampaignActionInput) (*domain.Campaign, error)
-	StartCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error
-	PauseCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error
-	StopCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error
+	StartCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error
+	PauseCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error
+	StopCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error
 	RenameCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID, name string) error
 	DeleteCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error
 	SetBid(ctx context.Context, workspaceID, campaignID uuid.UUID, actorID uuid.UUID, placement string, newBid int) (*domain.BidChange, error)
@@ -112,7 +112,12 @@ func (h *CampaignActionHandler) Start(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	if err := h.actions.StartCampaign(r.Context(), workspaceID, campaignID); err != nil {
+	actorID, ok := r.Context().Value(middleware.UserIDKey).(uuid.UUID)
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "missing user"))
+		return
+	}
+	if err := h.actions.StartCampaign(r.Context(), workspaceID, campaignID, actorID); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -125,7 +130,12 @@ func (h *CampaignActionHandler) Pause(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	if err := h.actions.PauseCampaign(r.Context(), workspaceID, campaignID); err != nil {
+	actorID, ok := r.Context().Value(middleware.UserIDKey).(uuid.UUID)
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "missing user"))
+		return
+	}
+	if err := h.actions.PauseCampaign(r.Context(), workspaceID, campaignID, actorID); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -138,7 +148,12 @@ func (h *CampaignActionHandler) Stop(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	if err := h.actions.StopCampaign(r.Context(), workspaceID, campaignID); err != nil {
+	actorID, ok := r.Context().Value(middleware.UserIDKey).(uuid.UUID)
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "missing user"))
+		return
+	}
+	if err := h.actions.StopCampaign(r.Context(), workspaceID, campaignID, actorID); err != nil {
 		writeAppError(w, err)
 		return
 	}

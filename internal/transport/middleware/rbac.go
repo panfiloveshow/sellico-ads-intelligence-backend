@@ -61,3 +61,23 @@ func RequireWriteAccess() func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// RequireFinancialAccess allows reads for every workspace member, but limits
+// mutations that can change marketplace spend, bids, campaign lifecycle or
+// automation configuration to owners and managers.
+func RequireFinancialAccess() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role, ok := MemberRoleFromContext(r.Context())
+			if !ok {
+				writeForbidden(w, "role not found in context")
+				return
+			}
+			if !readMethods[r.Method] && role != domain.RoleOwner && role != domain.RoleManager {
+				writeForbidden(w, "insufficient permissions for financial action")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

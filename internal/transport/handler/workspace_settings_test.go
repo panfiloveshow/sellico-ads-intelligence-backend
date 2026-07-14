@@ -62,6 +62,7 @@ func TestWorkspaceSettingsHandler_UpdateSettings(t *testing.T) {
 	wsID := uuid.New()
 	userID := uuid.New()
 	input := domain.WorkspaceSettings{
+		Automation: &domain.AutomationSettings{Enabled: true, ManualHold: true, HoldReason: "review"},
 		Notifications: &domain.NotificationSettings{
 			Telegram: &domain.TelegramSettings{
 				BotToken: "test-token",
@@ -82,6 +83,8 @@ func TestWorkspaceSettingsHandler_UpdateSettings(t *testing.T) {
 			assert.Equal(t, wsID, ws)
 			assert.True(t, in.Notifications.Telegram.Enabled)
 			assert.True(t, in.Notifications.Email.ClientReports)
+			assert.True(t, in.Automation.Enabled)
+			assert.True(t, in.Automation.ManualHold)
 			assert.Equal(t, []string{"client@example.com"}, in.Notifications.Email.Recipients)
 			return &in, nil
 		},

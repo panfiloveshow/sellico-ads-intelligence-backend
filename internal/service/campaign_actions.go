@@ -183,6 +183,14 @@ func (s *CampaignActionService) CreateCampaign(ctx context.Context, workspaceID,
 		BidType:         normalized.BidType,
 		PaymentType:     normalized.PaymentType,
 		DailyBudget:     pgtype.Int8{},
+		PlacementSearch: pgtype.Bool{
+			Bool:  normalized.BidType == domain.BidTypeManual && containsBidPlacement(normalized.PlacementTypes, "search"),
+			Valid: normalized.BidType == domain.BidTypeManual,
+		},
+		PlacementRecommendations: pgtype.Bool{
+			Bool:  normalized.BidType == domain.BidTypeManual && containsBidPlacement(normalized.PlacementTypes, "recommendations"),
+			Valid: normalized.BidType == domain.BidTypeManual,
+		},
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "campaign created in WB but failed to save local campaign")
@@ -192,7 +200,16 @@ func (s *CampaignActionService) CreateCampaign(ctx context.Context, workspaceID,
 	return &result, nil
 }
 
-func (s *CampaignActionService) StartCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error {
+func containsBidPlacement(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *CampaignActionService) StartCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error {
 	campaign, token, err := s.resolveCampaignWithToken(ctx, workspaceID, campaignID)
 	if err != nil {
 		return err
@@ -202,11 +219,20 @@ func (s *CampaignActionService) StartCampaign(ctx context.Context, workspaceID, 
 	}
 	err = s.wbClient.StartCampaign(ctx, token, campaign.WbCampaignID)
 	s.recordActionRateLimitFromError(ctx, campaign.SellerCabinetID, wbEndpointCampaignActions, err)
-	s.recordWBBidAction(ctx, workspaceID, campaign, uuid.Nil, "campaign_start", 0, 0, "", "manual campaign start", err)
-	return err
+	s.recordWBBidAction(ctx, workspaceID, campaign, actorID, "campaign_start", 0, 0, "", "manual campaign start", err)
+	if err != nil {
+		s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_start", campaign.Status, "active", err)
+		return err
+	}
+	if err := s.updateLocalCampaignStatus(ctx, campaign, "active"); err != nil {
+		s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_start", campaign.Status, "active", err)
+		return err
+	}
+	s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_start", campaign.Status, "active", nil)
+	return nil
 }
 
-func (s *CampaignActionService) PauseCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error {
+func (s *CampaignActionService) PauseCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error {
 	campaign, token, err := s.resolveCampaignWithToken(ctx, workspaceID, campaignID)
 	if err != nil {
 		return err
@@ -216,11 +242,23 @@ func (s *CampaignActionService) PauseCampaign(ctx context.Context, workspaceID, 
 	}
 	err = s.wbClient.PauseCampaign(ctx, token, campaign.WbCampaignID)
 	s.recordActionRateLimitFromError(ctx, campaign.SellerCabinetID, wbEndpointCampaignActions, err)
-	s.recordWBBidAction(ctx, workspaceID, campaign, uuid.Nil, "campaign_pause", 0, 0, "", "manual campaign pause", err)
-	return err
+	s.recordWBBidAction(ctx, workspaceID, campaign, actorID, "campaign_pause", 0, 0, "", "manual campaign pause", err)
+	if err != nil {
+		s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_pause", campaign.Status, "paused", err)
+		return err
+	}
+	if err := s.updateLocalCampaignStatus(ctx, campaign, "paused"); err != nil {
+		s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_pause", campaign.Status, "paused", err)
+		return err
+	}
+	if _, err := s.queries.InvalidateActiveRecommendationsForCampaign(ctx, uuidToPgtype(workspaceID), campaign.ID); err != nil {
+		s.logger.Warn().Err(err).Str("campaign_id", campaignID.String()).Msg("campaign paused but active recommendations were not invalidated")
+	}
+	s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_pause", campaign.Status, "paused", nil)
+	return nil
 }
 
-func (s *CampaignActionService) StopCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error {
+func (s *CampaignActionService) StopCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID) error {
 	campaign, token, err := s.resolveCampaignWithToken(ctx, workspaceID, campaignID)
 	if err != nil {
 		return err
@@ -230,8 +268,34 @@ func (s *CampaignActionService) StopCampaign(ctx context.Context, workspaceID, c
 	}
 	err = s.wbClient.StopCampaign(ctx, token, campaign.WbCampaignID)
 	s.recordActionRateLimitFromError(ctx, campaign.SellerCabinetID, wbEndpointCampaignActions, err)
-	s.recordWBBidAction(ctx, workspaceID, campaign, uuid.Nil, "campaign_stop", 0, 0, "", "manual campaign stop", err)
-	return err
+	s.recordWBBidAction(ctx, workspaceID, campaign, actorID, "campaign_stop", 0, 0, "", "manual campaign stop", err)
+	if err != nil {
+		s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_stop", campaign.Status, "stopped", err)
+		return err
+	}
+	if err := s.updateLocalCampaignStatus(ctx, campaign, "stopped"); err != nil {
+		s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_stop", campaign.Status, "stopped", err)
+		return err
+	}
+	if _, err := s.queries.InvalidateActiveRecommendationsForCampaign(ctx, uuidToPgtype(workspaceID), campaign.ID); err != nil {
+		s.logger.Warn().Err(err).Str("campaign_id", campaignID.String()).Msg("campaign stopped but active recommendations were not invalidated")
+	}
+	s.recordCampaignControlAudit(ctx, workspaceID, actorID, campaign, "campaign_stop", campaign.Status, "stopped", nil)
+	return nil
+}
+
+func (s *CampaignActionService) updateLocalCampaignStatus(ctx context.Context, campaign sqlcgen.Campaign, status string) error {
+	if _, err := s.queries.UpdateCampaign(ctx, sqlcgen.UpdateCampaignParams{
+		ID:          campaign.ID,
+		Name:        campaign.Name,
+		Status:      status,
+		BidType:     campaign.BidType,
+		PaymentType: campaign.PaymentType,
+		DailyBudget: campaign.DailyBudget,
+	}); err != nil {
+		return apperror.New(apperror.ErrInternal, fmt.Sprintf("campaign changed in WB but failed to update local status to %s", status))
+	}
+	return nil
 }
 
 func (s *CampaignActionService) RenameCampaign(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID, name string) error {
@@ -296,6 +360,9 @@ func (s *CampaignActionService) DeleteCampaign(ctx context.Context, workspaceID,
 	}); updateErr != nil {
 		return apperror.New(apperror.ErrInternal, "campaign deleted in WB but failed to update local campaign")
 	}
+	if _, invalidateErr := s.queries.InvalidateActiveRecommendationsForCampaign(ctx, uuidToPgtype(workspaceID), campaign.ID); invalidateErr != nil {
+		s.logger.Warn().Err(invalidateErr).Str("campaign_id", campaignID.String()).Msg("campaign deleted but active recommendations were not invalidated")
+	}
 	return nil
 }
 
@@ -306,6 +373,9 @@ func (s *CampaignActionService) SetBid(ctx context.Context, workspaceID, campaig
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrNotFound, "campaign not found")
+	}
+	if err := validateCampaignBidPlacement(campaign, placement); err != nil {
+		return nil, err
 	}
 
 	token, err := s.decryptCabinetToken(ctx, campaign.SellerCabinetID)
@@ -739,7 +809,72 @@ func (s *CampaignActionService) GetMinimumBids(ctx context.Context, workspaceID,
 	if err != nil {
 		return nil, err
 	}
-	return s.wbClient.GetMinimumBids(ctx, token, int(campaign.WbCampaignID), nmIDs)
+	if len(nmIDs) == 0 {
+		return nil, apperror.New(apperror.ErrValidation, "at least one nm_id is required")
+	}
+	placements, err := minimumBidPlacementTypes(campaign)
+	if err != nil {
+		return nil, err
+	}
+	articleIDs := make([]int64, 0, len(nmIDs))
+	for _, nmID := range nmIDs {
+		if nmID <= 0 {
+			return nil, apperror.New(apperror.ErrValidation, "nm_id must be positive")
+		}
+		articleIDs = append(articleIDs, int64(nmID))
+	}
+	return s.wbClient.GetMinimumBids(ctx, token, wb.MinimumBidsRequest{
+		AdvertID:       campaign.WbCampaignID,
+		NMIDs:          articleIDs,
+		PaymentType:    campaign.PaymentType,
+		PlacementTypes: placements,
+	})
+}
+
+func minimumBidPlacementTypes(campaign sqlcgen.Campaign) ([]string, error) {
+	switch campaign.BidType {
+	case domain.BidTypeUnified:
+		return []string{"combined"}, nil
+	case domain.BidTypeManual:
+		placements := make([]string, 0, 2)
+		if campaign.PlacementSearch.Valid && campaign.PlacementSearch.Bool {
+			placements = append(placements, "search")
+		}
+		if campaign.PlacementRecommendations.Valid && campaign.PlacementRecommendations.Bool {
+			// The minimum-bids endpoint uses singular recommendation, while bid
+			// mutation and campaign creation use recommendations.
+			placements = append(placements, "recommendation")
+		}
+		if len(placements) == 0 {
+			return nil, apperror.New(apperror.ErrValidation, "campaign placement settings are unavailable; sync the campaign before requesting minimum bids")
+		}
+		return placements, nil
+	default:
+		return nil, apperror.New(apperror.ErrValidation, "campaign bid type is unavailable; sync the campaign before requesting minimum bids")
+	}
+}
+
+func validateCampaignBidPlacement(campaign sqlcgen.Campaign, placement string) error {
+	placement = strings.TrimSpace(placement)
+	switch campaign.BidType {
+	case domain.BidTypeUnified:
+		if placement != "combined" {
+			return apperror.New(apperror.ErrValidation, "unified-bid campaigns require combined placement")
+		}
+	case domain.BidTypeManual:
+		if placement != "search" && placement != "recommendations" {
+			return apperror.New(apperror.ErrValidation, "manual-bid campaigns require search or recommendations placement")
+		}
+		if placement == "search" && campaign.PlacementSearch.Valid && !campaign.PlacementSearch.Bool {
+			return apperror.New(apperror.ErrValidation, "search placement is disabled for this campaign")
+		}
+		if placement == "recommendations" && campaign.PlacementRecommendations.Valid && !campaign.PlacementRecommendations.Bool {
+			return apperror.New(apperror.ErrValidation, "recommendations placement is disabled for this campaign")
+		}
+	default:
+		return apperror.New(apperror.ErrValidation, "campaign bid type is unavailable; sync the campaign before changing bids")
+	}
+	return nil
 }
 
 func (s *CampaignActionService) preflightCampaignAction(ctx context.Context, campaign sqlcgen.Campaign, endpointKey, action string) error {
@@ -891,21 +1026,56 @@ func (s *CampaignActionService) ApplyRecommendation(ctx context.Context, workspa
 	if rec.Status != domain.RecommendationStatusActive {
 		return nil, apperror.New(apperror.ErrValidation, "recommendation is not active")
 	}
+	if reason := recommendationFreshnessReason(rec.CreatedAt, time.Now()); reason != "" {
+		return nil, apperror.New(apperror.ErrValidation, reason)
+	}
+	if recType != domain.RecommendationTypeRaiseBid && recType != domain.RecommendationTypeLowerBid && recType != domain.RecommendationTypeAddMinusPhrase {
+		return nil, apperror.New(apperror.ErrValidation, "recommendation type is not applicable for automatic actions")
+	}
+
+	claimed, err := s.queries.ClaimActiveRecommendationInWorkspace(ctx, uuidToPgtype(recommendationID), uuidToPgtype(workspaceID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrValidation, "recommendation is already being applied or is no longer active")
+	}
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to claim recommendation")
+	}
+	rec = claimed
 
 	switch recType {
 	case domain.RecommendationTypeRaiseBid, domain.RecommendationTypeLowerBid:
 		return s.applyBidRecommendation(ctx, workspaceID, recommendationID, actorID, rec)
 	case domain.RecommendationTypeAddMinusPhrase:
 		return s.applyAddMinusPhraseRecommendation(ctx, workspaceID, recommendationID, actorID, rec)
-	default:
-		return nil, apperror.New(apperror.ErrValidation, "recommendation type is not applicable for automatic actions")
 	}
+	return nil, apperror.New(apperror.ErrInternal, "unsupported recommendation state")
+}
+
+func recommendationFreshnessReason(createdAt pgtype.Timestamptz, now time.Time) string {
+	if !createdAt.Valid || createdAt.Time.IsZero() {
+		return "recommendation timestamp is unavailable; regenerate recommendations before applying"
+	}
+	if now.Before(createdAt.Time) {
+		return "recommendation timestamp is in the future; regenerate recommendations before applying"
+	}
+	if now.Sub(createdAt.Time) > domain.RecommendationOverdueAfter {
+		return fmt.Sprintf("recommendation is older than %d hours; regenerate it from current WB data before applying", int(domain.RecommendationOverdueAfter.Hours()))
+	}
+	return ""
 }
 
 func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, workspaceID, recommendationID, actorID uuid.UUID, rec sqlcgen.Recommendation) (*domain.Recommendation, error) {
 	if !rec.CampaignID.Valid && rec.PhraseID.Valid {
 		return s.applyPhraseBidRecommendation(ctx, workspaceID, recommendationID, actorID, rec)
 	}
+	releaseClaim := true
+	defer func() {
+		if releaseClaim {
+			s.releaseRecommendationClaim(ctx, workspaceID, recommendationID)
+		} else {
+			s.markRecommendationApplyUnknown(ctx, workspaceID, recommendationID)
+		}
+	}()
 	if !rec.CampaignID.Valid {
 		return nil, apperror.New(apperror.ErrValidation, "recommendation has no linked campaign")
 	}
@@ -938,6 +1108,16 @@ func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, work
 	if oldBid <= 0 {
 		return nil, apperror.New(apperror.ErrValidation, "current bid is unavailable; sync real bid data before applying recommendation")
 	}
+	currentBid, ok, currentBidErr := currentBidFromCampaignPhrases(ctx, s.queries, uuidFromPgtype(campaign.ID))
+	if currentBidErr != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to load current campaign bid")
+	}
+	if !ok {
+		return nil, apperror.New(apperror.ErrValidation, "current bid is unavailable or ambiguous; sync real bid data before applying recommendation")
+	}
+	if currentBid != oldBid {
+		return nil, apperror.New(apperror.ErrValidation, fmt.Sprintf("current bid %d no longer matches recommendation baseline %d; regenerate recommendation", currentBid, oldBid))
+	}
 
 	if err := s.preflightCampaignAction(ctx, campaign, wbEndpointCampaignActions, "bid"); err != nil {
 		return nil, err
@@ -945,7 +1125,12 @@ func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, work
 	if err := s.ensureBidIncreaseReadiness(ctx, workspaceID, campaign, oldBid, suggestedBid); err != nil {
 		return nil, err
 	}
-	if err := s.wbClient.UpdateCampaignBid(ctx, token, campaign.WbCampaignID, int(campaign.CampaignType), 0, "search", suggestedBid); err != nil {
+	placement, err := recommendationCampaignBidPlacement(campaign)
+	if err != nil {
+		return nil, err
+	}
+	releaseClaim = false // From this point a transport error may have an uncertain WB outcome.
+	if err := s.wbClient.UpdateCampaignBid(ctx, token, campaign.WbCampaignID, int(campaign.CampaignType), 0, placement, suggestedBid); err != nil {
 		s.recordActionRateLimitFromError(ctx, campaign.SellerCabinetID, wbEndpointCampaignActions, err)
 		s.recordWBBidAction(ctx, workspaceID, campaign, actorID, "recommendation_bid", int64(oldBid), int64(suggestedBid), "", fmt.Sprintf("apply recommendation %s: %s", rec.Type, rec.Title), err)
 		return nil, apperror.New(apperror.ErrInternal, "failed to apply bid to WB")
@@ -957,7 +1142,7 @@ func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, work
 		SellerCabinetID:  campaign.SellerCabinetID,
 		CampaignID:       rec.CampaignID,
 		RecommendationID: uuidToPgtype(recommendationID),
-		Placement:        "search",
+		Placement:        placement,
 		OldBid:           int32(oldBid),
 		NewBid:           int32(suggestedBid),
 		Reason:           fmt.Sprintf("Applied recommendation %s: %s", rec.Type, rec.Title),
@@ -972,6 +1157,14 @@ func (s *CampaignActionService) applyBidRecommendation(ctx context.Context, work
 }
 
 func (s *CampaignActionService) applyPhraseBidRecommendation(ctx context.Context, workspaceID, recommendationID, actorID uuid.UUID, rec sqlcgen.Recommendation) (*domain.Recommendation, error) {
+	releaseClaim := true
+	defer func() {
+		if releaseClaim {
+			s.releaseRecommendationClaim(ctx, workspaceID, recommendationID)
+		} else {
+			s.markRecommendationApplyUnknown(ctx, workspaceID, recommendationID)
+		}
+	}()
 	phrase, err := s.loadRecommendationPhrase(ctx, workspaceID, rec)
 	if err != nil {
 		return nil, err
@@ -994,6 +1187,9 @@ func (s *CampaignActionService) applyPhraseBidRecommendation(ctx context.Context
 	}
 	if oldBid <= 0 {
 		return nil, apperror.New(apperror.ErrValidation, "current phrase bid is unavailable; sync real bid data before applying recommendation")
+	}
+	if phrase.CurrentBid.Valid && int(phrase.CurrentBid.Int64) != oldBid {
+		return nil, apperror.New(apperror.ErrValidation, fmt.Sprintf("current phrase bid %d no longer matches recommendation baseline %d; regenerate recommendation", phrase.CurrentBid.Int64, oldBid))
 	}
 
 	var suggestedBid int
@@ -1021,6 +1217,7 @@ func (s *CampaignActionService) applyPhraseBidRecommendation(ctx context.Context
 		return nil, err
 	}
 
+	releaseClaim = false // From this point a transport error may have an uncertain WB outcome.
 	err = s.wbClient.SetClusterBids(ctx, token, campaign.WbCampaignID, []wb.ClusterBidItem{{
 		NMID:      nmID,
 		NormQuery: normQuery,
@@ -1054,6 +1251,14 @@ func (s *CampaignActionService) applyPhraseBidRecommendation(ctx context.Context
 }
 
 func (s *CampaignActionService) applyAddMinusPhraseRecommendation(ctx context.Context, workspaceID, recommendationID, actorID uuid.UUID, rec sqlcgen.Recommendation) (*domain.Recommendation, error) {
+	releaseClaim := true
+	defer func() {
+		if releaseClaim {
+			s.releaseRecommendationClaim(ctx, workspaceID, recommendationID)
+		} else {
+			s.markRecommendationApplyUnknown(ctx, workspaceID, recommendationID)
+		}
+	}()
 	if !rec.PhraseID.Valid {
 		return nil, apperror.New(apperror.ErrValidation, "recommendation has no linked phrase")
 	}
@@ -1095,6 +1300,7 @@ func (s *CampaignActionService) applyAddMinusPhraseRecommendation(ctx context.Co
 		return nil, err
 	}
 
+	releaseClaim = false // From this point a transport error may have an uncertain WB outcome.
 	err = s.wbClient.SetClusterMinus(ctx, token, campaign.WbCampaignID, []wb.ClusterMinusItem{{
 		NMID:      nmID,
 		NormQuery: normQuery,
@@ -1180,16 +1386,60 @@ func (s *CampaignActionService) recordLocalMinusPhrase(ctx context.Context, camp
 }
 
 func (s *CampaignActionService) completeRecommendation(ctx context.Context, workspaceID, recommendationID uuid.UUID) (*domain.Recommendation, error) {
-	row, err := s.queries.UpdateRecommendationStatusInWorkspace(ctx, sqlcgen.UpdateRecommendationStatusInWorkspaceParams{
-		ID:          uuidToPgtype(recommendationID),
-		WorkspaceID: uuidToPgtype(workspaceID),
-		Status:      domain.RecommendationStatusCompleted,
-	})
+	row, err := s.queries.TransitionRecommendationStatusInWorkspace(
+		ctx,
+		uuidToPgtype(recommendationID),
+		uuidToPgtype(workspaceID),
+		domain.RecommendationStatusApplying,
+		domain.RecommendationStatusCompleted,
+	)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to mark recommendation as completed")
 	}
 	result := recommendationFromSqlc(row)
 	return &result, nil
+}
+
+func (s *CampaignActionService) releaseRecommendationClaim(ctx context.Context, workspaceID, recommendationID uuid.UUID) {
+	if _, err := s.queries.TransitionRecommendationStatusInWorkspace(
+		ctx,
+		uuidToPgtype(recommendationID),
+		uuidToPgtype(workspaceID),
+		domain.RecommendationStatusApplying,
+		domain.RecommendationStatusActive,
+	); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.logger.Warn().Err(err).Str("recommendation_id", recommendationID.String()).Msg("failed to release recommendation claim")
+	}
+}
+
+func (s *CampaignActionService) markRecommendationApplyUnknown(ctx context.Context, workspaceID, recommendationID uuid.UUID) {
+	if _, err := s.queries.TransitionRecommendationStatusInWorkspace(
+		ctx,
+		uuidToPgtype(recommendationID),
+		uuidToPgtype(workspaceID),
+		domain.RecommendationStatusApplying,
+		domain.RecommendationStatusApplyUnknown,
+	); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.logger.Warn().Err(err).Str("recommendation_id", recommendationID.String()).Msg("failed to mark uncertain recommendation apply outcome")
+	}
+}
+
+func recommendationCampaignBidPlacement(campaign sqlcgen.Campaign) (string, error) {
+	if campaign.BidType == domain.BidTypeUnified {
+		return "combined", nil
+	}
+	if campaign.BidType != domain.BidTypeManual {
+		return "", apperror.New(apperror.ErrValidation, "campaign bid type is unavailable; sync the campaign before applying recommendation")
+	}
+	searchEnabled := campaign.PlacementSearch.Valid && campaign.PlacementSearch.Bool
+	recommendationsEnabled := campaign.PlacementRecommendations.Valid && campaign.PlacementRecommendations.Bool
+	if searchEnabled == recommendationsEnabled {
+		return "", apperror.New(apperror.ErrValidation, "campaign-level recommendation placement is unavailable or ambiguous; use a phrase-level recommendation")
+	}
+	if searchEnabled {
+		return "search", nil
+	}
+	return "recommendations", nil
 }
 
 func (s *CampaignActionService) resolveWBCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) (string, int64, error) {

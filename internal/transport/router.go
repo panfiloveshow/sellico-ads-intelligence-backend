@@ -279,7 +279,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 					if deps.CampaignHandler != nil {
 						c.Get("/", deps.CampaignHandler.List)
 						if deps.CampaignActionHandler != nil {
-							c.With(middleware.RequireWriteAccess()).Post("/", deps.CampaignActionHandler.Create)
+							c.With(middleware.RequireFinancialAccess()).Post("/", deps.CampaignActionHandler.Create)
 						}
 						c.Get("/{id}", deps.CampaignHandler.Get)
 						c.Get("/{id}/stats", deps.CampaignHandler.GetStats)
@@ -405,7 +405,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 				// Strategies (bid automation)
 				scoped.Route("/strategies", func(st chi.Router) {
-					st.Use(middleware.RequireWriteAccess())
+					st.Use(middleware.RequireFinancialAccess())
 					if deps.StrategyHandler != nil {
 						st.Get("/", deps.StrategyHandler.List)
 						st.Post("/", deps.StrategyHandler.Create)
@@ -422,27 +422,27 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 				// Campaign actions (start/pause/stop/bids)
 				if deps.CampaignActionHandler != nil {
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/start", deps.CampaignActionHandler.Start)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/pause", deps.CampaignActionHandler.Pause)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/stop", deps.CampaignActionHandler.Stop)
-					scoped.With(middleware.RequireWriteAccess()).Patch("/campaigns/{id}/name", deps.CampaignActionHandler.Rename)
-					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}", deps.CampaignActionHandler.Delete)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/bids", deps.CampaignActionHandler.SetBid)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/start", deps.CampaignActionHandler.Start)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/pause", deps.CampaignActionHandler.Pause)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/stop", deps.CampaignActionHandler.Stop)
+					scoped.With(middleware.RequireFinancialAccess()).Patch("/campaigns/{id}/name", deps.CampaignActionHandler.Rename)
+					scoped.With(middleware.RequireFinancialAccess()).Delete("/campaigns/{id}", deps.CampaignActionHandler.Delete)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/bids", deps.CampaignActionHandler.SetBid)
 					scoped.Get("/campaigns/{id}/bids/min", deps.CampaignActionHandler.MinimumBids)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.SetClusterBid)
-					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.DeleteClusterBid)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.SetClusterBid)
+					scoped.With(middleware.RequireFinancialAccess()).Delete("/campaigns/{id}/cluster-bids", deps.CampaignActionHandler.DeleteClusterBid)
 					scoped.Get("/campaigns/{id}/cluster-minus", deps.CampaignActionHandler.GetClusterMinus)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/cluster-minus", deps.CampaignActionHandler.SetClusterMinus)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/budget/deposit", deps.CampaignActionHandler.DepositBudget)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/cluster-minus", deps.CampaignActionHandler.SetClusterMinus)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/budget/deposit", deps.CampaignActionHandler.DepositBudget)
 					scoped.Get("/campaigns/{id}/bid-history", deps.CampaignActionHandler.BidHistory)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/bid-history/{changeId}/rollback", deps.CampaignActionHandler.RollbackBidChange)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/bid-history/{changeId}/rollback", deps.CampaignActionHandler.RollbackBidChange)
 					scoped.Get("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.ListMinusPhrases)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.AddMinusPhrase)
-					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/minus-phrases/{phraseId}", deps.CampaignActionHandler.DeleteMinusPhrase)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/minus-phrases", deps.CampaignActionHandler.AddMinusPhrase)
+					scoped.With(middleware.RequireFinancialAccess()).Delete("/campaigns/{id}/minus-phrases/{phraseId}", deps.CampaignActionHandler.DeleteMinusPhrase)
 					scoped.Get("/campaigns/{id}/plus-phrases", deps.CampaignActionHandler.ListPlusPhrases)
-					scoped.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/plus-phrases", deps.CampaignActionHandler.AddPlusPhrase)
-					scoped.With(middleware.RequireWriteAccess()).Delete("/campaigns/{id}/plus-phrases/{phraseId}", deps.CampaignActionHandler.DeletePlusPhrase)
-					scoped.With(middleware.RequireWriteAccess()).Post("/recommendations/{id}/apply", deps.CampaignActionHandler.ApplyRecommendation)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/campaigns/{id}/plus-phrases", deps.CampaignActionHandler.AddPlusPhrase)
+					scoped.With(middleware.RequireFinancialAccess()).Delete("/campaigns/{id}/plus-phrases/{phraseId}", deps.CampaignActionHandler.DeletePlusPhrase)
+					scoped.With(middleware.RequireFinancialAccess()).Post("/recommendations/{id}/apply", deps.CampaignActionHandler.ApplyRecommendation)
 				}
 
 				// Semantics & Keywords

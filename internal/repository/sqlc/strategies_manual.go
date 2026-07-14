@@ -27,6 +27,18 @@ type StrategyBinding struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type DaypartingState struct {
+	StrategyID    pgtype.UUID        `json:"strategy_id"`
+	CampaignID    pgtype.UUID        `json:"campaign_id"`
+	ProductID     pgtype.UUID        `json:"product_id"`
+	ScopeKey      string             `json:"scope_key"`
+	Placement     string             `json:"placement"`
+	BaselineBid   int32              `json:"baseline_bid"`
+	LastTargetBid int32              `json:"last_target_bid"`
+	LastSlot      string             `json:"last_slot"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type BidChange struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
@@ -217,26 +229,81 @@ func (q *Queries) CreateStrategyBinding(ctx context.Context, arg CreateStrategyB
 
 func (q *Queries) CreateStrategyBindingInWorkspace(ctx context.Context, arg CreateStrategyBindingInWorkspaceParams) (StrategyBinding, error) {
 	row := q.db.QueryRow(ctx, `
-		INSERT INTO strategy_bindings (strategy_id, campaign_id, product_id)
-		SELECT $2, $3, $4
-		WHERE EXISTS (
-			SELECT 1 FROM strategies s WHERE s.id = $2 AND s.workspace_id = $1
-		)
-		AND (
-			$3::uuid IS NULL OR EXISTS (
-				SELECT 1 FROM campaigns c WHERE c.id = $3 AND c.workspace_id = $1
+			INSERT INTO strategy_bindings (strategy_id, campaign_id, product_id)
+			SELECT s.id, $3, $4
+			FROM strategies s
+			WHERE s.id = $2 AND s.workspace_id = $1
+			AND (
+				$3::uuid IS NULL OR EXISTS (
+					SELECT 1 FROM campaigns c
+					WHERE c.id = $3 AND c.workspace_id = $1
+					  AND c.seller_cabinet_id = s.seller_cabinet_id
+				)
 			)
-		)
-		AND (
-			$4::uuid IS NULL OR EXISTS (
-				SELECT 1 FROM products p WHERE p.id = $4 AND p.workspace_id = $1
+			AND (
+				$4::uuid IS NULL OR EXISTS (
+					SELECT 1 FROM products p
+					WHERE p.id = $4 AND p.workspace_id = $1
+					  AND p.seller_cabinet_id = s.seller_cabinet_id
+				)
 			)
-		)
-		RETURNING id, strategy_id, campaign_id, product_id, created_at`,
+			AND (
+				$3::uuid IS NULL OR $4::uuid IS NULL OR EXISTS (
+					SELECT 1 FROM campaign_products cp
+					WHERE cp.campaign_id = $3 AND cp.product_id = $4
+					  AND cp.workspace_id = $1
+					  AND cp.seller_cabinet_id = s.seller_cabinet_id
+				)
+			)
+			RETURNING id, strategy_id, campaign_id, product_id, created_at`,
 		arg.WorkspaceID, arg.StrategyID, arg.CampaignID, arg.ProductID)
 	var i StrategyBinding
 	err := row.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.CreatedAt)
 	return i, err
+}
+
+type GetDaypartingStateParams struct {
+	StrategyID pgtype.UUID
+	CampaignID pgtype.UUID
+	ScopeKey   string
+	Placement  string
+}
+
+func (q *Queries) GetDaypartingState(ctx context.Context, arg GetDaypartingStateParams) (DaypartingState, error) {
+	row := q.db.QueryRow(ctx, `SELECT strategy_id, campaign_id, product_id, scope_key, placement, baseline_bid, last_target_bid, last_slot, updated_at
+		FROM dayparting_states
+		WHERE strategy_id = $1 AND campaign_id = $2 AND scope_key = $3 AND placement = $4`,
+		arg.StrategyID, arg.CampaignID, arg.ScopeKey, arg.Placement)
+	var state DaypartingState
+	err := row.Scan(&state.StrategyID, &state.CampaignID, &state.ProductID, &state.ScopeKey, &state.Placement,
+		&state.BaselineBid, &state.LastTargetBid, &state.LastSlot, &state.UpdatedAt)
+	return state, err
+}
+
+type UpsertDaypartingStateParams struct {
+	StrategyID    pgtype.UUID
+	CampaignID    pgtype.UUID
+	ProductID     pgtype.UUID
+	ScopeKey      string
+	Placement     string
+	BaselineBid   int32
+	LastTargetBid int32
+	LastSlot      string
+}
+
+func (q *Queries) UpsertDaypartingState(ctx context.Context, arg UpsertDaypartingStateParams) error {
+	_, err := q.db.Exec(ctx, `INSERT INTO dayparting_states
+		(strategy_id, campaign_id, product_id, scope_key, placement, baseline_bid, last_target_bid, last_slot)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (strategy_id, campaign_id, scope_key, placement) DO UPDATE SET
+		product_id = EXCLUDED.product_id,
+		baseline_bid = EXCLUDED.baseline_bid,
+		last_target_bid = EXCLUDED.last_target_bid,
+		last_slot = EXCLUDED.last_slot,
+		updated_at = now()`,
+		arg.StrategyID, arg.CampaignID, arg.ProductID, arg.ScopeKey, arg.Placement,
+		arg.BaselineBid, arg.LastTargetBid, arg.LastSlot)
+	return err
 }
 
 func (q *Queries) ListStrategyBindings(ctx context.Context, strategyID pgtype.UUID) ([]StrategyBinding, error) {

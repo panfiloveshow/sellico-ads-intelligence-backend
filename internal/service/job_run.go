@@ -101,7 +101,7 @@ func (s *JobRunService) Retry(ctx context.Context, workspaceID, jobRunID uuid.UU
 	}
 
 	switch jobRun.TaskType {
-	case "wb:sync_workspace", "wb:sync_campaigns", "wb:sync_campaign_stats", "wb:sync_phrases", "wb:sync_products", "recommendation:generate":
+	case "wb:sync_workspace", "wb:sync_campaigns", "wb:sync_campaign_stats", "wb:sync_phrases", "wb:sync_products", "recommendation:generate", "bid:automation":
 		status, enqueueErr := s.enqueuer.EnqueueWorkspaceTask(jobRun.TaskType, *jobRun.WorkspaceID)
 		if enqueueErr != nil {
 			return nil, apperror.New(apperror.ErrInternal, "failed to retry job run")

@@ -211,6 +211,39 @@ func TestJobRunServiceRetryWorkspaceTask(t *testing.T) {
 	assert.Equal(t, workspaceID, result.WorkspaceID)
 }
 
+func TestJobRunServiceRetryBidAutomation(t *testing.T) {
+	db := newJobRunInMemDB()
+	queries := sqlcgen.New(db)
+	workspaceID := uuid.New()
+	jobRunID := uuid.New()
+	now := time.Now().UTC()
+	db.jobRuns[jobRunID] = sqlcgen.JobRun{
+		ID:          uuidToPgtype(jobRunID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+		TaskType:    "bid:automation",
+		Status:      "failed",
+		StartedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	svc := NewJobRunService(queries, fakeJobRunRetryEnqueuer{
+		workspaceFn: func(taskType string, actualWorkspaceID uuid.UUID) (string, error) {
+			assert.Equal(t, "bid:automation", taskType)
+			assert.Equal(t, workspaceID, actualWorkspaceID)
+			return "enqueued", nil
+		},
+		exportFn: func(uuid.UUID, uuid.UUID) (string, error) {
+			t.Fatal("export retry should not be called")
+			return "", nil
+		},
+	})
+
+	result, err := svc.Retry(context.Background(), workspaceID, jobRunID)
+	require.NoError(t, err)
+	assert.Equal(t, "bid:automation", result.TaskType)
+	assert.Equal(t, "enqueued", result.Status)
+}
+
 func TestJobRunServiceRetryExportTask(t *testing.T) {
 	db := newJobRunInMemDB()
 	queries := sqlcgen.New(db)

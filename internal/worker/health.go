@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 )
 
@@ -23,6 +24,7 @@ func NewHealthServer(port int, logger zerolog.Logger) *HealthServer {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.Handle("/metrics", promhttp.Handler())
 
 	return &HealthServer{
 		server: &http.Server{

@@ -134,7 +134,43 @@ func numericFromFloat64(v float64) (pgtype.Numeric, error) {
 	return n, nil
 }
 
+// CampaignBidSnapshot is a campaign-level view of real WB product bids.
+// A snapshot is returned only when all linked products with a bid agree;
+// mixed product bids are deliberately treated as ambiguous for campaign-wide
+// automation.
+type CampaignBidSnapshot struct {
+	Bid          int
+	Placement    string
+	ProductCount int
+	CapturedAt   time.Time
+}
+
+func campaignBidSnapshot(ctx context.Context, queries *sqlcgen.Queries, campaignID uuid.UUID, placement string) (CampaignBidSnapshot, bool, error) {
+	links, err := queries.ListCampaignProductsByCampaign(ctx, uuidToPgtype(campaignID))
+	if err != nil {
+		return CampaignBidSnapshot{}, false, err
+	}
+	if len(links) == 0 {
+		return CampaignBidSnapshot{}, false, nil
+	}
+	snapshot, ok := campaignBidSnapshotFromLinks(links, placement)
+	return snapshot, ok, nil
+}
+
 func currentBidFromCampaignPhrases(ctx context.Context, queries *sqlcgen.Queries, campaignID uuid.UUID) (int, bool, error) {
+	// Product bids are the authoritative source for campaign-level WB actions.
+	// Only fall back to phrase bids for campaigns that do not yet have product
+	// links; if product rows exist but disagree, campaign-wide automation must
+	// fail closed.
+	productLinks, err := queries.ListCampaignProductsByCampaign(ctx, uuidToPgtype(campaignID))
+	if err != nil {
+		return 0, false, err
+	}
+	if len(productLinks) > 0 {
+		snapshot, ok := campaignBidSnapshotFromLinks(productLinks, "search")
+		return snapshot.Bid, ok, nil
+	}
+
 	phrases, err := queries.ListPhrasesByCampaign(ctx, sqlcgen.ListPhrasesByCampaignParams{
 		CampaignID: uuidToPgtype(campaignID),
 		Limit:      1000,
@@ -163,6 +199,75 @@ func currentBidFromCampaignPhrases(ctx context.Context, queries *sqlcgen.Queries
 		return 0, false, nil
 	}
 	return currentBid, true, nil
+}
+
+func campaignBidSnapshotFromLinks(links []sqlcgen.CampaignProduct, placement string) (CampaignBidSnapshot, bool) {
+	snapshot := CampaignBidSnapshot{Placement: placement}
+	if len(links) == 0 || (placement != "search" && placement != "recommendations" && placement != "combined") {
+		return CampaignBidSnapshot{}, false
+	}
+	for _, link := range links {
+		bidValue := link.BidSearch
+		if placement == "recommendations" {
+			bidValue = link.BidRecommendations
+		}
+		if !bidValue.Valid || bidValue.Int64 <= 0 {
+			// A campaign-wide action cannot safely infer the missing SKU bid
+			// from the other products.
+			return CampaignBidSnapshot{}, false
+		}
+		bid := int(bidValue.Int64)
+		if snapshot.Bid != 0 && snapshot.Bid != bid {
+			return CampaignBidSnapshot{}, false
+		}
+		snapshot.Bid = bid
+		snapshot.ProductCount++
+		if !link.UpdatedAt.Valid {
+			return CampaignBidSnapshot{}, false
+		}
+		if snapshot.CapturedAt.IsZero() || link.UpdatedAt.Time.Before(snapshot.CapturedAt) {
+			// Freshness is bounded by the oldest SKU in the aggregate.
+			snapshot.CapturedAt = link.UpdatedAt.Time
+		}
+	}
+	if snapshot.Bid == 0 || snapshot.ProductCount != len(links) || snapshot.CapturedAt.IsZero() {
+		return CampaignBidSnapshot{}, false
+	}
+	return snapshot, true
+}
+
+// SellerCabinetAutomationReadinessBlockReason is the fail-closed cabinet
+// freshness primitive for automatic actions. An absent row is represented by
+// the zero value and is blocked like any other incomplete state.
+func SellerCabinetAutomationReadinessBlockReason(state sqlcgen.SellerCabinetSyncState, now time.Time, maxAge time.Duration) string {
+	if state.Status != "ready" {
+		if state.Status == "" {
+			return "cabinet has no completed sync readiness state"
+		}
+		return fmt.Sprintf("cabinet sync status is %s", state.Status)
+	}
+	if !state.CompletedAt.Valid {
+		return "cabinet sync completion time is unavailable"
+	}
+	if maxAge > 0 && now.UTC().Sub(state.CompletedAt.Time.UTC()) > maxAge {
+		return "cabinet sync readiness is stale"
+	}
+	if state.RateLimited {
+		return "cabinet sync was rate limited"
+	}
+	if !state.DataThroughDate.Valid {
+		return "cabinet advertising data date is unavailable"
+	}
+	location, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		location = time.FixedZone("MSK", 3*60*60)
+	}
+	today := time.Date(now.In(location).Year(), now.In(location).Month(), now.In(location).Day(), 0, 0, 0, 0, location)
+	dataThrough := time.Date(state.DataThroughDate.Time.Year(), state.DataThroughDate.Time.Month(), state.DataThroughDate.Time.Day(), 0, 0, 0, 0, location)
+	if dataThrough.Before(today) {
+		return "cabinet advertising data does not include the current day"
+	}
+	return ""
 }
 
 func productFromSqlc(p sqlcgen.Product) domain.Product {

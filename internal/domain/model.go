@@ -104,9 +104,12 @@ const (
 // --- Recommendation status constants ---
 
 const (
-	RecommendationStatusActive    = "active"
-	RecommendationStatusCompleted = "completed"
-	RecommendationStatusDismissed = "dismissed"
+	RecommendationStatusActive       = "active"
+	RecommendationStatusApplying     = "applying"
+	RecommendationStatusApplyUnknown = "apply_unknown"
+	RecommendationStatusCompleted    = "completed"
+	RecommendationStatusDismissed    = "dismissed"
+	RecommendationStatusInvalidated  = "invalidated"
 )
 
 const RecommendationOverdueAfter = 48 * time.Hour

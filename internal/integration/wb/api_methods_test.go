@@ -84,6 +84,85 @@ func TestCreateCampaign_UsesCurrentEndpoint(t *testing.T) {
 	assert.Equal(t, int64(1234567), wbCampaignID)
 }
 
+func TestGetMinimumBids_UsesCurrentPostContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/advert/v1/bids/min", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Empty(t, r.URL.RawQuery)
+		var payload MinimumBidsRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Equal(t, int64(98765432), payload.AdvertID)
+		assert.Equal(t, []int64{12345678, 87654321}, payload.NMIDs)
+		assert.Equal(t, "cpm", payload.PaymentType)
+		assert.Equal(t, []string{"search", "recommendation"}, payload.PlacementTypes)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"bids":[{"nm_id":12345678,"bids":[{"type":"search","value":250},{"type":"recommendation","value":300}]}]}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	bids, err := client.GetMinimumBids(context.Background(), "token", MinimumBidsRequest{
+		AdvertID:       98765432,
+		NMIDs:          []int64{12345678, 87654321},
+		PaymentType:    "cpm",
+		PlacementTypes: []string{"search", "recommendation"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, bids, 2)
+	assert.Equal(t, WBMinimumBidDTO{NmID: 12345678, Placement: "search", MinBid: 250}, bids[0])
+	assert.Equal(t, WBMinimumBidDTO{NmID: 12345678, Placement: "recommendation", MinBid: 300}, bids[1])
+}
+
+func TestSetClusterMinus_UsesCurrentRequestBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/adv/v0/normquery/set-minus", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		var payload ClusterMinusRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Equal(t, int64(1825035), payload.AdvertID)
+		assert.Equal(t, int64(983512347), payload.NMID)
+		assert.Equal(t, []string{"Фраза 1"}, payload.NormQueries)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.SetClusterMinus(context.Background(), "token", 1825035, []ClusterMinusItem{{
+		NMID:      983512347,
+		NormQuery: "Фраза 1",
+	}})
+	require.NoError(t, err)
+}
+
+func TestUpdateCampaignBid_UsesPlacementContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/advert/v1/bids", r.URL.Path)
+		assert.Equal(t, http.MethodPatch, r.Method)
+		var payload UpdateCampaignBidsRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.Len(t, payload.Bids, 1)
+		require.Len(t, payload.Bids[0].NMBids, 1)
+		assert.Equal(t, "recommendations", payload.Bids[0].NMBids[0].Placement)
+		assert.Equal(t, 250, payload.Bids[0].NMBids[0].BidKopecks)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"bids":[]}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	err := client.UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "recommendations", 250)
+	require.NoError(t, err)
+}
+
+func TestUpdateCampaignBid_RejectsUnknownPlacementBeforeHTTP(t *testing.T) {
+	client := newTestClient("http://127.0.0.1:1")
+	err := client.UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "recommendation", 250)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported WB bid placement")
+}
+
 func TestGetCommissionTariffs_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/tariffs/commission", r.URL.Path)

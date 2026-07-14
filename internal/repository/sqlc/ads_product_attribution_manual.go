@@ -41,8 +41,8 @@ ON CONFLICT (campaign_id, product_id) DO UPDATE SET
   wb_campaign_id = EXCLUDED.wb_campaign_id,
   wb_product_id = EXCLUDED.wb_product_id,
   subject_name = COALESCE(EXCLUDED.subject_name, campaign_products.subject_name),
-  bid_search = COALESCE(EXCLUDED.bid_search, campaign_products.bid_search),
-  bid_recommendations = COALESCE(EXCLUDED.bid_recommendations, campaign_products.bid_recommendations),
+  bid_search = EXCLUDED.bid_search,
+  bid_recommendations = EXCLUDED.bid_recommendations,
   updated_at = now()
 RETURNING campaign_id, product_id, workspace_id, seller_cabinet_id, wb_campaign_id, wb_product_id, subject_name, bid_search, bid_recommendations, created_at, updated_at
 `

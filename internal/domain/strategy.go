@@ -20,10 +20,10 @@ const (
 	StrategyTypeSearchPlaybook = "search_playbook"
 
 	// Repricer strategy types (price_* prefix — bid automation skips these).
-	StrategyTypePriceMarginFloor     = "price_margin_floor"
-	StrategyTypePriceInventoryDemand = "price_inventory_demand"
-	StrategyTypePriceAdLinked        = "price_ad_linked"
-	StrategyTypePricePeakHours       = "price_peak_hours"
+	StrategyTypePriceMarginFloor      = "price_margin_floor"
+	StrategyTypePriceInventoryDemand  = "price_inventory_demand"
+	StrategyTypePriceAdLinked         = "price_ad_linked"
+	StrategyTypePricePeakHours        = "price_peak_hours"
 	StrategyTypePriceCompetitorFollow = "price_competitor_follow"
 )
 
@@ -71,6 +71,7 @@ type StrategyParams struct {
 	BaseMultiplier     float64            `json:"base_multiplier,omitempty"`
 	HourlyMultipliers  map[string]float64 `json:"hourly_multipliers,omitempty"`
 	WeekdayMultipliers map[string]float64 `json:"weekday_multipliers,omitempty"`
+	Timezone           string             `json:"timezone,omitempty"` // IANA timezone, default: Europe/Moscow
 
 	// Search playbook strategy (position-targeting, frequency-tiered search).
 	// FrequencyTier tags the campaign's keyword group: high|mid|low. When
@@ -97,17 +98,17 @@ type StrategyParams struct {
 	AllowIncreaseWithoutStock bool    `json:"allow_increase_without_stock,omitempty"` // default: false
 
 	// Repricer (price_* strategies). All *Rub values are integer rubles.
-	MinPriceRub           *int64  `json:"min_price_rub,omitempty"`             // hard floor override (on top of margin floor)
-	MaxPriceRub           *int64  `json:"max_price_rub,omitempty"`             // required for upward moves
-	StepPercent           float64 `json:"step_percent,omitempty"`              // default: 3, cap 10
-	OverstockDays         int     `json:"overstock_days,omitempty"`            // default: 60
-	LowStockDays          int     `json:"low_stock_days,omitempty"`            // default: 14
-	SlowVelocityPerDay    float64 `json:"slow_velocity_per_day,omitempty"`     // units/day below which "slow"
-	PriceCooldownHours    int     `json:"price_cooldown_hours,omitempty"`      // default: 24
-	MaxPriceChangesPerDay int     `json:"max_price_changes_per_day,omitempty"` // default: 2
-	PriceApplyMode        string  `json:"price_apply_mode,omitempty"`          // dry_run|auto, default dry_run
-	AdLookbackDays       int      `json:"ad_lookback_days,omitempty"`        // default: 7 (price_ad_linked)
-	MaxAllowedDRRPercent *float64 `json:"max_allowed_drr_percent,omitempty"` // price_ad_linked: DRR ceiling; falls back to product economics
+	MinPriceRub           *int64   `json:"min_price_rub,omitempty"`             // hard floor override (on top of margin floor)
+	MaxPriceRub           *int64   `json:"max_price_rub,omitempty"`             // required for upward moves
+	StepPercent           float64  `json:"step_percent,omitempty"`              // default: 3, cap 10
+	OverstockDays         int      `json:"overstock_days,omitempty"`            // default: 60
+	LowStockDays          int      `json:"low_stock_days,omitempty"`            // default: 14
+	SlowVelocityPerDay    float64  `json:"slow_velocity_per_day,omitempty"`     // units/day below which "slow"
+	PriceCooldownHours    int      `json:"price_cooldown_hours,omitempty"`      // default: 24
+	MaxPriceChangesPerDay int      `json:"max_price_changes_per_day,omitempty"` // default: 2
+	PriceApplyMode        string   `json:"price_apply_mode,omitempty"`          // dry_run|auto, default dry_run
+	AdLookbackDays        int      `json:"ad_lookback_days,omitempty"`          // default: 7 (price_ad_linked)
+	MaxAllowedDRRPercent  *float64 `json:"max_allowed_drr_percent,omitempty"`   // price_ad_linked: DRR ceiling; falls back to product economics
 
 	// price_peak_hours: percentage band around each product's own price.
 	PeakUpliftPercent   float64 `json:"peak_uplift_percent,omitempty"`   // % above current at a demand peak; default 8
@@ -257,6 +258,7 @@ func DefaultStrategyParams() StrategyParams {
 		MinClicks:           10,
 		LookbackDays:        7,
 		BaseMultiplier:      1.0,
+		Timezone:            "Europe/Moscow",
 		MinStockForIncrease: 1,
 		CooldownMinutes:     120,
 		MaxChangesPerDay:    3,
@@ -287,6 +289,9 @@ func (p StrategyParams) Merged() StrategyParams {
 	}
 	if p.BaseMultiplier == 0 {
 		p.BaseMultiplier = defaults.BaseMultiplier
+	}
+	if p.Timezone == "" {
+		p.Timezone = defaults.Timezone
 	}
 	if p.MinStockForIncrease == 0 {
 		p.MinStockForIncrease = defaults.MinStockForIncrease

@@ -10,6 +10,15 @@ import (
 type WorkspaceSettings struct {
 	RecommendationThresholds *RecommendationThresholds `json:"recommendation_thresholds,omitempty"`
 	Notifications            *NotificationSettings     `json:"notifications,omitempty"`
+	Automation               *AutomationSettings       `json:"automation,omitempty"`
+}
+
+// AutomationSettings is the workspace-level fail-closed switch for external
+// advertising actions. A missing block or Enabled=false means analytics only.
+type AutomationSettings struct {
+	Enabled    bool   `json:"enabled"`
+	ManualHold bool   `json:"manual_hold,omitempty"`
+	HoldReason string `json:"hold_reason,omitempty"`
 }
 
 // RecommendationThresholds configures the recommendation engine per workspace.

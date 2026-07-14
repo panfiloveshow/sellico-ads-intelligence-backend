@@ -35,6 +35,7 @@ const (
 var workspaceSyncLocks sync.Map
 
 type syncRunner interface {
+	SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncCampaignStats(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncPhrases(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
@@ -219,7 +220,7 @@ func (p *Processor) WithExtendedEngine(e extendedRecommendationGenerator) *Proce
 
 // HandleBidAutomation runs the bid engine for a single workspace.
 func (p *Processor) HandleBidAutomation(ctx context.Context, task *asynq.Task) error {
-	_, workspaceID, err := parseWorkspacePayload(task.Payload())
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
 	if err != nil {
 		return err
 	}
@@ -229,18 +230,19 @@ func (p *Processor) HandleBidAutomation(ctx context.Context, task *asynq.Task) e
 		return nil
 	}
 
-	changesApplied, err := p.bidRunner.RunForWorkspace(ctx, workspaceID)
-	if err != nil {
-		p.logger.Error().Err(err).Str("workspace_id", workspaceID.String()).Msg("bid automation failed")
-		return err
-	}
+	return p.runWithJobRun(ctx, TaskBidAutomation, &workspaceID, payload, func() (map[string]any, error) {
+		changesApplied, runErr := p.bidRunner.RunForWorkspace(ctx, workspaceID)
+		if runErr != nil {
+			p.logger.Error().Err(runErr).Str("workspace_id", workspaceID.String()).Msg("bid automation failed")
+			return map[string]any{"changes_applied": changesApplied}, runErr
+		}
 
-	p.logger.Info().
-		Str("workspace_id", workspaceID.String()).
-		Int("changes_applied", changesApplied).
-		Msg("bid automation completed")
-
-	return nil
+		p.logger.Info().
+			Str("workspace_id", workspaceID.String()).
+			Int("changes_applied", changesApplied).
+			Msg("bid automation completed")
+		return map[string]any{"changes_applied": changesApplied}, nil
+	})
 }
 
 // HandleCollectDelivery collects delivery data for a workspace.
@@ -621,55 +623,56 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 			}
 		}
 
-		// Default: sync ALL cabinets in workspace
-		campaignSummary, campaignErr := p.syncService.SyncCampaigns(ctx, workspaceID)
-		campaignStatsSummary, campaignStatsErr := p.syncService.SyncCampaignStats(ctx, workspaceID)
-		phraseSummary, phraseErr := p.syncService.SyncPhrases(ctx, workspaceID)
-		productSummary, productErr := p.syncService.SyncProducts(ctx, workspaceID)
-		syncIssueStrings := collectSyncIssues(campaignSummary, campaignStatsSummary, phraseSummary, productSummary)
-		wbErrors, rateLimited, partialReasons := collectSyncMetadata(campaignSummary, campaignStatsSummary, phraseSummary, productSummary)
+		// Default: run the same complete nine-phase pipeline used by an
+		// explicit cabinet sync for every cabinet in the workspace.
+		summary, syncErr := p.syncService.SyncWorkspace(ctx, workspaceID)
+		syncIssueStrings := collectSyncIssues(summary)
 		result := map[string]any{
-			"cabinets":             maxInt(campaignSummary.Cabinets, campaignStatsSummary.Cabinets, phraseSummary.Cabinets, productSummary.Cabinets),
-			"campaigns":            campaignSummary.Campaigns,
-			"campaign_stats":       campaignStatsSummary.CampaignStats,
-			"campaigns_total":      campaignSummary.Campaigns,
-			"campaigns_with_stats": campaignStatsSummary.CampaignStats,
-			"campaign_budgets":     campaignSummary.CampaignBudgets,
-			"phrases":              phraseSummary.Phrases,
-			"phrase_stats":         phraseSummary.PhraseStats,
-			"phrases_with_stats":   phraseSummary.PhraseStats,
-			"products":             productSummary.Products,
-			"product_stats":        campaignStatsSummary.ProductStats,
-			"products_with_stats":  campaignStatsSummary.ProductStats,
-			"business_orders":      campaignSummary.BusinessOrders + campaignStatsSummary.BusinessOrders + phraseSummary.BusinessOrders + productSummary.BusinessOrders,
-			"business_sales":       campaignSummary.BusinessSales + campaignStatsSummary.BusinessSales + phraseSummary.BusinessSales + productSummary.BusinessSales,
-			"skipped":              campaignStatsSummary.SkippedCampaign + phraseSummary.SkippedCampaign,
+			"cabinets":             summary.Cabinets,
+			"campaigns":            summary.Campaigns,
+			"campaign_stats":       summary.CampaignStats,
+			"campaigns_total":      summary.Campaigns,
+			"campaigns_with_stats": summary.CampaignStats,
+			"campaign_budgets":     summary.CampaignBudgets,
+			"ad_balances":          summary.AdBalances,
+			"finance_docs":         summary.FinanceDocs,
+			"sales_funnel":         summary.SalesFunnel,
+			"commission_tariffs":   summary.CommissionTariffs,
+			"phrases":              summary.Phrases,
+			"phrase_stats":         summary.PhraseStats,
+			"phrases_with_stats":   summary.PhraseStats,
+			"products":             summary.Products,
+			"product_stats":        summary.ProductStats,
+			"products_with_stats":  summary.ProductStats,
+			"business_orders":      summary.BusinessOrders,
+			"business_sales":       summary.BusinessSales,
+			"skipped":              summary.SkippedCampaign,
 			"sync_issues":          syncIssueStrings,
-			"wb_errors":            wbErrors,
-			"rate_limited":         rateLimited > 0,
-			"rate_limit_count":     rateLimited,
-			"partial_reasons":      partialReasons,
-			"rate_limit_endpoint":  firstNonEmptyString(campaignSummary.RateLimitEndpoint, campaignStatsSummary.RateLimitEndpoint, phraseSummary.RateLimitEndpoint, productSummary.RateLimitEndpoint),
-			"retry_after_seconds":  maxInt(campaignSummary.RetryAfterSeconds, campaignStatsSummary.RetryAfterSeconds, phraseSummary.RetryAfterSeconds, productSummary.RetryAfterSeconds),
-			"date_from":            firstNonEmptyString(campaignStatsSummary.DateFrom, phraseSummary.DateFrom),
-			"date_to":              firstNonEmptyString(campaignStatsSummary.DateTo, phraseSummary.DateTo),
+			"wb_errors":            summary.WBErrors,
+			"rate_limited":         summary.RateLimited > 0,
+			"rate_limit_count":     summary.RateLimited,
+			"partial_reasons":      partialReasons(summary.Issues),
+			"rate_limit_endpoint":  summary.RateLimitEndpoint,
+			"retry_after_seconds":  summary.RetryAfterSeconds,
+			"date_from":            summary.DateFrom,
+			"date_to":              summary.DateTo,
 			"campaign_requests": map[string]any{
-				"campaigns":        campaignSummary.Campaigns,
-				"campaign_stats":   campaignStatsSummary.CampaignStats,
-				"campaign_budgets": campaignSummary.CampaignBudgets,
-				"phrases":          phraseSummary.Phrases,
-				"phrase_stats":     phraseSummary.PhraseStats,
-				"products":         productSummary.Products,
-				"skipped_campaign": campaignStatsSummary.SkippedCampaign + phraseSummary.SkippedCampaign,
+				"campaigns":        summary.Campaigns,
+				"campaign_stats":   summary.CampaignStats,
+				"campaign_budgets": summary.CampaignBudgets,
+				"phrases":          summary.Phrases,
+				"phrase_stats":     summary.PhraseStats,
+				"products":         summary.Products,
+				"skipped_campaign": summary.SkippedCampaign,
 			},
 		}
-		if nextAllowedAt := firstNonNilTime(campaignSummary.NextAllowedAt, campaignStatsSummary.NextAllowedAt, phraseSummary.NextAllowedAt, productSummary.NextAllowedAt); nextAllowedAt != nil {
-			result["next_allowed_at"] = nextAllowedAt.Format(time.RFC3339)
+		if summary.NextAllowedAt != nil {
+			result["next_allowed_at"] = summary.NextAllowedAt.Format(time.RFC3339)
 		}
 
-		if err := firstNonNilError(campaignErr, campaignStatsErr, phraseErr, productErr); err != nil {
+		if syncErr != nil {
 			p.notifySyncResult(ctx, workspaceID, "partial", syncIssueStrings)
-			return result, err
+			return result, syncErr
 		}
 
 		recommendationTaskStatus, enqueueErr := p.enqueueRecommendationGeneration(workspaceID)
@@ -1392,6 +1395,12 @@ func (p *Processor) enqueueWorkspaceTask(taskType string, workspaceID uuid.UUID,
 	}
 	if taskType == TaskSyncWorkspace {
 		opts = append(opts, asynq.Unique(55*time.Minute))
+	}
+	if taskType == TaskBidAutomation {
+		// A workspace must have at most one pending/running autobid task. The
+		// database-side action claim is the final safety barrier; this queue
+		// uniqueness also prevents redundant evaluations under scheduler races.
+		opts = append(opts, asynq.Unique(10*time.Minute))
 	}
 	opts = append(opts, extraOpts...)
 

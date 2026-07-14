@@ -1379,7 +1379,7 @@ func TestRecommendationEngineClosesResolvedCampaignHighSpendLowOrdersRecommendat
 	assert.Equal(t, domain.RecommendationStatusCompleted, db.recommendations[recommendationID].Status)
 }
 
-func TestRecommendationEngineCreatesCampaignRaiseBidRecommendation(t *testing.T) {
+func TestRecommendationEngineCreatesNonExecutableCampaignBidAdjustmentForScaling(t *testing.T) {
 	db := newRecommendationInMemDB()
 	queries := sqlcgen.New(db)
 	recommendationService := NewRecommendationService(queries)
@@ -1416,13 +1416,13 @@ func TestRecommendationEngineCreatesCampaignRaiseBidRecommendation(t *testing.T)
 	types := make([]string, 0, len(result))
 	for _, recommendation := range result {
 		types = append(types, recommendation.Type)
-		if recommendation.Type == domain.RecommendationTypeRaiseBid {
+		if recommendation.Type == domain.RecommendationTypeBidAdjustment {
 			require.NotNil(t, recommendation.CampaignID)
 			assert.Equal(t, campaignID, *recommendation.CampaignID)
 			assert.Contains(t, recommendation.Description, "масштабирования")
 		}
 	}
-	assert.Contains(t, types, domain.RecommendationTypeRaiseBid)
+	assert.Contains(t, types, domain.RecommendationTypeBidAdjustment)
 }
 
 func TestRecommendationEngineClosesResolvedCampaignRaiseBidRecommendation(t *testing.T) {
@@ -1478,7 +1478,7 @@ func TestRecommendationEngineClosesResolvedCampaignRaiseBidRecommendation(t *tes
 	assert.Equal(t, domain.RecommendationStatusCompleted, db.recommendations[recommendationID].Status)
 }
 
-func TestRecommendationEngineCreatesCampaignLowerBidRecommendation(t *testing.T) {
+func TestRecommendationEngineCreatesNonExecutableCampaignBidAdjustmentForHighCost(t *testing.T) {
 	db := newRecommendationInMemDB()
 	queries := sqlcgen.New(db)
 	recommendationService := NewRecommendationService(queries)
@@ -1510,7 +1510,7 @@ func TestRecommendationEngineCreatesCampaignLowerBidRecommendation(t *testing.T)
 
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	assert.Equal(t, domain.RecommendationTypeLowerBid, result[0].Type)
+	assert.Equal(t, domain.RecommendationTypeBidAdjustment, result[0].Type)
 	require.NotNil(t, result[0].CampaignID)
 	assert.Equal(t, campaignID, *result[0].CampaignID)
 	assert.Contains(t, result[0].Description, "неэффективный расход")

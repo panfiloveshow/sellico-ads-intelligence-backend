@@ -66,6 +66,9 @@ func (s *WorkspaceSettingsService) UpdateSettings(ctx context.Context, actorID, 
 	if input.Notifications != nil {
 		existing.Notifications = input.Notifications
 	}
+	if input.Automation != nil {
+		existing.Automation = input.Automation
+	}
 
 	settingsJSON, err := json.Marshal(existing)
 	if err != nil {

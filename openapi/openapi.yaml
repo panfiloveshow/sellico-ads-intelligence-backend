@@ -747,6 +747,42 @@ paths:
       responses:
         "200": { description: Bid list, content: { application/json: { schema: { type: object } } } }
 
+  /api/v1/campaigns/{id}/bids/min:
+    get:
+      tags: [Campaigns]
+      summary: Minimum WB bids for campaign product cards
+      description: Resolves payment and placement types from the latest synced real campaign settings, then calls the official WB minimum-bids endpoint.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - name: nm_id
+          in: query
+          required: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items: { type: integer, format: int64, minimum: 1 }
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: Minimum bids in kopecks per product and placement
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [nmId, placement, minBid]
+                  properties:
+                    nmId: { type: integer, format: int64 }
+                    placement: { type: string, enum: [combined, search, recommendation] }
+                    minBid: { type: integer, format: int64 }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+
   /api/v1/campaigns/{id}/cluster-bids:
     post:
       tags: [Campaigns]
@@ -3248,7 +3284,7 @@ components:
       in: query
       schema:
         type: string
-        enum: [active, completed, dismissed]
+        enum: [active, applying, apply_unknown, completed, dismissed, invalidated]
     RecommendationTaskCategory:
       name: task_category
       in: query
@@ -3942,7 +3978,7 @@ components:
           nullable: true
         status:
           type: string
-          enum: [active, completed, dismissed]
+          enum: [active, applying, apply_unknown, completed, dismissed, invalidated]
         task_category:
           type: string
           enum: [losses, growth, card_tasks, api_risks]

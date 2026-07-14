@@ -68,6 +68,47 @@ INSERT INTO wb_bid_actions (
 	return err
 }
 
+type ClaimAutomationBidActionParams struct {
+	AutomationKey            string
+	AutomationObservationKey string
+	WorkspaceID              pgtype.UUID
+	SellerCabinetID          pgtype.UUID
+	CampaignID               pgtype.UUID
+	ProductID                pgtype.UUID
+	WBCampaignID             int64
+	WBProductID              int64
+	OldBid                   int64
+	NewBid                   int64
+	Reason                   string
+}
+
+func (q *Queries) ClaimAutomationBidAction(ctx context.Context, arg ClaimAutomationBidActionParams) (bool, error) {
+	command, err := q.db.Exec(ctx, `INSERT INTO wb_bid_actions (
+		automation_key, automation_observation_key, workspace_id, seller_cabinet_id, campaign_id, product_id,
+		wb_campaign_id, wb_product_id, action_type, old_bid, new_bid, reason, status
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'strategy_bid',$9,$10,$11,'pending')
+	ON CONFLICT DO NOTHING`,
+		arg.AutomationKey, arg.AutomationObservationKey, arg.WorkspaceID, arg.SellerCabinetID, arg.CampaignID, arg.ProductID,
+		arg.WBCampaignID, arg.WBProductID, arg.OldBid, arg.NewBid, arg.Reason)
+	if err != nil {
+		return false, err
+	}
+	return command.RowsAffected() == 1, nil
+}
+
+type CompleteAutomationBidActionParams struct {
+	AutomationKey string
+	Status        string
+	WBResponse    []byte
+}
+
+func (q *Queries) CompleteAutomationBidAction(ctx context.Context, arg CompleteAutomationBidActionParams) error {
+	_, err := q.db.Exec(ctx, `UPDATE wb_bid_actions
+		SET status = $2, wb_response = $3, updated_at = now()
+		WHERE automation_key = $1 AND status = 'pending'`, arg.AutomationKey, arg.Status, arg.WBResponse)
+	return err
+}
+
 type UpsertSellerAdBalanceParams struct {
 	SellerCabinetID pgtype.UUID
 	Balance         int64
@@ -115,6 +156,32 @@ LIMIT 1`, sellerCabinetID)
 		&item.CapturedAt,
 		&item.CreatedAt,
 	)
+	return item, err
+}
+
+type CampaignDailyLimit struct {
+	ID               pgtype.UUID
+	WorkspaceID      pgtype.UUID
+	SellerCabinetID  pgtype.UUID
+	CampaignID       pgtype.UUID
+	DailyLimit       int64
+	Enabled          bool
+	PauseWhenReached bool
+	ResumeNextDay    bool
+	LastCheckedAt    pgtype.Timestamptz
+	LastActionAt     pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) GetCampaignDailyLimit(ctx context.Context, campaignID pgtype.UUID) (CampaignDailyLimit, error) {
+	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, campaign_id, daily_limit,
+		enabled, pause_when_reached, resume_next_day, last_checked_at, last_action_at, created_at, updated_at
+		FROM campaign_daily_limits WHERE campaign_id = $1`, campaignID)
+	var item CampaignDailyLimit
+	err := row.Scan(&item.ID, &item.WorkspaceID, &item.SellerCabinetID, &item.CampaignID, &item.DailyLimit,
+		&item.Enabled, &item.PauseWhenReached, &item.ResumeNextDay, &item.LastCheckedAt, &item.LastActionAt,
+		&item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 

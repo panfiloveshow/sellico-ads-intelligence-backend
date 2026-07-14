@@ -19,6 +19,22 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// APIError preserves machine-readable WB response metadata across service
+// boundaries. In particular, callers must honor WB's Retry-After value rather
+// than replacing it with an endpoint-wide guess.
+type APIError struct {
+	StatusCode int
+	RetryAfter time.Duration
+	URL        string
+	Message    string
+}
+
+func (e *APIError) Error() string { return e.Message }
+
+func (e *APIError) Unwrap() error {
+	return apperror.New(apperror.ErrWBAPIError, e.Message)
+}
+
 const (
 	maxRetries        = 3
 	backoffMultiplier = 3.0
@@ -528,10 +544,15 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 				Int("attempt", attempt).
 				Msg("rate limited (429), pausing")
 
-			lastErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("rate limited (429) on %s", url))
+			lastErr = &APIError{
+				StatusCode: http.StatusTooManyRequests,
+				RetryAfter: retryAfter,
+				URL:        url,
+				Message:    fmt.Sprintf("rate limited (429) on %s", url),
+			}
 			if attempt < maxRetries {
 				if err := sleepWithContext(ctx, retryAfter); err != nil {
-					return nil, nil, err
+					return nil, nil, fmt.Errorf("%w: retry wait interrupted: %v", lastErr, err)
 				}
 			}
 			continue
@@ -583,11 +604,17 @@ func parseRetryAfter(header string) time.Duration {
 	if header == "" {
 		return defaultRetryAfter
 	}
-	seconds, err := strconv.Atoi(header)
-	if err != nil || seconds <= 0 {
-		return defaultRetryAfter
+	seconds, err := strconv.Atoi(strings.TrimSpace(header))
+	if err == nil && seconds > 0 {
+		return time.Duration(seconds) * retryAfterUnit
 	}
-	return time.Duration(seconds) * retryAfterUnit
+	if retryAt, dateErr := http.ParseTime(header); dateErr == nil {
+		delay := time.Until(retryAt)
+		if delay > 0 {
+			return delay
+		}
+	}
+	return defaultRetryAfter
 }
 
 // sleepWithContext sleeps for the given duration, respecting context cancellation.

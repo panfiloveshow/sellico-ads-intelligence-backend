@@ -48,10 +48,9 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 		domain.StrategyTypeROAS,
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
-		domain.StrategyTypeRecommendation,
 		domain.StrategyTypeSearchPlaybook:
 	default:
-		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, recommendation, search_playbook"
+		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, search_playbook"
 	}
 	params := input.Params
 	if params.MinBid < 0 {
@@ -65,6 +64,9 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	}
 	if params.MaxCPO < 0 {
 		errors["params.max_cpo"] = "must be non-negative"
+	}
+	if params.MaxACoS < 0 || params.MaxACoS > 1000 {
+		errors["params.max_acos"] = "must be between 0 and 1000"
 	}
 	if params.AutomationLevel < 0 || params.AutomationLevel > 4 {
 		errors["params.automation_level"] = "must be between 1 and 4"
@@ -92,6 +94,20 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	}
 	if params.MaxDataAgeHours < 0 {
 		errors["params.max_data_age_hours"] = "must be non-negative"
+	}
+	switch input.Type {
+	case domain.StrategyTypeACoS:
+		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
+			errors["params.target_acos"] = "must be greater than 0 and at most 1000"
+		}
+	case domain.StrategyTypeROAS:
+		if params.TargetROAS <= 0 || params.TargetROAS > 1000 {
+			errors["params.target_roas"] = "must be greater than 0 and at most 1000"
+		}
+	case domain.StrategyTypeAntiSliv:
+		if params.MaxACoS <= 0 {
+			errors["params.max_acos"] = "must be greater than 0"
+		}
 	}
 	return errors
 }

@@ -96,11 +96,23 @@ func (s *SyncJobService) TriggerSellerCabinetSync(ctx context.Context, actorID, 
 	}
 
 	jobRunMetadata["queue_status"] = status
+	jobRunStatus, duplicateSkipped := syncJobRunQueueState(status)
+	finishedAt := pgtype.Timestamptz{}
+	errorMessage := pgtype.Text{}
+	if duplicateSkipped {
+		// The queue's uniqueness window accepted no new task. Finalize this
+		// request row immediately so it cannot remain as a ghost pending run.
+		jobRunStatus = "partial"
+		finishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+		errorMessage = pgtype.Text{String: "workspace sync task already queued", Valid: true}
+		jobRunMetadata["result_state"] = "partial"
+		jobRunMetadata["duplicate_skipped"] = true
+	}
 	_, _ = s.queries.UpdateJobRunStatus(ctx, sqlcgen.UpdateJobRunStatusParams{
 		ID:           jobRun.ID,
-		Status:       "pending",
-		FinishedAt:   pgtype.Timestamptz{},
-		ErrorMessage: pgtype.Text{},
+		Status:       jobRunStatus,
+		FinishedAt:   finishedAt,
+		ErrorMessage: errorMessage,
 		Metadata:     mustJSON(jobRunMetadata),
 	})
 
@@ -127,6 +139,13 @@ func (s *SyncJobService) TriggerSellerCabinetSync(ctx context.Context, actorID, 
 		CabinetID:   cabinetID,
 		JobRunID:    uuidFromPgtype(jobRun.ID),
 	}, nil
+}
+
+func syncJobRunQueueState(queueStatus string) (jobStatus string, duplicateSkipped bool) {
+	if queueStatus == "already_queued" {
+		return "partial", true
+	}
+	return "pending", false
 }
 
 func uuidPtr(value uuid.UUID) *uuid.UUID {

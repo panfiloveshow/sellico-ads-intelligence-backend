@@ -14,7 +14,7 @@ ON CONFLICT (campaign_id, wb_product_id, wb_norm_query) DO UPDATE SET
     wb_cluster_id = EXCLUDED.wb_cluster_id,
     keyword = EXCLUDED.keyword,
     count = EXCLUDED.count,
-    current_bid = EXCLUDED.current_bid,
+    current_bid = COALESCE(EXCLUDED.current_bid, phrases.current_bid),
     updated_at = now()
 RETURNING *;
 

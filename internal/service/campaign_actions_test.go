@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
@@ -78,6 +79,84 @@ func TestNormalizeCreateCampaignActionInputOmitsPlacementsForUnifiedBid(t *testi
 	}
 	if len(input.PlacementTypes) != 0 {
 		t.Fatalf("unified bid campaign must not send placement_types, got %+v", input.PlacementTypes)
+	}
+}
+
+func TestMinimumBidPlacementTypesFollowWBContract(t *testing.T) {
+	manual := sqlcgen.Campaign{
+		BidType:                  domain.BidTypeManual,
+		PlacementSearch:          pgtype.Bool{Bool: true, Valid: true},
+		PlacementRecommendations: pgtype.Bool{Bool: true, Valid: true},
+	}
+	placements, err := minimumBidPlacementTypes(manual)
+	if err != nil {
+		t.Fatalf("expected manual placements, got %v", err)
+	}
+	if strings.Join(placements, ",") != "search,recommendation" {
+		t.Fatalf("unexpected WB minimum-bid placements: %v", placements)
+	}
+
+	placements, err = minimumBidPlacementTypes(sqlcgen.Campaign{BidType: domain.BidTypeUnified})
+	if err != nil || len(placements) != 1 || placements[0] != "combined" {
+		t.Fatalf("expected combined placement for unified campaign, got %v, %v", placements, err)
+	}
+}
+
+func TestValidateCampaignBidPlacementFollowsBidType(t *testing.T) {
+	manual := sqlcgen.Campaign{
+		BidType:                  domain.BidTypeManual,
+		PlacementSearch:          pgtype.Bool{Bool: true, Valid: true},
+		PlacementRecommendations: pgtype.Bool{Bool: false, Valid: true},
+	}
+	if err := validateCampaignBidPlacement(manual, "search"); err != nil {
+		t.Fatalf("expected enabled manual search placement, got %v", err)
+	}
+	if err := validateCampaignBidPlacement(manual, "recommendations"); err == nil {
+		t.Fatal("expected disabled recommendations placement to be rejected")
+	}
+	if err := validateCampaignBidPlacement(sqlcgen.Campaign{BidType: domain.BidTypeUnified}, "search"); err == nil {
+		t.Fatal("expected unified campaign search placement to be rejected")
+	}
+}
+
+func TestRecommendationFreshnessReasonRejectsStaleOrMissingEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	if reason := recommendationFreshnessReason(pgtype.Timestamptz{}, now); reason == "" {
+		t.Fatal("expected missing recommendation timestamp to be rejected")
+	}
+	stale := pgtype.Timestamptz{Time: now.Add(-domain.RecommendationOverdueAfter - time.Minute), Valid: true}
+	if reason := recommendationFreshnessReason(stale, now); reason == "" {
+		t.Fatal("expected stale recommendation to be rejected")
+	}
+}
+
+func TestRecommendationFreshnessReasonAllowsFreshEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	fresh := pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true}
+	if reason := recommendationFreshnessReason(fresh, now); reason != "" {
+		t.Fatalf("expected fresh recommendation, got %q", reason)
+	}
+}
+
+func TestRecommendationCampaignBidPlacementUsesWBPlacementRules(t *testing.T) {
+	placement, err := recommendationCampaignBidPlacement(sqlcgen.Campaign{BidType: domain.BidTypeUnified})
+	if err != nil || placement != "combined" {
+		t.Fatalf("expected unified recommendation to use combined, got %q, %v", placement, err)
+	}
+	placement, err = recommendationCampaignBidPlacement(sqlcgen.Campaign{
+		BidType:         domain.BidTypeManual,
+		PlacementSearch: pgtype.Bool{Bool: true, Valid: true},
+	})
+	if err != nil || placement != "search" {
+		t.Fatalf("expected single manual search placement, got %q, %v", placement, err)
+	}
+	_, err = recommendationCampaignBidPlacement(sqlcgen.Campaign{
+		BidType:                  domain.BidTypeManual,
+		PlacementSearch:          pgtype.Bool{Bool: true, Valid: true},
+		PlacementRecommendations: pgtype.Bool{Bool: true, Valid: true},
+	})
+	if err == nil {
+		t.Fatal("expected ambiguous campaign-level placement to be rejected")
 	}
 }
 

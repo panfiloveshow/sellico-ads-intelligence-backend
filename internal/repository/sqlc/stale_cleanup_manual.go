@@ -10,7 +10,19 @@ import (
 // Returns the number of rows affected.
 func (q *Queries) MarkStaleCampaigns(ctx context.Context, sellerCabinetID pgtype.UUID, activeWBIDs []int64) (int64, error) {
 	if len(activeWBIDs) == 0 {
-		return 0, nil
+		// This method is called only after a successful WB campaign-list
+		// response. An empty successful response is authoritative and must
+		// retire all previously known campaigns for the cabinet.
+		tag, err := q.db.Exec(ctx,
+			`UPDATE campaigns SET status = 'deleted', updated_at = NOW()
+			 WHERE seller_cabinet_id = $1
+			   AND status != 'deleted'`,
+			sellerCabinetID,
+		)
+		if err != nil {
+			return 0, err
+		}
+		return tag.RowsAffected(), nil
 	}
 	tag, err := q.db.Exec(ctx,
 		`UPDATE campaigns SET status = 'deleted', updated_at = NOW()

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
@@ -83,7 +84,7 @@ func (s *SyncService) recordWBRateLimitFromError(ctx context.Context, cabinetID 
 	if err == nil || !isRateLimitIssue(err.Error()) {
 		return
 	}
-	next, retryAfterSeconds := wbRateLimitWindow(endpoint)
+	next, retryAfterSeconds := wbRateLimitWindowFromError(endpoint, err)
 	lastError := strings.TrimSpace(err.Error())
 	if len(lastError) > 500 {
 		lastError = lastError[:500]
@@ -104,7 +105,7 @@ func (s *SyncService) markSummaryRateLimitFromError(summary *SyncSummary, endpoi
 	if summary == nil || err == nil || !isRateLimitIssue(err.Error()) {
 		return
 	}
-	next, retryAfterSeconds := wbRateLimitWindow(endpoint)
+	next, retryAfterSeconds := wbRateLimitWindowFromError(endpoint, err)
 	summary.RateLimitEndpoint = endpoint
 	summary.RetryAfterSeconds = retryAfterSeconds
 	summary.NextAllowedAt = &next
@@ -114,6 +115,16 @@ func wbRateLimitWindow(endpoint string) (time.Time, int) {
 	delay := wbEndpointFallbackDelay(endpoint)
 	next := time.Now().UTC().Add(delay)
 	return next, int(delay.Seconds())
+}
+
+func wbRateLimitWindowFromError(endpoint string, err error) (time.Time, int) {
+	delay := wbEndpointFallbackDelay(endpoint)
+	var apiErr *wb.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 429 && apiErr.RetryAfter > 0 {
+		delay = apiErr.RetryAfter
+	}
+	next := time.Now().UTC().Add(delay)
+	return next, int(math.Ceil(delay.Seconds()))
 }
 
 func blockedByWBRateLimitMessage(endpoint string, next time.Time) string {

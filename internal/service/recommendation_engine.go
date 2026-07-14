@@ -177,9 +177,12 @@ func (e *RecommendationEngine) GenerateForWorkspace(ctx context.Context, workspa
 					CampaignID:  campaignID,
 					Title:       "Ставка кампании слишком высока для текущей отдачи",
 					Description: fmt.Sprintf("Кампания %q: CPC %.2f, CPO %.2f — неэффективный расход при текущей ставке.", campaign.Name, cpc, cpo),
-					Type:        domain.RecommendationTypeLowerBid,
-					Severity:    domain.SeverityMedium,
-					Confidence:  0.76,
+					// Campaign aggregates do not contain a single authoritative current
+					// bid/placement. Keep this as a manager decision, not an executable
+					// raise/lower action; phrase-level recommendations carry real bids.
+					Type:       domain.RecommendationTypeBidAdjustment,
+					Severity:   domain.SeverityMedium,
+					Confidence: 0.76,
 					SourceMetrics: map[string]any{
 						"cpc":    cpc,
 						"cpo":    cpo,
@@ -214,9 +217,11 @@ func (e *RecommendationEngine) GenerateForWorkspace(ctx context.Context, workspa
 					CampaignID:  campaignID,
 					Title:       "Кампания конвертирует эффективно — можно масштабировать",
 					Description: fmt.Sprintf("Кампания %q: %d заказов, ROAS %.2f за %s — есть потенциал для масштабирования.", campaign.Name, *orders, roas, stat.Date.Time.Format("2006-01-02")),
-					Type:        domain.RecommendationTypeRaiseBid,
-					Severity:    severity,
-					Confidence:  0.75,
+					// Campaign aggregates cannot safely identify one current bid and
+					// placement, so this remains a non-executable manager decision.
+					Type:       domain.RecommendationTypeBidAdjustment,
+					Severity:   severity,
+					Confidence: 0.75,
 					SourceMetrics: map[string]any{
 						"clicks":  stat.Clicks,
 						"orders":  *orders,
@@ -246,6 +251,19 @@ func (e *RecommendationEngine) GenerateForWorkspace(ctx context.Context, workspa
 		}
 		if raiseBidFired {
 			if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
+				return nil, closeErr
+			}
+		}
+		// Retire legacy campaign-level executable recommendations. Only
+		// phrase-level raise/lower recommendations have an authoritative bid.
+		if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
+			return nil, closeErr
+		}
+		if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
+			return nil, closeErr
+		}
+		if !lowerBidFired && !raiseBidFired {
+			if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeBidAdjustment, campaignID, nil, nil); closeErr != nil {
 				return nil, closeErr
 			}
 		}

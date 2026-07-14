@@ -24,6 +24,7 @@ type WBCampaignDTO struct {
 	WBStartedAt              *time.Time             `json:"wbStartedAt,omitempty"`
 	WBUpdatedAt              *time.Time             `json:"wbUpdatedAt,omitempty"`
 	WBDeletedAt              *time.Time             `json:"wbDeletedAt,omitempty"`
+	PartialError             string                 `json:"-"`
 }
 
 type WBCampaignProductDTO struct {
@@ -103,6 +104,10 @@ type WBSearchClusterStatDTO struct {
 	CPC       float64 `json:"cpc"`
 	CPM       float64 `json:"cpm"`
 	AvgPos    float64 `json:"avg_pos"`
+	// CurrentBid is the real bid returned by /adv/v0/normquery/get-bids for
+	// this product/query pair. It is intentionally nullable: a missing bid
+	// must never be interpreted as zero or overwrite the last observed value.
+	CurrentBid *int64 `json:"current_bid,omitempty"`
 }
 
 // WBBidDTO represents recommended bids from the WB Advertising API.

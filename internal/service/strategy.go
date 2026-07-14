@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -135,8 +137,9 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeROAS,
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
-		domain.StrategyTypeRecommendation,
 		domain.StrategyTypeSearchPlaybook:
+	case domain.StrategyTypeRecommendation:
+		return apperror.New(apperror.ErrValidation, "recommendation strategies are not executable; use explicit recommendation approval")
 	case domain.StrategyTypePriceMarginFloor,
 		domain.StrategyTypePriceInventoryDemand,
 		domain.StrategyTypePriceAdLinked,
@@ -158,6 +161,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 		return apperror.New(apperror.ErrValidation, "max_cpc must be non-negative")
 	case params.MaxCPO < 0:
 		return apperror.New(apperror.ErrValidation, "max_cpo must be non-negative")
+	case params.MaxACoS < 0 || params.MaxACoS > 1000:
+		return apperror.New(apperror.ErrValidation, "max_acos must be between 0 and 1000")
 	case params.AutomationLevel < 0 || params.AutomationLevel > 4:
 		return apperror.New(apperror.ErrValidation, fmt.Sprintf("automation_level %d is invalid; use 1..4", params.AutomationLevel))
 	case params.MaxChangePercent < 0 || params.MaxChangePercent > 100:
@@ -175,8 +180,55 @@ func validateStrategyForSave(input domain.Strategy) error {
 	case params.MaxDataAgeHours < 0:
 		return apperror.New(apperror.ErrValidation, "max_data_age_hours must be non-negative")
 	}
-	if input.Type == domain.StrategyTypeSearchPlaybook {
+	switch input.Type {
+	case domain.StrategyTypeACoS:
+		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
+			return apperror.New(apperror.ErrValidation, "target_acos must be greater than 0 and at most 1000")
+		}
+	case domain.StrategyTypeROAS:
+		if params.TargetROAS <= 0 || params.TargetROAS > 1000 {
+			return apperror.New(apperror.ErrValidation, "target_roas must be greater than 0 and at most 1000")
+		}
+	case domain.StrategyTypeAntiSliv:
+		if params.MaxACoS <= 0 {
+			return apperror.New(apperror.ErrValidation, "max_acos must be greater than 0 for anti_sliv")
+		}
+	case domain.StrategyTypeDayparting:
+		return validateDaypartingStrategy(params)
+	case domain.StrategyTypeSearchPlaybook:
 		return validateSearchPlaybookStrategy(params)
+	}
+	return nil
+}
+
+func validateDaypartingStrategy(p domain.StrategyParams) error {
+	if p.BaseMultiplier < 0 || p.BaseMultiplier > 5 {
+		return apperror.New(apperror.ErrValidation, "base_multiplier must be greater than 0 and at most 5")
+	}
+	for rawHour, multiplier := range p.HourlyMultipliers {
+		hour, err := strconv.Atoi(rawHour)
+		if err != nil || hour < 0 || hour > 23 {
+			return apperror.New(apperror.ErrValidation, "hourly_multipliers keys must be hours 0..23")
+		}
+		if multiplier <= 0 || multiplier > 5 {
+			return apperror.New(apperror.ErrValidation, "hourly_multipliers values must be greater than 0 and at most 5")
+		}
+	}
+	for rawWeekday, multiplier := range p.WeekdayMultipliers {
+		weekday, err := strconv.Atoi(rawWeekday)
+		if err != nil || weekday < 0 || weekday > 6 {
+			return apperror.New(apperror.ErrValidation, "weekday_multipliers keys must be weekdays 0..6")
+		}
+		if multiplier <= 0 || multiplier > 5 {
+			return apperror.New(apperror.ErrValidation, "weekday_multipliers values must be greater than 0 and at most 5")
+		}
+	}
+	timezone := strings.TrimSpace(p.Timezone)
+	if timezone == "" {
+		timezone = "Europe/Moscow"
+	}
+	if _, err := time.LoadLocation(timezone); err != nil {
+		return apperror.New(apperror.ErrValidation, "timezone must be a valid IANA timezone")
 	}
 	return nil
 }
@@ -188,14 +240,17 @@ func validateSearchPlaybookStrategy(p domain.StrategyParams) error {
 	default:
 		return apperror.New(apperror.ErrValidation, "frequency_tier must be high, mid or low")
 	}
-	if p.TargetPosition < 0 {
-		return apperror.New(apperror.ErrValidation, "target_position must be non-negative")
+	if p.TargetPosition < 0 || p.TargetPosition > 100 || (p.TargetPosition > 0 && p.TargetPosition < 1) {
+		return apperror.New(apperror.ErrValidation, "target_position must be between 1 and 100")
 	}
 	if p.TargetPosition == 0 && p.FrequencyTier == "" {
 		return apperror.New(apperror.ErrValidation, "search_playbook requires frequency_tier or target_position")
 	}
-	if p.SacrificialSpendPricePct < 0 || p.FlatImpressionsPct < 0 || p.RollbackStepPercent < 0 {
-		return apperror.New(apperror.ErrValidation, "search_playbook percentages must be non-negative")
+	if p.SacrificialSpendPricePct < 0 || p.SacrificialSpendPricePct > 1000 {
+		return apperror.New(apperror.ErrValidation, "sacrificial_spend_price_pct must be between 0 and 1000")
+	}
+	if p.FlatImpressionsPct < 0 || p.FlatImpressionsPct > 100 || p.RollbackStepPercent < 0 || p.RollbackStepPercent > 100 {
+		return apperror.New(apperror.ErrValidation, "flat_impressions_pct and rollback_step_percent must be between 0 and 100")
 	}
 	return nil
 }
