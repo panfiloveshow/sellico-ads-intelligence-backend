@@ -50,7 +50,10 @@ write_backup_metrics() {
     return 0
   fi
 
-  mkdir -p "$textfile_dir"
+  if ! mkdir -p "$textfile_dir" 2>/dev/null || [[ ! -w "$textfile_dir" ]]; then
+    log "WARN: backup metrics directory is not writable: ${textfile_dir}; backup itself succeeded"
+    return 0
+  fi
 
   local metric_file="${textfile_dir}/sellico_backup.prom"
   local tmp_file="${metric_file}.$$"
@@ -59,7 +62,7 @@ write_backup_metrics() {
   now="$(date +%s)"
   size_bytes="$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE")"
 
-  cat > "$tmp_file" <<EOF
+  if ! cat > "$tmp_file" <<EOF
 # HELP sellico_backup_last_success_timestamp_seconds Unix timestamp of the last successful PostgreSQL backup.
 # TYPE sellico_backup_last_success_timestamp_seconds gauge
 sellico_backup_last_success_timestamp_seconds ${now}
@@ -73,13 +76,33 @@ sellico_backup_offsite_success ${OFFSITE_SUCCESS}
 # TYPE sellico_backup_offsite_configured gauge
 sellico_backup_offsite_configured ${OFFSITE_CONFIGURED}
 EOF
-  mv "$tmp_file" "$metric_file"
+  then
+    log "WARN: failed to write backup metrics temp file: ${tmp_file}; backup itself succeeded"
+    rm -f "$tmp_file"
+    return 0
+  fi
+  if ! mv "$tmp_file" "$metric_file"; then
+    log "WARN: failed to publish backup metrics: ${metric_file}; backup itself succeeded"
+    rm -f "$tmp_file"
+    return 0
+  fi
   log "Backup metrics written: ${metric_file}"
 }
 
 log "Starting backup of ${DB_NAME} -> ${BACKUP_FILE}"
 
-if [[ "${BACKUP_USE_DOCKER:-0}" == "1" ]]; then
+BACKUP_USE_DOCKER_RESOLVED="${BACKUP_USE_DOCKER:-0}"
+if [[ "$BACKUP_USE_DOCKER_RESOLVED" != "1" ]] && ! command -v pg_dump &>/dev/null; then
+  if command -v docker &>/dev/null; then
+    BACKUP_USE_DOCKER_RESOLVED=1
+    log "Host pg_dump is unavailable; falling back to docker compose postgres service"
+  else
+    log "ERROR: pg_dump is unavailable and docker is not installed"
+    exit 1
+  fi
+fi
+
+if [[ "$BACKUP_USE_DOCKER_RESOLVED" == "1" ]]; then
   log "Using docker compose postgres service for pg_dump"
   docker compose -f "$COMPOSE_FILE" exec -T postgres \
     pg_dump \
