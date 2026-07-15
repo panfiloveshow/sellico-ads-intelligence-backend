@@ -120,3 +120,24 @@ func TestWorkspaceSettingsValidateEmailRejectsInvalidRecipient(t *testing.T) {
 	errs := settings.Validate()
 	assert.Equal(t, "must be a valid email address", errs["notifications.email.recipients.0"])
 }
+
+func TestWorkspaceSettingsValidateAutomationRequiresExplicitDailyActionCap(t *testing.T) {
+	settings := WorkspaceSettings{Automation: &AutomationSettings{Enabled: true}}
+	errs := settings.Validate()
+	assert.Equal(t, "is required and must be greater than 0 when live automation is enabled", errs["automation.max_bid_changes_per_day"])
+
+	settings.Automation.MaxBidChangesPerDay = 25
+	assert.Empty(t, settings.Validate())
+
+	// An emergency hold must remain writable even on legacy settings which do
+	// not have the newly required cap yet.
+	settings.Automation.MaxBidChangesPerDay = 0
+	settings.Automation.ManualHold = true
+	assert.Empty(t, settings.Validate())
+}
+
+func TestWorkspaceSettingsValidateAutomationRejectsNegativeDailyActionCap(t *testing.T) {
+	settings := WorkspaceSettings{Automation: &AutomationSettings{MaxBidChangesPerDay: -1}}
+	errs := settings.Validate()
+	assert.Equal(t, "must be greater than 0 when set", errs["automation.max_bid_changes_per_day"])
+}

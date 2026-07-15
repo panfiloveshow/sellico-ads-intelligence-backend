@@ -12,8 +12,8 @@ import (
 )
 
 const createPhrase = `-- name: CreatePhrase :one
-INSERT INTO phrases (campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO phrases (campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, current_bid_observed_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9::bigint IS NULL THEN NULL ELSE now() END)
 RETURNING id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at
 `
 
@@ -183,14 +183,18 @@ func (q *Queries) ListPhrasesByWorkspace(ctx context.Context, arg ListPhrasesByW
 }
 
 const upsertPhrase = `-- name: UpsertPhrase :one
-INSERT INTO phrases (campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO phrases (campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, current_bid_observed_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9::bigint IS NULL THEN NULL ELSE now() END)
 ON CONFLICT (campaign_id, wb_product_id, wb_norm_query) DO UPDATE SET
     product_id = EXCLUDED.product_id,
     wb_cluster_id = EXCLUDED.wb_cluster_id,
     keyword = EXCLUDED.keyword,
     count = EXCLUDED.count,
     current_bid = COALESCE(EXCLUDED.current_bid, phrases.current_bid),
+	current_bid_observed_at = CASE
+		WHEN EXCLUDED.current_bid IS NOT NULL THEN now()
+		ELSE phrases.current_bid_observed_at
+	END,
     updated_at = now()
 RETURNING id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at
 `

@@ -23,6 +23,11 @@ const minTodayClicksForBidIncrease = int64(20)
 
 const automationBidReconciliationDelay = 5 * time.Minute
 
+// A live WB bid call runs while a workspace advisory-lock lease prevents a
+// settings/cap update from slipping between the final guard and the write. Keep
+// that critical section short enough for an emergency hold to remain usable.
+const automationBidWriteTimeout = 5 * time.Second
+
 // AutomationBidReconciliationSummary reports only evidence-backed outcomes.
 // Deferred actions remain unknown until a campaign sync newer than the write
 // attempt is available.
@@ -95,7 +100,6 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 	if settingsErr != nil {
 		return 0, settingsErr
 	}
-
 	totalChanges := 0
 	var runErrors []error
 
@@ -195,23 +199,34 @@ func sellerCabinetAutomationGuardrailReason(state sqlcgen.SellerCabinetSyncState
 }
 
 func workspaceAutomationGuardrailReason(raw []byte) (string, error) {
-	var settings domain.WorkspaceSettings
-	if len(raw) > 0 && string(raw) != "{}" {
-		if err := json.Unmarshal(raw, &settings); err != nil {
-			return "", fmt.Errorf("parse workspace automation settings: %w", err)
-		}
+	automation, err := parseWorkspaceAutomationSettings(raw)
+	if err != nil {
+		return "", err
 	}
-	if settings.Automation == nil || !settings.Automation.Enabled {
+	if automation == nil || !automation.Enabled {
 		return "workspace automation is not explicitly enabled", nil
 	}
-	if settings.Automation.ManualHold {
-		reason := strings.TrimSpace(settings.Automation.HoldReason)
+	if automation.ManualHold {
+		reason := strings.TrimSpace(automation.HoldReason)
 		if reason == "" {
 			reason = "manual hold is active"
 		}
 		return reason, nil
 	}
+	if automation.MaxBidChangesPerDay <= 0 {
+		return "workspace automation has no positive max_bid_changes_per_day", nil
+	}
 	return "", nil
+}
+
+func parseWorkspaceAutomationSettings(raw []byte) (*domain.AutomationSettings, error) {
+	var settings domain.WorkspaceSettings
+	if len(raw) > 0 && string(raw) != "{}" {
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return nil, fmt.Errorf("parse workspace automation settings: %w", err)
+		}
+	}
+	return settings.Automation, nil
 }
 
 func evaluateLiveBidWriteGuardrail(settingsRaw []byte, strategyFound, strategyActive bool) (string, error) {
@@ -248,6 +263,67 @@ func (s *BidAutomationService) liveBidWriteGuardrail(ctx context.Context, worksp
 		return "", fmt.Errorf("reload strategy activity: %w", err)
 	}
 	return evaluateLiveBidWriteGuardrail(settingsRaw, true, strategy.IsActive)
+}
+
+func (s *BidAutomationService) currentWorkspaceAutomationCap(ctx context.Context, workspaceID uuid.UUID) (int, string, error) {
+	settingsRaw, err := s.queries.GetWorkspaceSettings(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return 0, "", fmt.Errorf("reload workspace automation cap: %w", err)
+	}
+	if reason, guardErr := workspaceAutomationGuardrailReason(settingsRaw); guardErr != nil || reason != "" {
+		return 0, reason, guardErr
+	}
+	automation, err := parseWorkspaceAutomationSettings(settingsRaw)
+	if err != nil {
+		return 0, "", err
+	}
+	if automation == nil || automation.MaxBidChangesPerDay <= 0 {
+		return 0, "workspace automation has no positive max_bid_changes_per_day", nil
+	}
+	return automation.MaxBidChangesPerDay, "", nil
+}
+
+// liveBidPreWriteGuardrail performs the final mutable-control reload and then
+// checks the claimed action against the current workspace cap under the same
+// advisory lock used by claims and settings updates.
+func (s *BidAutomationService) liveBidPreWriteGuardrail(
+	ctx context.Context,
+	workspaceID, strategyID, actionID uuid.UUID,
+	dayStart, dayEnd time.Time,
+) (pgx.Tx, string, error) {
+	if reason, err := s.liveBidWriteGuardrail(ctx, workspaceID, strategyID); err != nil || reason != "" {
+		return nil, reason, err
+	}
+	currentCap, reason, err := s.currentWorkspaceAutomationCap(ctx, workspaceID)
+	if err != nil || reason != "" {
+		return nil, reason, err
+	}
+	return s.queries.BeginAutomationBidWriteLease(ctx, sqlcgen.AutomationBidActionPreWriteGuardParams{
+		ActionID:                  uuidToPgtype(actionID),
+		WorkspaceID:               uuidToPgtype(workspaceID),
+		DayStart:                  pgtype.Timestamptz{Time: dayStart, Valid: true},
+		DayEnd:                    pgtype.Timestamptz{Time: dayEnd, Valid: true},
+		MaxWorkspaceChangesPerDay: boundedInt32(currentCap),
+	})
+}
+
+func releaseAutomationBidWriteLease(tx pgx.Tx) error {
+	if tx == nil {
+		return nil
+	}
+	releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := tx.Commit(releaseCtx); err != nil {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), time.Second)
+		defer rollbackCancel()
+		_ = tx.Rollback(rollbackCtx)
+		return err
+	}
+	return nil
+}
+
+func automationBidWriteContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, automationBidWriteTimeout)
 }
 
 func strategyAutomationSkipReason(strategy domain.Strategy) string {
@@ -347,6 +423,17 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		if reason := automationCampaignSkipReason(campaign); reason != "" {
 			s.logger.Info().Str("campaign_id", binding.CampaignID.String()).Str("reason", reason).
 				Msg("skipping campaign that is not safe for automatic product bid updates")
+			continue
+		}
+		if isManualCPMCampaign(campaign) {
+			clusterChanges, clusterErr := s.executeManualCPMClusters(
+				ctx, workspaceID, strategy, binding, campaign, token, applyToWB,
+				now, dateFrom, decisionDateTo,
+			)
+			changes += clusterChanges
+			if clusterErr != nil {
+				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s cluster automation: %w", binding.ID, clusterErr))
+			}
 			continue
 		}
 		targetNMID, targetErr := s.bidTargetNMID(ctx, strategy, campaign, binding)
@@ -552,13 +639,26 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Msg("skipping live bid write while an earlier action outcome is unresolved")
 			continue
 		}
-		automationActionID, claimed, claimErr := s.queries.ClaimAutomationBidAction(ctx, sqlcgen.ClaimAutomationBidActionParams{
+		maxWorkspaceChangesPerDay, capBlockReason, capErr := s.currentWorkspaceAutomationCap(ctx, workspaceID)
+		if capErr != nil {
+			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s reload workspace daily cap: %w", binding.ID, capErr))
+			continue
+		}
+		if capBlockReason != "" {
+			s.logger.Warn().Str("strategy_id", strategy.ID.String()).Str("campaign_id", binding.CampaignID.String()).
+				Str("reason", capBlockReason).Msg("blocked live bid claim because current workspace automation settings are not ready")
+			continue
+		}
+		dayStart, dayEnd := automationBidDayWindow(time.Now())
+		automationClaim, claimed, claimErr := s.queries.ClaimAutomationBidAction(ctx, sqlcgen.ClaimAutomationBidActionParams{
 			AutomationKey: automationKey, AutomationObservationKey: observationKey,
 			WorkspaceID: uuidToPgtype(workspaceID), SellerCabinetID: campaign.SellerCabinetID,
 			CampaignID: campaign.ID, ProductID: uuidToPgtypePtr(binding.ProductID), WBCampaignID: campaign.WbCampaignID,
 			WBProductID: targetNMID, OldBid: int64(decision.OldBid), NewBid: int64(decision.NewBid), Reason: decision.Reason,
 			Placement: decision.Placement, BidObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: !observedAt.IsZero()},
 			StrategyID: uuidToPgtype(strategy.ID),
+			DayStart:   pgtype.Timestamptz{Time: dayStart, Valid: true}, DayEnd: pgtype.Timestamptz{Time: dayEnd, Valid: true},
+			MaxWorkspaceChangesPerDay: boundedInt32(maxWorkspaceChangesPerDay),
 		})
 		if claimErr != nil {
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s action claim: %w", binding.ID, claimErr))
@@ -568,11 +668,22 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			s.logger.Info().Str("automation_key", automationKey).Msg("skipping duplicate automation action")
 			continue
 		}
+		if automationClaim.Status == "blocked" {
+			s.logger.Warn().
+				Str("strategy_id", strategy.ID.String()).
+				Str("campaign_id", binding.CampaignID.String()).
+				Int("max_bid_changes_per_day", maxWorkspaceChangesPerDay).
+				Msg("blocked live bid write because the workspace daily action limit was reached")
+			break
+		}
+		automationActionID := automationClaim.ID
 
 		// Re-check mutable operator controls after the durable claim and immediately
 		// before the external side effect. A blocked claim is terminal for this stale
 		// observation, so it cannot remain pending or be applied after the hold lifts.
-		blockReason, preWriteErr := s.liveBidWriteGuardrail(ctx, workspaceID, strategy.ID)
+		writeLease, blockReason, preWriteErr := s.liveBidPreWriteGuardrail(
+			ctx, workspaceID, strategy.ID, uuidFromPgtype(automationActionID), dayStart, dayEnd,
+		)
 		if preWriteErr != nil {
 			blockReason = "live automation guardrail could not be reloaded"
 		}
@@ -595,7 +706,12 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		}
 
 		// Apply to WB API. A product binding is always sent as its concrete real NMID.
-		wbErr := s.wbClient.UpdateCampaignBid(ctx, token, campaign.WbCampaignID, int(campaign.CampaignType), targetNMID, decision.Placement, decision.NewBid)
+		writeCtx, cancelWrite := automationBidWriteContext(ctx)
+		wbErr := s.wbClient.UpdateCampaignBid(writeCtx, token, campaign.WbCampaignID, int(campaign.CampaignType), targetNMID, decision.Placement, decision.NewBid)
+		cancelWrite()
+		if leaseErr := releaseAutomationBidWriteLease(writeLease); leaseErr != nil {
+			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s release pre-write cap lease: %w", binding.ID, leaseErr))
+		}
 		wbStatus := "applied"
 		var wbResponse []byte
 		if wbErr != nil {
@@ -718,17 +834,7 @@ func (s *BidAutomationService) ReconcileStaleBidActions(ctx context.Context, now
 				continue
 			}
 		}
-		var productID *uuid.UUID
-		if action.ProductID.Valid {
-			id := uuidFromPgtype(action.ProductID)
-			productID = &id
-		} else if action.WBProductID > 0 {
-			// The local product FK may have been cleared after a SKU-scoped
-			// write. Never reinterpret that action as campaign-wide.
-			summary.Deferred++
-			continue
-		}
-		actualBid, syncedAt, found, observationErr := currentBidObservation(ctx, s.queries, uuidFromPgtype(action.CampaignID), productID, placement)
+		actualBid, syncedAt, found, observationErr := s.automationActionCurrentBidObservation(ctx, action, campaign, placement)
 		if observationErr != nil {
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("load synced bid for action %s: %w", action.AutomationKey, observationErr))
 			summary.Deferred++
@@ -792,6 +898,52 @@ func (s *BidAutomationService) ReconcileStaleBidActions(ctx context.Context, now
 	return summary, errors.Join(reconcileErrors...)
 }
 
+func (s *BidAutomationService) automationActionCurrentBidObservation(
+	ctx context.Context,
+	action sqlcgen.AutomationBidActionForReconciliation,
+	campaign sqlcgen.Campaign,
+	placement string,
+) (int, time.Time, bool, error) {
+	if automationActionHasClusterScope(action) {
+		// ON DELETE SET NULL preserves the action when a phrase disappears. A
+		// cluster action without its exact phrase target must stay unresolved;
+		// falling through to product-level observation could falsely reconcile it.
+		if !action.PhraseID.Valid {
+			return 0, time.Time{}, false, nil
+		}
+		phrase, err := s.queries.GetPhraseBidObservation(ctx, action.PhraseID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return 0, time.Time{}, false, nil
+			}
+			return 0, time.Time{}, false, err
+		}
+		if phrase.CampaignID != campaign.ID || phrase.WorkspaceID != campaign.WorkspaceID ||
+			!phrase.ProductID.Valid || !action.ProductID.Valid || phrase.ProductID != action.ProductID ||
+			!phrase.WBProductID.Valid || phrase.WBProductID.Int64 != action.WBProductID ||
+			strings.TrimSpace(phrase.NormQuery) != strings.TrimSpace(action.NormQuery.String) ||
+			placement != "search" || !phrase.CurrentBid.Valid || phrase.CurrentBid.Int64 <= 0 || !phrase.ObservedAt.Valid {
+			return 0, time.Time{}, false, nil
+		}
+		return int(phrase.CurrentBid.Int64), phrase.ObservedAt.Time, true, nil
+	}
+
+	var productID *uuid.UUID
+	if action.ProductID.Valid {
+		id := uuidFromPgtype(action.ProductID)
+		productID = &id
+	} else if action.WBProductID > 0 {
+		// The local product FK may have been cleared after a SKU-scoped
+		// write. Never reinterpret that action as campaign-wide.
+		return 0, time.Time{}, false, nil
+	}
+	return currentBidObservation(ctx, s.queries, uuidFromPgtype(action.CampaignID), productID, placement)
+}
+
+func automationActionHasClusterScope(action sqlcgen.AutomationBidActionForReconciliation) bool {
+	return action.PhraseID.Valid || (action.NormQuery.Valid && strings.TrimSpace(action.NormQuery.String) != "")
+}
+
 func automationBidReconciliationStatus(oldBid, newBid, actualBid int64) string {
 	switch actualBid {
 	case newBid:
@@ -807,10 +959,11 @@ func automationCampaignSkipReason(campaign sqlcgen.Campaign) string {
 	if strings.ToLower(strings.TrimSpace(campaign.Status)) != "active" {
 		return "campaign is not active"
 	}
-	if campaign.PaymentType == domain.PaymentTypeCPM && campaign.BidType == domain.BidTypeManual {
-		return "manual CPM campaigns require cluster-level automation"
-	}
 	return ""
+}
+
+func isManualCPMCampaign(campaign sqlcgen.Campaign) bool {
+	return campaign.PaymentType == domain.PaymentTypeCPM && campaign.BidType == domain.BidTypeManual
 }
 
 func automationBidPlacement(campaign sqlcgen.Campaign) (string, error) {
@@ -1294,6 +1447,15 @@ func moscowTime(value time.Time) time.Time {
 		location = time.FixedZone("MSK", 3*60*60)
 	}
 	return value.In(location)
+}
+
+// automationBidDayWindow uses the same Moscow calendar boundary as WB daily
+// advertising statistics. Returning UTC instants keeps the database comparison
+// independent from the PostgreSQL session timezone.
+func automationBidDayWindow(now time.Time) (time.Time, time.Time) {
+	local := moscowTime(now)
+	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+	return start.UTC(), start.AddDate(0, 0, 1).UTC()
 }
 
 func (s *BidAutomationService) bidActionGuardrail(ctx context.Context, strategy domain.Strategy, binding domain.StrategyBinding, campaignID uuid.UUID, decision *BidDecision) (string, error) {

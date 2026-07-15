@@ -43,21 +43,31 @@ func (s *WorkspaceSettingsService) UpdateSettings(ctx context.Context, actorID, 
 		return nil, apperror.New(apperror.ErrValidation, "invalid workspace settings")
 	}
 
-	raw, err := s.queries.GetWorkspaceSettings(ctx, uuidToPgtype(workspaceID))
+	txQueries, tx, err := s.queries.BeginWorkspaceSettingsUpdateTx(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to lock workspace settings")
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	// The lock is deliberately acquired before this read. Every API settings
+	// update uses the same transaction, so concurrent partial PUTs merge against
+	// the latest committed JSON instead of overwriting each other.
+	raw, err := txQueries.GetWorkspaceSettings(ctx, uuidToPgtype(workspaceID))
 	if err != nil {
 		return nil, apperror.New(apperror.ErrNotFound, "workspace not found")
 	}
 
-	ws, err := s.queries.GetWorkspaceByID(ctx, uuidToPgtype(workspaceID))
+	ws, err := txQueries.GetWorkspaceByID(ctx, uuidToPgtype(workspaceID))
 	if err != nil {
 		return nil, apperror.New(apperror.ErrNotFound, "workspace not found")
 	}
 
 	var existing domain.WorkspaceSettings
 	if len(raw) > 0 && string(raw) != "{}" {
-		_ = json.Unmarshal(raw, &existing)
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to parse workspace settings")
+		}
 	}
-	_ = ws // used to get ID for update
 
 	// Merge: only overwrite fields that are set in input
 	if input.RecommendationThresholds != nil {
@@ -75,14 +85,19 @@ func (s *WorkspaceSettingsService) UpdateSettings(ctx context.Context, actorID, 
 		return nil, apperror.New(apperror.ErrInternal, "failed to serialize settings")
 	}
 
-	_, err = s.queries.UpdateWorkspaceSettings(ctx, sqlcgen.UpdateWorkspaceSettingsParams{
+	_, err = txQueries.UpdateWorkspaceSettings(ctx, sqlcgen.UpdateWorkspaceSettingsParams{
 		ID:       ws.ID,
 		Settings: settingsJSON,
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to update workspace settings")
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to commit workspace settings")
+	}
 
+	// Audit remains best-effort, preserving the existing API semantics: an audit
+	// sink failure must not roll back a successfully committed settings update.
 	writeAuditLog(ctx, s.queries, sqlcgen.CreateAuditLogParams{
 		WorkspaceID: uuidToPgtype(workspaceID),
 		UserID:      uuidToPgtype(actorID),

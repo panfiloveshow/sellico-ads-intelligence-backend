@@ -15,10 +15,13 @@ type WorkspaceSettings struct {
 
 // AutomationSettings is the workspace-level fail-closed switch for external
 // advertising actions. A missing block or Enabled=false means analytics only.
+// Enabling live writes also requires an explicit positive daily action cap;
+// there is deliberately no business default for unattended spend-affecting work.
 type AutomationSettings struct {
-	Enabled    bool   `json:"enabled"`
-	ManualHold bool   `json:"manual_hold,omitempty"`
-	HoldReason string `json:"hold_reason,omitempty"`
+	Enabled             bool   `json:"enabled"`
+	ManualHold          bool   `json:"manual_hold,omitempty"`
+	HoldReason          string `json:"hold_reason,omitempty"`
+	MaxBidChangesPerDay int    `json:"max_bid_changes_per_day,omitempty"`
 }
 
 // RecommendationThresholds configures the recommendation engine per workspace.
@@ -64,10 +67,18 @@ type EmailSettings struct {
 // Validate returns field-level validation errors for workspace settings.
 func (s WorkspaceSettings) Validate() map[string]string {
 	errors := make(map[string]string)
+	if s.Automation != nil {
+		switch {
+		case s.Automation.MaxBidChangesPerDay < 0:
+			errors["automation.max_bid_changes_per_day"] = "must be greater than 0 when set"
+		case s.Automation.Enabled && !s.Automation.ManualHold && s.Automation.MaxBidChangesPerDay == 0:
+			errors["automation.max_bid_changes_per_day"] = "is required and must be greater than 0 when live automation is enabled"
+		}
+	}
+
 	if s.Notifications == nil || s.Notifications.Email == nil {
 		return errors
 	}
-
 	email := s.Notifications.Email
 	if email.Enabled && len(email.Recipients) == 0 {
 		errors["notifications.email.recipients"] = "must contain at least one recipient when email notifications are enabled"

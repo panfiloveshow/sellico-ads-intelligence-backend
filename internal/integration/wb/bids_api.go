@@ -44,6 +44,16 @@ func CampaignBidUpdateOutcomeUnknown(err error) bool {
 	return errors.As(err, &updateErr) && updateErr.OutcomeUnknown
 }
 
+func campaignBidWriteError(respStatus int, responseReceived bool, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &CampaignBidUpdateError{
+		Err:            err,
+		OutcomeUnknown: !responseReceived || respStatus >= 500,
+	}
+}
+
 type CreateCampaignRequest struct {
 	Name           string   `json:"name"`
 	NMIDs          []int64  `json:"nms"`
@@ -103,14 +113,15 @@ func (c *Client) UpdateCampaignBid(ctx context.Context, token string, wbCampaign
 		return fmt.Errorf("marshal campaign bid request: %w", err)
 	}
 
-	resp, _, err := c.doRequest(ctx, "PATCH", "/api/advert/v1/bids", token, bytes.NewReader(body))
+	resp, _, err := c.doRequest(withoutRateLimitRetry(ctx), "PATCH", "/api/advert/v1/bids", token, bytes.NewReader(body))
 	if err == nil {
 		return nil
 	}
-	return &CampaignBidUpdateError{
-		Err:            err,
-		OutcomeUnknown: resp == nil || resp.StatusCode >= 500,
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
 	}
+	return campaignBidWriteError(status, resp != nil, err)
 }
 
 func (c *Client) resolveCampaignNMIDs(ctx context.Context, token string, wbCampaignID int64, nmID int64) ([]int64, error) {
@@ -232,8 +243,15 @@ func (c *Client) SetClusterBids(ctx context.Context, token string, wbCampaignID 
 		return fmt.Errorf("marshal cluster bid request: %w", err)
 	}
 
-	_, _, err = c.doRequest(ctx, "POST", "/adv/v0/normquery/bids", token, bytes.NewReader(body))
-	return err
+	resp, _, err := c.doRequest(withoutRateLimitRetry(ctx), "POST", "/adv/v0/normquery/bids", token, bytes.NewReader(body))
+	if err == nil {
+		return nil
+	}
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	return campaignBidWriteError(status, resp != nil, err)
 }
 
 // DeleteClusterBids removes explicit bids for search query clusters.

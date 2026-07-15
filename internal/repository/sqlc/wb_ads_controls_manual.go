@@ -3,6 +3,7 @@ package sqlcgen
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -71,47 +72,106 @@ INSERT INTO wb_bid_actions (
 }
 
 type ClaimAutomationBidActionParams struct {
-	AutomationKey            string
-	AutomationObservationKey string
-	WorkspaceID              pgtype.UUID
-	SellerCabinetID          pgtype.UUID
-	CampaignID               pgtype.UUID
-	ProductID                pgtype.UUID
-	WBCampaignID             int64
-	WBProductID              int64
-	OldBid                   int64
-	NewBid                   int64
-	Reason                   string
-	Placement                string
-	BidObservedAt            pgtype.Timestamptz
-	StrategyID               pgtype.UUID
+	AutomationKey             string
+	AutomationObservationKey  string
+	WorkspaceID               pgtype.UUID
+	SellerCabinetID           pgtype.UUID
+	CampaignID                pgtype.UUID
+	ProductID                 pgtype.UUID
+	WBCampaignID              int64
+	WBProductID               int64
+	OldBid                    int64
+	NewBid                    int64
+	Reason                    string
+	Placement                 string
+	BidObservedAt             pgtype.Timestamptz
+	StrategyID                pgtype.UUID
+	DayStart                  pgtype.Timestamptz
+	DayEnd                    pgtype.Timestamptz
+	MaxWorkspaceChangesPerDay int32
+	PhraseID                  pgtype.UUID
+	NormQuery                 pgtype.Text
 }
 
-const claimAutomationBidAction = `WITH scope_lock AS MATERIALIZED (
+const claimAutomationBidAction = `WITH workspace_lock AS MATERIALIZED (
+	SELECT pg_advisory_xact_lock(hashtextextended($3::text || ':workspace-daily-bid-actions', 0))
+), scope_lock AS MATERIALIZED (
+	-- Serialize all scopes for a campaign placement. This deliberately keeps a
+	-- product-wide action (NULL norm_query) from racing a cluster action whose
+	-- unresolved-scope predicate treats the product-wide row as a wildcard.
 	SELECT pg_advisory_xact_lock(hashtextextended($5::text || ':' || $12, 0))
+	FROM workspace_lock
+), workspace_state AS MATERIALIZED (
+	SELECT
+		COALESCE((w.settings #>> '{automation,enabled}')::boolean, false) AS automation_enabled,
+		COALESCE((w.settings #>> '{automation,manual_hold}')::boolean, false) AS manual_hold,
+		COALESCE(NULLIF(w.settings #>> '{automation,max_bid_changes_per_day}', '')::integer, 0) AS configured_cap,
+		$17::integer AS observed_cap
+	FROM workspaces w
+	CROSS JOIN scope_lock
+	WHERE w.id = $3 AND w.deleted_at IS NULL
+), claim_state AS MATERIALIZED (
+	SELECT
+		EXISTS (
+			SELECT 1
+			FROM wb_bid_actions unresolved
+			WHERE unresolved.campaign_id = $5
+			  AND (unresolved.placement = $12 OR unresolved.placement IS NULL)
+			  AND (unresolved.product_id IS NULL OR $6::uuid IS NULL OR unresolved.product_id = $6)
+			  AND (unresolved.norm_query IS NULL OR $19::text IS NULL OR unresolved.norm_query = $19)
+			  AND unresolved.action_type = 'strategy_bid'
+			  AND unresolved.status IN ('pending', 'unknown')
+		) AS unresolved,
+		(
+			SELECT count(*)
+			FROM wb_bid_actions counted
+			WHERE counted.workspace_id = $3
+			  AND counted.action_type = 'strategy_bid'
+			  AND counted.status IN ('pending', 'unknown', 'applied')
+			  AND counted.created_at >= $15
+			  AND counted.created_at < $16
+		) AS daily_action_count,
+		automation_enabled,
+		manual_hold,
+		configured_cap,
+		LEAST(configured_cap, observed_cap) AS effective_cap
+	FROM workspace_state
 )
 INSERT INTO wb_bid_actions (
 		automation_key, automation_observation_key, workspace_id, seller_cabinet_id, campaign_id, product_id,
-		wb_campaign_id, wb_product_id, action_type, old_bid, new_bid, reason, placement, bid_observed_at, strategy_id, status
+		wb_campaign_id, wb_product_id, action_type, old_bid, new_bid, reason, placement, bid_observed_at, strategy_id,
+		phrase_id, norm_query, status, wb_response
 	)
-	SELECT $1,$2,$3,$4,$5,$6,$7,$8,'strategy_bid',$9,$10,$11,$12,$13,$14,'pending'
-	FROM scope_lock
-	WHERE NOT EXISTS (
-		SELECT 1
-		FROM wb_bid_actions unresolved
-		WHERE unresolved.campaign_id = $5
-		  AND (unresolved.placement = $12 OR unresolved.placement IS NULL)
-		  AND (unresolved.product_id IS NULL OR $6::uuid IS NULL OR unresolved.product_id = $6)
-		  AND unresolved.action_type = 'strategy_bid'
-		  AND unresolved.status IN ('pending', 'unknown')
-	)
+	SELECT $1,$2,$3,$4,$5,$6,$7,$8,'strategy_bid',$9,$10,$11,$12,$13,$14,$18,$19,
+		CASE WHEN NOT automation_enabled OR manual_hold OR effective_cap <= 0 OR daily_action_count >= effective_cap
+			THEN 'blocked' ELSE 'pending' END,
+		CASE WHEN NOT automation_enabled OR manual_hold OR effective_cap <= 0 OR daily_action_count >= effective_cap
+		THEN jsonb_build_object(
+			'block_reason', CASE
+				WHEN NOT automation_enabled THEN 'workspace automation is not enabled'
+				WHEN manual_hold THEN 'workspace automation manual hold is active'
+				WHEN effective_cap <= 0 THEN 'workspace max_bid_changes_per_day is unavailable'
+				ELSE 'workspace max_bid_changes_per_day reached'
+			END,
+			'max_bid_changes_per_day', configured_cap,
+			'effective_max_bid_changes_per_day', effective_cap,
+			'day_start', $15::timestamptz
+		) ELSE NULL END
+	FROM claim_state
+	WHERE NOT unresolved
 	ON CONFLICT DO NOTHING
-	RETURNING id`
+	RETURNING id, status`
+
+type AutomationBidActionClaim struct {
+	ID     pgtype.UUID
+	Status string
+}
 
 type HasUnresolvedAutomationBidActionParams struct {
 	CampaignID pgtype.UUID
 	ProductID  pgtype.UUID
 	Placement  string
+	NormQuery  pgtype.Text
 }
 
 const hasUnresolvedAutomationBidAction = `SELECT EXISTS (
@@ -120,28 +180,120 @@ const hasUnresolvedAutomationBidAction = `SELECT EXISTS (
 	WHERE campaign_id = $1
 	  AND (product_id IS NULL OR $2::uuid IS NULL OR product_id = $2)
 	  AND (placement = $3 OR placement IS NULL)
+	  AND (norm_query IS NULL OR $4::text IS NULL OR norm_query = $4)
 	  AND action_type = 'strategy_bid'
 	  AND status IN ('pending', 'unknown')
 )`
 
 func (q *Queries) HasUnresolvedAutomationBidAction(ctx context.Context, arg HasUnresolvedAutomationBidActionParams) (bool, error) {
 	var unresolved bool
-	err := q.db.QueryRow(ctx, hasUnresolvedAutomationBidAction, arg.CampaignID, arg.ProductID, arg.Placement).Scan(&unresolved)
+	err := q.db.QueryRow(ctx, hasUnresolvedAutomationBidAction, arg.CampaignID, arg.ProductID, arg.Placement, arg.NormQuery).Scan(&unresolved)
 	return unresolved, err
 }
 
-func (q *Queries) ClaimAutomationBidAction(ctx context.Context, arg ClaimAutomationBidActionParams) (pgtype.UUID, bool, error) {
-	var actionID pgtype.UUID
+func (q *Queries) ClaimAutomationBidAction(ctx context.Context, arg ClaimAutomationBidActionParams) (AutomationBidActionClaim, bool, error) {
+	var claim AutomationBidActionClaim
 	err := q.db.QueryRow(ctx, claimAutomationBidAction,
 		arg.AutomationKey, arg.AutomationObservationKey, arg.WorkspaceID, arg.SellerCabinetID, arg.CampaignID, arg.ProductID,
-		arg.WBCampaignID, arg.WBProductID, arg.OldBid, arg.NewBid, arg.Reason, arg.Placement, arg.BidObservedAt, arg.StrategyID).Scan(&actionID)
+		arg.WBCampaignID, arg.WBProductID, arg.OldBid, arg.NewBid, arg.Reason, arg.Placement, arg.BidObservedAt, arg.StrategyID,
+		arg.DayStart, arg.DayEnd, arg.MaxWorkspaceChangesPerDay, arg.PhraseID, arg.NormQuery).Scan(&claim.ID, &claim.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return pgtype.UUID{}, false, nil
+		return AutomationBidActionClaim{}, false, nil
 	}
 	if err != nil {
-		return pgtype.UUID{}, false, err
+		return AutomationBidActionClaim{}, false, err
 	}
-	return actionID, true, nil
+	return claim, true, nil
+}
+
+type AutomationBidActionPreWriteGuardParams struct {
+	ActionID                  pgtype.UUID
+	WorkspaceID               pgtype.UUID
+	DayStart                  pgtype.Timestamptz
+	DayEnd                    pgtype.Timestamptz
+	MaxWorkspaceChangesPerDay int32
+}
+
+const automationBidActionPreWriteGuard = `WITH workspace_lock AS MATERIALIZED (
+	SELECT pg_advisory_xact_lock(hashtextextended($2::text || ':workspace-daily-bid-actions', 0))
+), state AS MATERIALIZED (
+	SELECT
+		EXISTS (
+			SELECT 1 FROM wb_bid_actions action
+			WHERE action.id = $1
+			  AND action.workspace_id = $2
+			  AND action.action_type = 'strategy_bid'
+			  AND action.status = 'pending'
+		) AS action_pending,
+		COALESCE((w.settings #>> '{automation,enabled}')::boolean, false) AS automation_enabled,
+		COALESCE((w.settings #>> '{automation,manual_hold}')::boolean, false) AS manual_hold,
+		COALESCE(NULLIF(w.settings #>> '{automation,hold_reason}', ''), 'manual hold is active') AS hold_reason,
+		COALESCE(NULLIF(w.settings #>> '{automation,max_bid_changes_per_day}', '')::integer, 0) AS configured_cap,
+		LEAST(
+			COALESCE(NULLIF(w.settings #>> '{automation,max_bid_changes_per_day}', '')::integer, 0),
+			$5::integer
+		) AS effective_cap,
+		(
+			SELECT count(*)
+			FROM wb_bid_actions counted
+			WHERE counted.workspace_id = $2
+			  AND counted.action_type = 'strategy_bid'
+			  AND counted.status IN ('pending', 'unknown', 'applied')
+			  AND counted.created_at >= $3
+			  AND counted.created_at < $4
+		) AS daily_action_count
+	FROM workspaces w
+	CROSS JOIN workspace_lock
+	WHERE w.id = $2 AND w.deleted_at IS NULL
+)
+SELECT CASE
+	WHEN NOT action_pending THEN 'automation action claim is no longer pending'
+	WHEN NOT automation_enabled THEN 'workspace automation is not enabled'
+	WHEN manual_hold THEN hold_reason
+	WHEN effective_cap <= 0 THEN 'workspace max_bid_changes_per_day is unavailable'
+	WHEN daily_action_count > effective_cap THEN 'workspace max_bid_changes_per_day was lowered below claimed actions'
+	ELSE ''
+END
+FROM state`
+
+// AutomationBidActionPreWriteGuard serializes the final cap check with both
+// claims and settings updates. The claimed action is included in the count, so
+// count == cap is allowed while count > a newly lowered cap fails closed.
+func (q *Queries) AutomationBidActionPreWriteGuard(ctx context.Context, arg AutomationBidActionPreWriteGuardParams) (string, error) {
+	var reason string
+	err := q.db.QueryRow(ctx, automationBidActionPreWriteGuard,
+		arg.ActionID, arg.WorkspaceID, arg.DayStart, arg.DayEnd, arg.MaxWorkspaceChangesPerDay,
+	).Scan(&reason)
+	return reason, err
+}
+
+type automationBidWriteTxBeginner interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+// BeginAutomationBidWriteLease keeps the workspace advisory lock until the
+// caller finishes the external WB write. A concurrent cap/settings update is
+// therefore ordered either before this final check or after the write, never in
+// the gap between them.
+func (q *Queries) BeginAutomationBidWriteLease(ctx context.Context, arg AutomationBidActionPreWriteGuardParams) (pgx.Tx, string, error) {
+	beginner, ok := q.db.(automationBidWriteTxBeginner)
+	if !ok {
+		return nil, "", fmt.Errorf("database does not support automation bid write transactions")
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	reason, err := q.WithTx(tx).AutomationBidActionPreWriteGuard(ctx, arg)
+	if err != nil {
+		_ = tx.Rollback(context.Background())
+		return nil, "", err
+	}
+	if reason != "" {
+		_ = tx.Rollback(context.Background())
+		return nil, reason, nil
+	}
+	return tx, "", nil
 }
 
 type AutomationBidActionForReconciliation struct {
@@ -151,11 +303,13 @@ type AutomationBidActionForReconciliation struct {
 	SellerCabinetID pgtype.UUID
 	CampaignID      pgtype.UUID
 	ProductID       pgtype.UUID
+	PhraseID        pgtype.UUID
 	WBCampaignID    int64
 	WBProductID     int64
 	OldBid          int64
 	NewBid          int64
 	Placement       pgtype.Text
+	NormQuery       pgtype.Text
 	BidObservedAt   pgtype.Timestamptz
 	Status          string
 	CreatedAt       pgtype.Timestamptz
@@ -168,8 +322,8 @@ type ListStaleAutomationBidActionsParams struct {
 
 func (q *Queries) ListStaleAutomationBidActions(ctx context.Context, arg ListStaleAutomationBidActionsParams) ([]AutomationBidActionForReconciliation, error) {
 	rows, err := q.db.Query(ctx, `SELECT id, automation_key, workspace_id, seller_cabinet_id,
-		campaign_id, product_id, wb_campaign_id, wb_product_id, old_bid, new_bid,
-		placement, bid_observed_at, status, created_at
+		campaign_id, product_id, phrase_id, wb_campaign_id, wb_product_id, old_bid, new_bid,
+		placement, norm_query, bid_observed_at, status, created_at
 	FROM wb_bid_actions
 	WHERE action_type = 'strategy_bid'
 	  AND status IN ('pending', 'unknown')
@@ -186,8 +340,8 @@ func (q *Queries) ListStaleAutomationBidActions(ctx context.Context, arg ListSta
 		var item AutomationBidActionForReconciliation
 		if err := rows.Scan(
 			&item.ID, &item.AutomationKey, &item.WorkspaceID, &item.SellerCabinetID,
-			&item.CampaignID, &item.ProductID, &item.WBCampaignID, &item.WBProductID,
-			&item.OldBid, &item.NewBid, &item.Placement, &item.BidObservedAt,
+			&item.CampaignID, &item.ProductID, &item.PhraseID, &item.WBCampaignID, &item.WBProductID,
+			&item.OldBid, &item.NewBid, &item.Placement, &item.NormQuery, &item.BidObservedAt,
 			&item.Status, &item.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -214,11 +368,11 @@ type UpsertReconciledAutomationBidChangeParams struct {
 }
 
 const upsertReconciledAutomationBidChange = `INSERT INTO bid_changes (
-	workspace_id, seller_cabinet_id, campaign_id, product_id, strategy_id,
+	workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id,
 	placement, old_bid, new_bid, reason, source, wb_status, automation_action_id
 )
 SELECT action.workspace_id, action.seller_cabinet_id, action.campaign_id,
-	action.product_id, action.strategy_id, COALESCE(NULLIF(action.placement, ''), $3),
+	action.product_id, action.phrase_id, action.strategy_id, COALESCE(NULLIF(action.placement, ''), $3),
 	action.old_bid::int, action.new_bid::int, COALESCE(action.reason, 'Automated bid reconciliation'),
 	'strategy', $2, action.id
 FROM wb_bid_actions action

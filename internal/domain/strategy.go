@@ -17,8 +17,10 @@ type BidDecisionObservation struct {
 	StrategyBindingID uuid.UUID       `json:"strategy_binding_id"`
 	CampaignID        uuid.UUID       `json:"campaign_id"`
 	ProductID         *uuid.UUID      `json:"product_id,omitempty"`
+	PhraseID          *uuid.UUID      `json:"phrase_id,omitempty"`
 	WBCampaignID      int64           `json:"wb_campaign_id"`
 	WBProductID       int64           `json:"wb_product_id"`
+	NormQuery         string          `json:"norm_query,omitempty"`
 	Placement         string          `json:"placement"`
 	OldBid            int             `json:"old_bid"`
 	ProposedBid       int             `json:"proposed_bid"`

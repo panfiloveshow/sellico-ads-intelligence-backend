@@ -62,7 +62,7 @@ func TestWorkspaceSettingsHandler_UpdateSettings(t *testing.T) {
 	wsID := uuid.New()
 	userID := uuid.New()
 	input := domain.WorkspaceSettings{
-		Automation: &domain.AutomationSettings{Enabled: true, ManualHold: true, HoldReason: "review"},
+		Automation: &domain.AutomationSettings{Enabled: true, ManualHold: true, HoldReason: "review", MaxBidChangesPerDay: 25},
 		Notifications: &domain.NotificationSettings{
 			Telegram: &domain.TelegramSettings{
 				BotToken: "test-token",
@@ -135,6 +135,33 @@ func TestWorkspaceSettingsHandler_UpdateSettingsRejectsInvalidEmailRecipient(t *
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "notifications.email.recipients.0")
+}
+
+func TestWorkspaceSettingsHandler_UpdateSettingsRejectsLiveAutomationWithoutDailyActionCap(t *testing.T) {
+	wsID := uuid.New()
+	userID := uuid.New()
+	svc := &mockSettingsService{
+		updateSettingsFn: func(context.Context, uuid.UUID, uuid.UUID, domain.WorkspaceSettings) (*domain.WorkspaceSettings, error) {
+			t.Fatal("service should not be called without an explicit live automation cap")
+			return nil, nil
+		},
+	}
+
+	h := NewWorkspaceSettingsHandler(svc)
+	body, err := json.Marshal(domain.WorkspaceSettings{
+		Automation: &domain.AutomationSettings{Enabled: true},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), middleware.WorkspaceIDKey, wsID)
+	ctx = context.WithValue(ctx, middleware.UserIDKey, userID)
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	h.UpdateSettings(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "automation.max_bid_changes_per_day")
 }
 
 func TestWorkspaceSettingsHandler_GetSettings_MissingWorkspace(t *testing.T) {

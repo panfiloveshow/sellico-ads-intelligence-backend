@@ -54,6 +54,25 @@ var (
 	retryAfterUnit    = time.Second
 )
 
+type requestRetryPolicyKey struct{}
+
+type requestRetryPolicy struct {
+	retryRateLimit bool
+}
+
+// withoutRateLimitRetry is used for live bid writes executed while the caller
+// holds a short control-plane lease. The 429 response is definitive (WB did not
+// apply the write), so surfacing it immediately preserves safety without
+// sleeping under the workspace advisory lock.
+func withoutRateLimitRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, requestRetryPolicyKey{}, requestRetryPolicy{retryRateLimit: false})
+}
+
+func retryRateLimitForRequest(ctx context.Context) bool {
+	policy, ok := ctx.Value(requestRetryPolicyKey{}).(requestRetryPolicy)
+	return !ok || policy.retryRateLimit
+}
+
 // serviceUARoundTripper stamps the registered service User-Agent on every
 // outgoing WB request (official APIs and the public showcase alike).
 type serviceUARoundTripper struct {
@@ -564,6 +583,9 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 				RetryAfter: retryAfter,
 				URL:        url,
 				Message:    fmt.Sprintf("rate limited (429) on %s", url),
+			}
+			if !retryRateLimitForRequest(ctx) {
+				return resp, respBody, lastErr
 			}
 			if attempt < maxRetries {
 				if err := sleepWithContext(ctx, retryAfter); err != nil {

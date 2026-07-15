@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -44,19 +45,35 @@ func TestWorkspaceAutomationGuardrailIsFailClosedAndHonorsManualHold(t *testing.
 	require.NoError(t, err)
 	reason, err = workspaceAutomationGuardrailReason(raw)
 	require.NoError(t, err)
+	require.Contains(t, reason, "max_bid_changes_per_day")
+
+	raw, err = json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{
+		Enabled: true, MaxBidChangesPerDay: 25,
+	}})
+	require.NoError(t, err)
+	reason, err = workspaceAutomationGuardrailReason(raw)
+	require.NoError(t, err)
 	require.Empty(t, reason)
 
 	raw, err = json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{
-		Enabled: true, ManualHold: true, HoldReason: "operator review",
+		Enabled: true, ManualHold: true, HoldReason: "operator review", MaxBidChangesPerDay: 25,
 	}})
 	require.NoError(t, err)
 	reason, err = workspaceAutomationGuardrailReason(raw)
 	require.NoError(t, err)
 	require.Equal(t, "operator review", reason)
+
+	raw, err = json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{
+		Enabled: true, ManualHold: true, HoldReason: "legacy emergency hold",
+	}})
+	require.NoError(t, err)
+	reason, err = workspaceAutomationGuardrailReason(raw)
+	require.NoError(t, err)
+	require.Equal(t, "legacy emergency hold", reason)
 }
 
 func TestEvaluateLiveBidWriteGuardrailRechecksOperatorControlsAndStrategyActivity(t *testing.T) {
-	enabled, err := json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{Enabled: true}})
+	enabled, err := json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{Enabled: true, MaxBidChangesPerDay: 25}})
 	require.NoError(t, err)
 
 	reason, err := evaluateLiveBidWriteGuardrail(enabled, true, true)
@@ -72,7 +89,7 @@ func TestEvaluateLiveBidWriteGuardrailRechecksOperatorControlsAndStrategyActivit
 	require.Contains(t, reason, "no longer available")
 
 	held, err := json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{
-		Enabled: true, ManualHold: true, HoldReason: "emergency stop",
+		Enabled: true, ManualHold: true, HoldReason: "emergency stop", MaxBidChangesPerDay: 25,
 	}})
 	require.NoError(t, err)
 	reason, err = evaluateLiveBidWriteGuardrail(held, true, true)
@@ -82,6 +99,13 @@ func TestEvaluateLiveBidWriteGuardrailRechecksOperatorControlsAndStrategyActivit
 	reason, err = evaluateLiveBidWriteGuardrail(nil, true, true)
 	require.NoError(t, err)
 	require.Contains(t, reason, "not explicitly enabled")
+}
+
+func TestAutomationBidDayWindowUsesMoscowCalendarDay(t *testing.T) {
+	now := time.Date(2026, 7, 14, 22, 30, 0, 0, time.UTC) // 01:30 on July 15 in Moscow.
+	start, end := automationBidDayWindow(now)
+	require.Equal(t, time.Date(2026, 7, 14, 21, 0, 0, 0, time.UTC), start)
+	require.Equal(t, time.Date(2026, 7, 15, 21, 0, 0, 0, time.UTC), end)
 }
 
 func TestSellerCabinetAutomationGuardrailRequiresFreshReadyCoverage(t *testing.T) {
@@ -124,6 +148,81 @@ func TestAutomationBidReconciliationStatusUsesActualSyncedBid(t *testing.T) {
 	require.Equal(t, "applied", automationBidReconciliationStatus(100, 120, 120))
 	require.Equal(t, "not_applied", automationBidReconciliationStatus(100, 120, 100))
 	require.Equal(t, "superseded", automationBidReconciliationStatus(100, 120, 110))
+}
+
+func TestManualCPMStrategySupportFailsClosedWithoutNormqueryRevenue(t *testing.T) {
+	require.Empty(t, manualCPMStrategySkipReason(domain.StrategyTypeAntiSliv))
+	require.Empty(t, manualCPMStrategySkipReason(domain.StrategyTypeSearchPlaybook))
+	require.Contains(t, manualCPMStrategySkipReason(domain.StrategyTypeACoS), "exact normquery revenue")
+	require.Contains(t, manualCPMStrategySkipReason(domain.StrategyTypeROAS), "exact normquery revenue")
+	require.Contains(t, manualCPMStrategySkipReason(domain.StrategyTypeDayparting), "baseline")
+}
+
+func TestClusterSnapshotGuardrailRequiresFreshExactOrderEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	snapshot := sqlcgen.AutomationClusterSnapshot{
+		PhraseID:        uuidToPgtype(uuid.New()),
+		ProductID:       uuidToPgtype(uuid.New()),
+		WBProductID:     123,
+		NormQuery:       "real query",
+		CurrentBid:      250,
+		BidObservedAt:   pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		StatsObservedAt: pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		StatRows:        7,
+		OrdersKnown:     true,
+	}
+	require.Empty(t, clusterSnapshotGuardrailReason(snapshot, 36, now, domain.StrategyTypeAntiSliv))
+
+	snapshot.OrdersKnown = false
+	require.Contains(t, clusterSnapshotGuardrailReason(snapshot, 36, now, domain.StrategyTypeAntiSliv), "order evidence")
+	snapshot.OrdersKnown = true
+	snapshot.Orders = 1
+	require.Contains(t, clusterSnapshotGuardrailReason(snapshot, 36, now, domain.StrategyTypeAntiSliv), "zero orders")
+	snapshot.Orders = 0
+	snapshot.StatsObservedAt.Time = now.Add(-48 * time.Hour)
+	require.Contains(t, clusterSnapshotGuardrailReason(snapshot, 36, now, domain.StrategyTypeAntiSliv), "stale")
+}
+
+func TestClusterAutomationKeysSeparateNormqueriesForSameProduct(t *testing.T) {
+	campaign := sqlcgen.Campaign{SellerCabinetID: uuidToPgtype(uuid.New()), WbCampaignID: 42}
+	observed := pgtype.Timestamptz{Time: time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC), Valid: true}
+	first := sqlcgen.AutomationClusterSnapshot{WBProductID: 123, NormQuery: "red shoes", BidObservedAt: observed}
+	second := first
+	second.NormQuery = "blue shoes"
+	decision := &BidDecision{OldBid: 100, NewBid: 110}
+	firstKey, firstObservation := automationClusterBidActionKeys(campaign, first, decision)
+	secondKey, secondObservation := automationClusterBidActionKeys(campaign, second, decision)
+	require.NotEqual(t, firstKey, secondKey)
+	require.NotEqual(t, firstObservation, secondObservation)
+}
+
+func TestClusterRevenueGuardrailBlocksRaisesButAllowsReductions(t *testing.T) {
+	require.Contains(t, clusterRevenueGuardrailReason(&BidDecision{OldBid: 100, NewBid: 110}, false), "revenue is unavailable")
+	require.Empty(t, clusterRevenueGuardrailReason(&BidDecision{OldBid: 100, NewBid: 90}, false))
+	require.Empty(t, clusterRevenueGuardrailReason(&BidDecision{OldBid: 100, NewBid: 110}, true))
+}
+
+func TestClusterReconciliationScopeSurvivesDeletedPhrase(t *testing.T) {
+	action := sqlcgen.AutomationBidActionForReconciliation{
+		ProductID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		NormQuery: pgtype.Text{String: "real normquery", Valid: true},
+	}
+	require.True(t, automationActionHasClusterScope(action), "normquery must prevent product-wide reconciliation when phrase FK was cleared")
+
+	action.NormQuery = pgtype.Text{}
+	require.False(t, automationActionHasClusterScope(action), "legacy product action without normquery remains product-scoped")
+	action.PhraseID = uuidToPgtype(uuid.New())
+	require.True(t, automationActionHasClusterScope(action))
+}
+
+func TestAutomationBidWriteContextHasHardDeadline(t *testing.T) {
+	ctx, cancel := automationBidWriteContext(context.Background())
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	remaining := time.Until(deadline)
+	require.LessOrEqual(t, remaining, automationBidWriteTimeout)
+	require.Greater(t, remaining, automationBidWriteTimeout-time.Second)
 }
 
 func TestCampaignDailyLimitIncreaseGuardrailFailsClosed(t *testing.T) {

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -285,6 +287,81 @@ func TestUpdateCampaignBid_ClassifiesTransportFailureAsOutcomeUnknown(t *testing
 	err := client.UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "search", 250)
 	require.Error(t, err)
 	assert.True(t, CampaignBidUpdateOutcomeUnknown(err))
+}
+
+func TestClusterBidWriteUsesSameUnknownOutcomeClassification(t *testing.T) {
+	err := errors.New("WB write failed")
+	require.True(t, CampaignBidUpdateOutcomeUnknown(campaignBidWriteError(0, false, err)))
+	require.True(t, CampaignBidUpdateOutcomeUnknown(campaignBidWriteError(http.StatusBadGateway, true, err)))
+	require.False(t, CampaignBidUpdateOutcomeUnknown(campaignBidWriteError(http.StatusBadRequest, true, err)))
+}
+
+func TestLiveProductAndClusterBidWritesDoNotRetry429(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(context.Context, *Client) error
+	}{
+		{
+			name: "product bid",
+			call: func(ctx context.Context, client *Client) error {
+				return client.UpdateCampaignBid(ctx, "token", 42, 9, 123, "search", 250)
+			},
+		},
+		{
+			name: "cluster bid",
+			call: func(ctx context.Context, client *Client) error {
+				return client.SetClusterBids(ctx, "token", 42, []ClusterBidItem{{NMID: 123, NormQuery: "real query", Bid: 250}})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts.Add(1)
+				w.Header().Set("Retry-After", "3600")
+				w.WriteHeader(http.StatusTooManyRequests)
+			}))
+			defer server.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			err := test.call(ctx, newTestClient(server.URL))
+			require.Error(t, err)
+			require.Equal(t, int32(1), attempts.Load())
+			require.False(t, CampaignBidUpdateOutcomeUnknown(err), "a received 429 is a definitive rejection, not an unknown write")
+			var apiErr *APIError
+			require.ErrorAs(t, err, &apiErr)
+			require.Equal(t, time.Hour, apiErr.RetryAfter)
+		})
+	}
+}
+
+func TestClusterBidWritePreservesUnknownOutcomeFor5xxAndTransport(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	err := newTestClient(server.URL).SetClusterBids(context.Background(), "token", 42, []ClusterBidItem{{
+		NMID: 123, NormQuery: "real query", Bid: 250,
+	}})
+	require.Error(t, err)
+	require.True(t, CampaignBidUpdateOutcomeUnknown(err))
+	require.Equal(t, int32(1), attempts.Load(), "5xx write must not be retried")
+
+	client := newTestClient("https://example.invalid")
+	client.httpClient.Transport = failingRoundTripper(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection reset after cluster write")
+	})
+	err = client.SetClusterBids(context.Background(), "token", 42, []ClusterBidItem{{
+		NMID: 123, NormQuery: "real query", Bid: 250,
+	}})
+	require.Error(t, err)
+	require.True(t, CampaignBidUpdateOutcomeUnknown(err))
 }
 
 func TestGetCommissionTariffs_Success(t *testing.T) {
