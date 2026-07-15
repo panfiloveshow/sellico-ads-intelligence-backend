@@ -76,6 +76,26 @@ func TestSearchPlaybook_DRRCeilingReducesBid(t *testing.T) {
 	require.Less(t, d.NewBid, d.OldBid)
 }
 
+func TestSearchPlaybook_CPOCeilingReducesBidWithoutInventingRevenue(t *testing.T) {
+	engine := NewBidEngine(zerolog.Nop())
+	// Revenue is unavailable at normquery level. Real spend/orders and the real
+	// buyer price are enough to compare CPO with the configured DRR-derived cap.
+	d := engine.CalculateBid(playbook("mid", 20), BidContext{
+		CurrentBid:  200,
+		Impressions: 400,
+		Clicks:      40,
+		Orders:      2,
+		Revenue:     0,
+		Spend:       500,
+		BuyerPrice:  1000,
+		AvgPosition: 2.5,
+		HasPosition: true,
+		Placement:   "search",
+	})
+	require.NotNil(t, d)
+	require.Less(t, d.NewBid, d.OldBid)
+}
+
 func TestSearchPlaybook_PullsBackWhenAtTargetAndImpressionsFlat(t *testing.T) {
 	engine := NewBidEngine(zerolog.Nop())
 	// At target (pos 1), impressions flat vs prior window (500 vs 490 ≈ +2% ≤ 20%) → pull back.

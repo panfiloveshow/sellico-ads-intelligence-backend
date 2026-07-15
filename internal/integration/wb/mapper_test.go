@@ -296,6 +296,8 @@ func TestMapSearchClusterStatDTO_ZeroValues(t *testing.T) {
 	assert.Equal(t, int64(0), stat.Impressions)
 	assert.Equal(t, int64(0), stat.Clicks)
 	assert.Equal(t, int64(0), stat.Spend)
+	require.NotNil(t, stat.Orders)
+	assert.Equal(t, int64(0), *stat.Orders)
 }
 
 // ---------------------------------------------------------------------------

@@ -421,7 +421,7 @@ func TestDefaultStrategyParams_AutopilotGuardrails(t *testing.T) {
 	require.Equal(t, 36, params.MaxDataAgeHours)
 }
 
-func TestEconomicsDRRIncreaseGuardrailUsesRealBreakEvenCeiling(t *testing.T) {
+func TestEconomicsIncreaseGuardrailUsesRealBreakEvenCeiling(t *testing.T) {
 	ctx := BidContext{
 		Spend:   190,
 		Revenue: 1000,
@@ -429,12 +429,29 @@ func TestEconomicsDRRIncreaseGuardrailUsesRealBreakEvenCeiling(t *testing.T) {
 			Allowed: true, MaxAllowedDRRPercent: 18,
 		},
 	}
-	require.Contains(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{}, ctx), "at or above")
+	require.Contains(t, economicsIncreaseGuardrailReason(domain.StrategyParams{}, ctx, 110), "at or above")
 
 	ctx.Spend = 100
-	require.Contains(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{TargetACoS: 20}, ctx), "exceeds")
-	require.Contains(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{TargetROAS: 4}, ctx), "below")
-	require.Empty(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{TargetACoS: 15, TargetROAS: 6}, ctx))
+	require.Contains(t, economicsIncreaseGuardrailReason(domain.StrategyParams{TargetACoS: 20}, ctx, 110), "exceeds")
+	require.Contains(t, economicsIncreaseGuardrailReason(domain.StrategyParams{TargetROAS: 4}, ctx, 110), "below")
+	require.Empty(t, economicsIncreaseGuardrailReason(domain.StrategyParams{TargetACoS: 15, TargetROAS: 6}, ctx, 110))
+}
+
+func TestEconomicsIncreaseGuardrailUsesExactClusterCPOAndHeadroom(t *testing.T) {
+	ctx := BidContext{
+		CurrentBid: 100,
+		Clicks:     30,
+		Orders:     3,
+		Spend:      300,
+		IncreaseGuardrail: &BidIncreaseGuardrail{
+			Allowed: true, MaxAllowedDRRPercent: 20, MaxAllowedCPO: 130,
+		},
+	}
+	require.Contains(t, economicsIncreaseGuardrailReason(domain.StrategyParams{MinClicks: 10}, ctx, 125), "projected CPO")
+	require.Empty(t, economicsIncreaseGuardrailReason(domain.StrategyParams{MinClicks: 10}, ctx, 110))
+
+	ctx.Orders = 2
+	require.Contains(t, economicsIncreaseGuardrailReason(domain.StrategyParams{MinClicks: 10}, ctx, 110), "at least 3 attributed orders")
 }
 
 func TestStrategyAutomationSkipReasonHonorsTrustLevels(t *testing.T) {

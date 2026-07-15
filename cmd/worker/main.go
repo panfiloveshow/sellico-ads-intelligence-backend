@@ -56,10 +56,10 @@ func main() {
 	})
 	productsClient := sellico.NewClient(cfg.ProductsAPIBaseURL, cfg.SellicoAPITimeout)
 	var unitEconomicsReadinessProvider service.UnitEconomicsReadinessProvider
-	if cfg.ProductsAPIBaseURL != "" && cfg.ProductsAPIToken != "" && cfg.ProductsUnitEconomicsReadinessPath != "" {
+	if cfg.ProductsAPIBaseURL != "" && cfg.ProductsAPIToken != "" && cfg.ProductsUnitEconomicsReadinessPath != "" && cfg.SellicoUnitEconomicsExportPath != "" {
 		unitEconomicsReadinessProvider = service.NewProductsUnitEconomicsReadinessProvider(
 			deps.Queries, productsClient, cfg.ProductsAPIToken,
-			cfg.ProductsUnitEconomicsReadinessPath, cfg.ProductsUnitEconomicsMaxAge,
+			cfg.ProductsUnitEconomicsReadinessPath, cfg.SellicoUnitEconomicsExportPath, cfg.ProductsUnitEconomicsMaxAge,
 		)
 	} else if sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != "" {
 		unitEconomicsReadinessProvider = service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger)

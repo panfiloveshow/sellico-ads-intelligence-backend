@@ -34,6 +34,8 @@ type UnitEconomicsReadiness struct {
 	UnprofitableProductIDs     []int64
 	StaleProductIDs            []int64
 	MaxAllowedDRRPercent       float64
+	MaxAllowedCPO              float64
+	BuyerPrice                 float64
 }
 
 func (r *UnitEconomicsReadiness) AllowsBidIncrease() bool {

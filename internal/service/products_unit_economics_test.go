@@ -22,10 +22,12 @@ func (r readinessCabinetReader) GetSellerCabinetByID(context.Context, pgtype.UUI
 }
 
 type readinessProductsClient struct {
-	response  *sellico.UnitEconomicsReadinessResponse
-	responses []*sellico.UnitEconomicsReadinessResponse
-	request   sellico.UnitEconomicsReadinessRequest
-	requests  []sellico.UnitEconomicsReadinessRequest
+	response   *sellico.UnitEconomicsReadinessResponse
+	responses  []*sellico.UnitEconomicsReadinessResponse
+	exportRows []sellico.WBUnitEconomics
+	exportSet  bool
+	request    sellico.UnitEconomicsReadinessRequest
+	requests   []sellico.UnitEconomicsReadinessRequest
 }
 
 func (c *readinessProductsClient) CheckUnitEconomicsReadiness(_ context.Context, _, _ string, request sellico.UnitEconomicsReadinessRequest) (*sellico.UnitEconomicsReadinessResponse, error) {
@@ -35,6 +37,31 @@ func (c *readinessProductsClient) CheckUnitEconomicsReadiness(_ context.Context,
 		return c.responses[len(c.requests)-1], nil
 	}
 	return c.response, nil
+}
+
+func (c *readinessProductsClient) ListWBUnitEconomics(_ context.Context, _, _, _ string) ([]sellico.WBUnitEconomics, error) {
+	if c.exportSet {
+		return c.exportRows, nil
+	}
+	response := c.response
+	if len(c.responses) > 0 && len(c.requests) > 0 {
+		response = c.responses[len(c.requests)-1]
+	}
+	if response == nil {
+		return nil, nil
+	}
+	rows := make([]sellico.WBUnitEconomics, 0, len(response.CheckedProductIDs))
+	for _, nmID := range response.CheckedProductIDs {
+		customerPrice := 1000.0
+		marginBeforeAds := 200.0
+		calculatedAt := response.CheckedAt
+		rows = append(rows, sellico.WBUnitEconomics{
+			NmID: nmID, CostPrice: 500, CustomerPrice: &customerPrice,
+			MarginBeforeAds: &marginBeforeAds, CalculatedAt: &calculatedAt,
+			Source: response.Source, Ready: true,
+		})
+	}
+	return rows, nil
 }
 
 func TestProductsUnitEconomicsReadinessProviderRequiresExactFreshCoverage(t *testing.T) {
@@ -53,7 +80,7 @@ func TestProductsUnitEconomicsReadinessProviderRequiresExactFreshCoverage(t *tes
 		ID:                    uuidToPgtype(cabinetID),
 		WorkspaceID:           uuidToPgtype(workspaceID),
 		ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
-	}}, client, "token", "/products/unit-economics/readiness", 72*time.Hour)
+	}}, client, "token", "/products/unit-economics/readiness", "/products/unit-economics/export", 72*time.Hour)
 	provider.now = func() time.Time { return now }
 
 	readiness, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
@@ -62,8 +89,94 @@ func TestProductsUnitEconomicsReadinessProviderRequiresExactFreshCoverage(t *tes
 	require.NoError(t, err)
 	require.True(t, readiness.AllowsBidIncrease())
 	require.Equal(t, 18.0, readiness.MaxAllowedDRRPercent)
+	require.Equal(t, 200.0, readiness.MaxAllowedCPO)
 	require.Equal(t, "17", client.request.IntegrationID)
 	require.Equal(t, []int64{101, 102}, client.request.WBProductIDs)
+}
+
+func TestProductsUnitEconomicsReadinessProviderFailsClosedWithoutExactCPOExport(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	client := &readinessProductsClient{
+		response: &sellico.UnitEconomicsReadinessResponse{
+			IntegrationID: "17", Source: "products", CheckedAt: now, Complete: true,
+			CheckedProductIDs: []int64{101}, MaxAllowedDRRByProduct: map[int64]float64{101: 20},
+		},
+		exportSet: true,
+		exportRows: []sellico.WBUnitEconomics{{
+			NmID: 101, CostPrice: 500, Ready: true, CalculatedAt: &now,
+		}},
+	}
+	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
+		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
+	provider.now = func() time.Time { return now }
+
+	readiness, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
+		WorkspaceID: workspaceID, SellerCabinetID: cabinetID, WBProductIDs: []int64{101},
+	})
+	require.Nil(t, readiness)
+	require.ErrorContains(t, err, "CPO ceiling is unavailable")
+}
+
+func TestProductsUnitEconomicsReadinessProviderUsesConservativeVariantCeilings(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	marginHigh, marginLow := 240.0, 110.0
+	priceHigh, priceLow := 1200.0, 800.0
+	client := &readinessProductsClient{
+		response: &sellico.UnitEconomicsReadinessResponse{
+			IntegrationID: "17", Source: "products", CheckedAt: now, Complete: true,
+			CheckedProductIDs: []int64{101}, MaxAllowedDRRByProduct: map[int64]float64{101: 20},
+		},
+		exportSet: true,
+		exportRows: []sellico.WBUnitEconomics{
+			{NmID: 101, CostPrice: 500, Ready: true, CalculatedAt: &now, MarginBeforeAds: &marginHigh, CustomerPrice: &priceHigh},
+			{NmID: 101, CostPrice: 700, Ready: true, CalculatedAt: &now, MarginBeforeAds: &marginLow, CustomerPrice: &priceLow},
+		},
+	}
+	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
+		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
+	provider.now = func() time.Time { return now }
+
+	readiness, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
+		WorkspaceID: workspaceID, SellerCabinetID: cabinetID, WBProductIDs: []int64{101},
+	})
+	require.NoError(t, err)
+	require.Equal(t, marginLow, readiness.MaxAllowedCPO)
+	require.Equal(t, priceLow, readiness.BuyerPrice)
+}
+
+func TestProductsUnitEconomicsReadinessProviderBlocksProfitExportOlderThan24Hours(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	calculatedAt := now.Add(-25 * time.Hour)
+	margin, price := 200.0, 1000.0
+	client := &readinessProductsClient{
+		response: &sellico.UnitEconomicsReadinessResponse{
+			IntegrationID: "17", Source: "products", CheckedAt: now, Complete: true,
+			CheckedProductIDs: []int64{101}, MaxAllowedDRRByProduct: map[int64]float64{101: 20},
+		},
+		exportSet: true,
+		exportRows: []sellico.WBUnitEconomics{{
+			NmID: 101, CostPrice: 500, Ready: true, CalculatedAt: &calculatedAt,
+			MarginBeforeAds: &margin, CustomerPrice: &price,
+		}},
+	}
+	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
+		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
+	provider.now = func() time.Time { return now }
+
+	readiness, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
+		WorkspaceID: workspaceID, SellerCabinetID: cabinetID, WBProductIDs: []int64{101},
+	})
+	require.Nil(t, readiness)
+	require.ErrorContains(t, err, "export is stale")
 }
 
 func TestProductsUnitEconomicsReadinessProviderBlocksCoverageMismatch(t *testing.T) {
@@ -75,7 +188,7 @@ func TestProductsUnitEconomicsReadinessProviderBlocksCoverageMismatch(t *testing
 	}}
 	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
 		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
-	}}, client, "token", "/readiness", 72*time.Hour)
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
 	provider.now = func() time.Time { return now }
 
 	_, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
@@ -93,7 +206,7 @@ func TestProductsUnitEconomicsReadinessProviderBlocksStaleTimestamp(t *testing.T
 	}}
 	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
 		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
-	}}, client, "token", "/readiness", 72*time.Hour)
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
 	provider.now = func() time.Time { return now }
 
 	_, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
@@ -135,7 +248,7 @@ func TestProductsUnitEconomicsReadinessProviderChunksAndCombinesDeterministicall
 	client := &readinessProductsClient{responses: responses}
 	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
 		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
-	}}, client, "token", "/readiness", 72*time.Hour)
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
 	provider.now = func() time.Time { return now }
 
 	readiness, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{
@@ -169,7 +282,7 @@ func TestProductsUnitEconomicsReadinessProviderFailsClosedWhenAnyChunkIsIncomple
 	}}
 	provider := NewProductsUnitEconomicsReadinessProvider(readinessCabinetReader{cabinet: sqlcgen.SellerCabinet{
 		ID: uuidToPgtype(cabinetID), WorkspaceID: uuidToPgtype(workspaceID), ExternalIntegrationID: pgtype.Text{String: "17", Valid: true},
-	}}, client, "token", "/readiness", 72*time.Hour)
+	}}, client, "token", "/readiness", "/export", 72*time.Hour)
 	provider.now = func() time.Time { return now }
 
 	readiness, err := provider.CheckBidIncreaseReadiness(context.Background(), UnitEconomicsReadinessInput{

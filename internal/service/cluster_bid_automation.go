@@ -21,8 +21,9 @@ const maxClusterAutomationTargets = 1000
 // executeManualCPMClusters is a separate target loop because a manual CPM bid
 // belongs to (campaign, nmID, normquery), not to a campaign or product alone.
 // It intentionally refuses strategies that need normquery revenue: WB does not
-// provide that attribution, and borrowing product/campaign revenue would turn an
-// estimate into a supposedly exact live decision.
+// provide that attribution. Search-playbook increases instead use exact
+// normquery spend/orders and a real per-order profitability ceiling from Sellico
+// unit economics; campaign/product revenue is never borrowed.
 func (s *BidAutomationService) executeManualCPMClusters(
 	ctx context.Context,
 	workspaceID uuid.UUID,
@@ -96,6 +97,7 @@ func (s *BidAutomationService) executeManualCPMClusters(
 		phraseID := uuidFromPgtype(snapshot.PhraseID)
 		clusterBinding := binding
 		clusterBinding.ProductID = &productID
+		increaseGuardrail := s.bidIncreaseGuardrail(ctx, strategy, clusterBinding, uuidFromPgtype(campaign.ID), int(snapshot.CurrentBid))
 		bidCtx := BidContext{
 			CurrentBid:        int(snapshot.CurrentBid),
 			Impressions:       snapshot.RecentImpressions,
@@ -105,24 +107,16 @@ func (s *BidAutomationService) executeManualCPMClusters(
 			Orders:            snapshot.Orders,
 			Revenue:           0, // deliberately unavailable at normquery granularity
 			Placement:         "search",
-			IncreaseGuardrail: s.bidIncreaseGuardrail(ctx, strategy, clusterBinding, uuidFromPgtype(campaign.ID), int(snapshot.CurrentBid)),
+			IncreaseGuardrail: increaseGuardrail,
 			DecisionTime:      now,
 			HasPosition:       snapshot.AveragePosition.Valid && snapshot.AveragePosition.Float64 > 0,
 			AvgPosition:       snapshot.AveragePosition.Float64,
 		}
-		if product.Price.Valid && product.Price.Int64 > 0 {
-			bidCtx.BuyerPrice = float64(product.Price.Int64)
+		if increaseGuardrail != nil {
+			bidCtx.BuyerPrice = increaseGuardrail.BuyerPrice
 		}
 		decision := s.engine.CalculateBid(strategy, bidCtx)
 		if decision == nil {
-			continue
-		}
-		if reason := clusterRevenueGuardrailReason(decision, false); reason != "" {
-			s.logger.Info().
-				Str("strategy_id", strategy.ID.String()).
-				Str("norm_query", snapshot.NormQuery).
-				Str("reason", reason).
-				Msg("blocking cluster bid increase without exact normquery revenue")
 			continue
 		}
 		decision.CampaignID = uuidFromPgtype(campaign.ID)
@@ -285,13 +279,6 @@ func (s *BidAutomationService) executeManualCPMClusters(
 	return changes, errors.Join(actionErrors...)
 }
 
-func clusterRevenueGuardrailReason(decision *BidDecision, revenueAvailable bool) string {
-	if decision == nil || decision.NewBid <= decision.OldBid || revenueAvailable {
-		return ""
-	}
-	return "exact normquery revenue is unavailable; cluster bid increases are blocked"
-}
-
 func manualCPMStrategySkipReason(strategyType string) string {
 	switch strategyType {
 	case domain.StrategyTypeAntiSliv, domain.StrategyTypeSearchPlaybook:
@@ -353,6 +340,7 @@ func (s *BidAutomationService) recordShadowClusterBidDecision(
 		"date_to":     normalizeStatDate(dateTo).Format("2006-01-02"),
 		"impressions": bidCtx.Impressions, "previous_impressions": bidCtx.PrevImpressions,
 		"clicks": bidCtx.Clicks, "spend": bidCtx.Spend, "orders": bidCtx.Orders,
+		"buyer_price": bidCtx.BuyerPrice, "max_allowed_cpo": bidCtx.IncreaseGuardrail.MaxAllowedCPO,
 		"average_position": bidCtx.AvgPosition, "decision_time": bidCtx.DecisionTime.UTC().Format(time.RFC3339),
 		"bid_observed_at": snapshot.BidObservedAt.Time.UTC().Format(time.RFC3339Nano),
 	})

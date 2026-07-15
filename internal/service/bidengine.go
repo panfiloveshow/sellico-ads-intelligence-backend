@@ -72,7 +72,14 @@ type BidIncreaseGuardrail struct {
 	Allowed              bool
 	Reason               string
 	MaxAllowedDRRPercent float64
+	MaxAllowedCPO        float64
+	BuyerPrice           float64
 }
+
+const (
+	minOrdersForProfitSafeIncrease int64 = 3
+	profitSafeCPOFactor                  = 0.90
+)
 
 const (
 	bidIncreaseMinRating       = 4.2
@@ -128,7 +135,7 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 	}
 
 	if newBid > ctx.CurrentBid {
-		if guardrailReason := economicsDRRIncreaseGuardrailReason(params, ctx); guardrailReason != "" {
+		if guardrailReason := economicsIncreaseGuardrailReason(params, ctx, newBid); guardrailReason != "" {
 			e.logger.Info().Str("placement", ctx.Placement).Str("reason", guardrailReason).
 				Msg("bid increase blocked by unit economics DRR ceiling")
 			return nil
@@ -176,17 +183,36 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 	}
 }
 
-func economicsDRRIncreaseGuardrailReason(params domain.StrategyParams, ctx BidContext) string {
+func economicsIncreaseGuardrailReason(params domain.StrategyParams, ctx BidContext, proposedBid int) string {
 	if ctx.IncreaseGuardrail == nil {
+		return ""
+	}
+	if ctx.Revenue <= 0 {
+		ceiling := ctx.IncreaseGuardrail.MaxAllowedCPO
+		if ceiling <= 0 {
+			return "unit economics CPO ceiling is unavailable"
+		}
+		if ctx.Orders < minOrdersForProfitSafeIncrease {
+			return fmt.Sprintf("at least %d attributed orders are required for a profit-safe increase", minOrdersForProfitSafeIncrease)
+		}
+		if ctx.Clicks < int64(params.MinClicks) {
+			return fmt.Sprintf("at least %d clicks are required for a profit-safe increase", params.MinClicks)
+		}
+		currentCPO := ctx.Spend / float64(ctx.Orders)
+		projectedCPO := currentCPO
+		if ctx.CurrentBid > 0 && proposedBid > ctx.CurrentBid {
+			projectedCPO *= float64(proposedBid) / float64(ctx.CurrentBid)
+		}
+		safeCeiling := ceiling * profitSafeCPOFactor
+		if projectedCPO >= safeCeiling {
+			return fmt.Sprintf("projected CPO %.2f is at or above safe ceiling %.2f (90%% of unit economics break-even %.2f)", projectedCPO, safeCeiling, ceiling)
+		}
 		return ""
 	}
 	if ctx.IncreaseGuardrail.MaxAllowedDRRPercent <= 0 {
 		return "unit economics DRR ceiling is unavailable"
 	}
 	ceiling := ctx.IncreaseGuardrail.MaxAllowedDRRPercent
-	if ctx.Revenue <= 0 {
-		return "current DRR evidence is unavailable"
-	}
 	currentDRR := ctx.Spend / ctx.Revenue * 100
 	if currentDRR >= ceiling {
 		return fmt.Sprintf("current DRR %.1f%% is at or above unit economics ceiling %.1f%%", currentDRR, ceiling)
@@ -326,13 +352,25 @@ func (e *BidEngine) calculateSearchPlaybookBid(params domain.StrategyParams, ctx
 			ctx.Spend, params.SacrificialSpendPricePct, ctx.BuyerPrice)
 	}
 
-	// Rule 2: DRR ceiling (reuses max_acos as the DRR cap).
-	if ceiling := params.MaxACoS; ceiling > 0 && ctx.Orders > 0 && ctx.Revenue > 0 {
-		drr := ctx.Spend / ctx.Revenue * 100
-		if drr > ceiling {
-			ratio := ceiling / drr
-			newBid := int(math.Round(float64(ctx.CurrentBid) * ratio))
-			return newBid, fmt.Sprintf("DRR %.1f%% > ceiling %.1f%%, reducing bid toward target", drr, ceiling)
+	// Rule 2: profitability ceiling (reuses max_acos as the DRR cap). WB does
+	// not return normquery revenue, so cluster decisions use the equivalent CPO
+	// ceiling derived from the real buyer price. No campaign revenue is borrowed.
+	if ceiling := params.MaxACoS; ceiling > 0 && ctx.Orders > 0 {
+		if ctx.Revenue > 0 {
+			drr := ctx.Spend / ctx.Revenue * 100
+			if drr > ceiling {
+				ratio := ceiling / drr
+				newBid := int(math.Round(float64(ctx.CurrentBid) * ratio))
+				return newBid, fmt.Sprintf("DRR %.1f%% > ceiling %.1f%%, reducing bid toward target", drr, ceiling)
+			}
+		} else if ctx.BuyerPrice > 0 {
+			currentCPO := ctx.Spend / float64(ctx.Orders)
+			maxCPO := ctx.BuyerPrice * ceiling / 100
+			if currentCPO > maxCPO {
+				ratio := maxCPO / currentCPO
+				newBid := int(math.Round(float64(ctx.CurrentBid) * ratio))
+				return newBid, fmt.Sprintf("CPO %.1f > ceiling %.1f from buyer price and DRR %.1f%%, reducing bid toward target", currentCPO, maxCPO, ceiling)
+			}
 		}
 	}
 

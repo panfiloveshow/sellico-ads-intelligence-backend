@@ -196,12 +196,6 @@ func TestClusterAutomationKeysSeparateNormqueriesForSameProduct(t *testing.T) {
 	require.NotEqual(t, firstObservation, secondObservation)
 }
 
-func TestClusterRevenueGuardrailBlocksRaisesButAllowsReductions(t *testing.T) {
-	require.Contains(t, clusterRevenueGuardrailReason(&BidDecision{OldBid: 100, NewBid: 110}, false), "revenue is unavailable")
-	require.Empty(t, clusterRevenueGuardrailReason(&BidDecision{OldBid: 100, NewBid: 90}, false))
-	require.Empty(t, clusterRevenueGuardrailReason(&BidDecision{OldBid: 100, NewBid: 110}, true))
-}
-
 func TestClusterReconciliationScopeSurvivesDeletedPhrase(t *testing.T) {
 	action := sqlcgen.AutomationBidActionForReconciliation{
 		ProductID: pgtype.UUID{Bytes: uuid.New(), Valid: true},

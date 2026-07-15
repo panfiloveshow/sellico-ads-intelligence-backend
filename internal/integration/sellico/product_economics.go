@@ -22,6 +22,7 @@ type WBUnitEconomics struct {
 	LogisticsCost     *float64
 	OtherCosts        *float64
 	MaxAllowedDRR     *float64
+	MarginBeforeAds   *float64
 	CalculatedAt      *time.Time
 	Source            string
 	Ready             bool
@@ -70,13 +71,26 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 			LogisticsCost     *json.Number `json:"logistics_cost"`
 			OtherCosts        *json.Number `json:"other_costs"`
 			MaxAllowedDRR     *json.Number `json:"max_allowed_drr"`
+			MarginBeforeAds   *json.Number `json:"margin_before_ads"`
 			CalculatedAt      string       `json:"calculated_at"`
 			Ready             bool         `json:"ready"`
 		} `json:"items"`
-		Source string `json:"source"`
+		Source        string      `json:"source"`
+		IntegrationID json.Number `json:"integration_id"`
+		Complete      bool        `json:"complete"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
+	}
+	payloadIntegrationID, err := payload.IntegrationID.Int64()
+	if err != nil || payloadIntegrationID <= 0 || fmt.Sprintf("%d", payloadIntegrationID) != strings.TrimSpace(integrationID) {
+		return nil, fmt.Errorf("sellico unit economics export integration mismatch")
+	}
+	if !payload.Complete {
+		return nil, fmt.Errorf("sellico unit economics export is incomplete")
+	}
+	if strings.TrimSpace(payload.Source) == "" {
+		return nil, fmt.Errorf("sellico unit economics export source is missing")
 	}
 
 	out := make([]WBUnitEconomics, 0, len(payload.Items))
@@ -123,6 +137,11 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 		if it.MaxAllowedDRR != nil {
 			if v, err := it.MaxAllowedDRR.Float64(); err == nil && v >= 0 && v <= 100 {
 				row.MaxAllowedDRR = &v
+			}
+		}
+		if it.MarginBeforeAds != nil {
+			if v, err := it.MarginBeforeAds.Float64(); err == nil && v > 0 {
+				row.MarginBeforeAds = &v
 			}
 		}
 		if parsed := parseTimeField(it.CalculatedAt); !parsed.IsZero() {

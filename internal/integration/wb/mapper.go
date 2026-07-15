@@ -158,12 +158,15 @@ func MapSearchClusterStatDTO(dto WBSearchClusterStatDTO, phraseID uuid.UUID) (do
 		Clicks:      dto.Clicks,
 		Spend:       roundRubles(dto.Sum),
 		Atbs:        nonZeroInt64Ptr(dto.Atbs),
-		Orders:      nonZeroInt64Ptr(dto.Orders),
-		CPC:         nonZeroFloat64Ptr(dto.CPC),
-		CPM:         nonZeroFloat64Ptr(dto.CPM),
-		AvgPos:      nonZeroFloat64Ptr(dto.AvgPos),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		// /adv/v1/normquery/stats defines orders for every returned row. Preserve
+		// an explicit zero: cluster automation must distinguish "0 orders" from
+		// missing order evidence.
+		Orders:    &dto.Orders,
+		CPC:       nonZeroFloat64Ptr(dto.CPC),
+		CPM:       nonZeroFloat64Ptr(dto.CPM),
+		AvgPos:    nonZeroFloat64Ptr(dto.AvgPos),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, nil
 }
 

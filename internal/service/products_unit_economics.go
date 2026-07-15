@@ -15,6 +15,7 @@ import (
 
 type productsReadinessClient interface {
 	CheckUnitEconomicsReadiness(ctx context.Context, serviceToken, path string, req sellico.UnitEconomicsReadinessRequest) (*sellico.UnitEconomicsReadinessResponse, error)
+	ListWBUnitEconomics(ctx context.Context, serviceToken, path, integrationID string) ([]sellico.WBUnitEconomics, error)
 }
 
 type productsCabinetReader interface {
@@ -22,35 +23,38 @@ type productsCabinetReader interface {
 }
 
 const productsReadinessMaxWBProductIDs = 100
+const profitCeilingMaxAge = 24 * time.Hour
 
 // ProductsUnitEconomicsReadinessProvider checks the products backend with the
 // same service token used by the economics export. It validates cabinet tenant,
 // integration echo, exact product coverage and freshness before returning ready.
 type ProductsUnitEconomicsReadinessProvider struct {
-	queries productsCabinetReader
-	client  productsReadinessClient
-	token   string
-	path    string
-	maxAge  time.Duration
-	now     func() time.Time
+	queries       productsCabinetReader
+	client        productsReadinessClient
+	token         string
+	readinessPath string
+	exportPath    string
+	maxAge        time.Duration
+	now           func() time.Time
 }
 
-func NewProductsUnitEconomicsReadinessProvider(queries productsCabinetReader, client productsReadinessClient, token, path string, maxAge time.Duration) *ProductsUnitEconomicsReadinessProvider {
+func NewProductsUnitEconomicsReadinessProvider(queries productsCabinetReader, client productsReadinessClient, token, readinessPath, exportPath string, maxAge time.Duration) *ProductsUnitEconomicsReadinessProvider {
 	if maxAge <= 0 {
 		maxAge = 72 * time.Hour
 	}
 	return &ProductsUnitEconomicsReadinessProvider{
-		queries: queries,
-		client:  client,
-		token:   strings.TrimSpace(token),
-		path:    strings.TrimSpace(path),
-		maxAge:  maxAge,
-		now:     time.Now,
+		queries:       queries,
+		client:        client,
+		token:         strings.TrimSpace(token),
+		readinessPath: strings.TrimSpace(readinessPath),
+		exportPath:    strings.TrimSpace(exportPath),
+		maxAge:        maxAge,
+		now:           time.Now,
 	}
 }
 
 func (p *ProductsUnitEconomicsReadinessProvider) CheckBidIncreaseReadiness(ctx context.Context, input UnitEconomicsReadinessInput) (*UnitEconomicsReadiness, error) {
-	if p == nil || p.queries == nil || p.client == nil || p.token == "" || p.path == "" {
+	if p == nil || p.queries == nil || p.client == nil || p.token == "" || p.readinessPath == "" || p.exportPath == "" {
 		return nil, fmt.Errorf("products unit economics readiness is not configured")
 	}
 	requested := normalizedPositiveIDs(input.WBProductIDs)
@@ -86,7 +90,7 @@ func (p *ProductsUnitEconomicsReadinessProvider) CheckBidIncreaseReadiness(ctx c
 			chunkEnd = len(requested)
 		}
 		chunk := requested[chunkStart:chunkEnd]
-		response, err := p.client.CheckUnitEconomicsReadiness(ctx, p.token, p.path, sellico.UnitEconomicsReadinessRequest{
+		response, err := p.client.CheckUnitEconomicsReadiness(ctx, p.token, p.readinessPath, sellico.UnitEconomicsReadinessRequest{
 			IntegrationID:   integrationID,
 			WorkspaceID:     input.WorkspaceID.String(),
 			SellerCabinetID: input.SellerCabinetID.String(),
@@ -147,6 +151,15 @@ func (p *ProductsUnitEconomicsReadinessProvider) CheckBidIncreaseReadiness(ctx c
 		minMaxAllowedDRR = 0
 	}
 
+	maxAllowedCPO := 0.0
+	buyerPrice := 0.0
+	if len(blockedIDs) == 0 {
+		maxAllowedCPO, buyerPrice, err = p.loadExactProfitCeilings(ctx, integrationID, requested, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &UnitEconomicsReadiness{
 		IntegrationID:              integrationID,
 		Source:                     source,
@@ -157,7 +170,56 @@ func (p *ProductsUnitEconomicsReadinessProvider) CheckBidIncreaseReadiness(ctx c
 		UnprofitableProductIDs:     sortedReadinessIDs(unprofitableIDs),
 		StaleProductIDs:            sortedReadinessIDs(staleIDs),
 		MaxAllowedDRRPercent:       minMaxAllowedDRR,
+		MaxAllowedCPO:              maxAllowedCPO,
+		BuyerPrice:                 buyerPrice,
 	}, nil
+}
+
+func (p *ProductsUnitEconomicsReadinessProvider) loadExactProfitCeilings(ctx context.Context, integrationID string, requested []int64, now time.Time) (float64, float64, error) {
+	rows, err := p.client.ListWBUnitEconomics(ctx, p.token, p.exportPath, integrationID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("products unit economics export: %w", err)
+	}
+	byProduct := make(map[int64][]sellico.WBUnitEconomics, len(rows))
+	for _, row := range rows {
+		byProduct[row.NmID] = append(byProduct[row.NmID], row)
+	}
+	minCPO := 0.0
+	singleBuyerPrice := 0.0
+	for _, nmID := range requested {
+		variants := byProduct[nmID]
+		if len(variants) == 0 {
+			return 0, 0, fmt.Errorf("products unit economics CPO ceiling is unavailable for WB product %d", nmID)
+		}
+		for _, row := range variants {
+			if !row.Ready || row.MarginBeforeAds == nil || *row.MarginBeforeAds <= 0 {
+				return 0, 0, fmt.Errorf("products unit economics CPO ceiling is unavailable for WB product %d", nmID)
+			}
+			if row.CalculatedAt == nil {
+				return 0, 0, fmt.Errorf("products unit economics calculation time is unavailable for WB product %d", nmID)
+			}
+			maxAge := p.maxAge
+			if maxAge > profitCeilingMaxAge {
+				maxAge = profitCeilingMaxAge
+			}
+			age := now.Sub(row.CalculatedAt.UTC())
+			if age < 0 || age > maxAge {
+				return 0, 0, fmt.Errorf("products unit economics export is stale for WB product %d", nmID)
+			}
+			if minCPO == 0 || *row.MarginBeforeAds < minCPO {
+				minCPO = *row.MarginBeforeAds
+			}
+			if len(requested) == 1 {
+				if row.CustomerPrice == nil || *row.CustomerPrice <= 0 {
+					return 0, 0, fmt.Errorf("products unit economics buyer price is unavailable for WB product %d", nmID)
+				}
+				if singleBuyerPrice == 0 || *row.CustomerPrice < singleBuyerPrice {
+					singleBuyerPrice = *row.CustomerPrice
+				}
+			}
+		}
+	}
+	return minCPO, singleBuyerPrice, nil
 }
 
 func mergeReadinessIDs(target, blocked map[int64]struct{}, ids []int64) {

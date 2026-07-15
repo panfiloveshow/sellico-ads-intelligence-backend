@@ -1681,7 +1681,10 @@ func (s *BidAutomationService) bidIncreaseGuardrail(ctx context.Context, strateg
 		return &BidIncreaseGuardrail{Reason: readiness.BlockReason()}
 	}
 
-	return &BidIncreaseGuardrail{Allowed: true, MaxAllowedDRRPercent: readiness.MaxAllowedDRRPercent}
+	return &BidIncreaseGuardrail{
+		Allowed: true, MaxAllowedDRRPercent: readiness.MaxAllowedDRRPercent,
+		MaxAllowedCPO: readiness.MaxAllowedCPO, BuyerPrice: readiness.BuyerPrice,
+	}
 }
 
 func (s *BidAutomationService) extensionBidMismatchGuardrail(ctx context.Context, workspaceID, campaignID uuid.UUID, currentBid int) (string, error) {
