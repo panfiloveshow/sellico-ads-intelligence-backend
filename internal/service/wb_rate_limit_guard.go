@@ -25,6 +25,7 @@ const (
 	wbEndpointAnalyticsFunnel  = "analytics_sales_funnel"
 	wbEndpointTariffs          = "wb_tariffs"
 	wbEndpointCampaignActions  = "adv_campaign_actions"
+	wbEndpointCampaignProducts = "adv_campaign_products"
 	wbEndpointPricesList       = "prices_list"
 	wbEndpointPricesUpload     = "prices_upload"
 	wbEndpointPricesPoll       = "prices_poll"
@@ -47,6 +48,11 @@ func wbEndpointFallbackDelay(endpoint string) time.Duration {
 		return 20 * time.Second
 	case wbEndpointNormQueryStats:
 		return 7 * time.Second
+	case wbEndpointCampaignProducts:
+		// PATCH /adv/v0/auction/nms: Personal/Service limit is one request
+		// per second. Base access is much stricter and will be captured from
+		// WB's Retry-After response in the persisted guard.
+		return time.Second
 	case wbEndpointPricesList, wbEndpointPricesUpload, wbEndpointPricesPoll, wbEndpointPricesQuarantine:
 		// WB Prices & Discounts share one 10 req / 6 s bucket per account.
 		return 6 * time.Second

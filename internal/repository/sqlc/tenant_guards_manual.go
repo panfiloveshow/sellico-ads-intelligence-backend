@@ -12,9 +12,9 @@ type GetCampaignByIDAndWorkspaceParams struct {
 }
 
 func (q *Queries) GetCampaignByIDAndWorkspace(ctx context.Context, arg GetCampaignByIDAndWorkspaceParams) (Campaign, error) {
-	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, placement_search, placement_recommendations, created_at, updated_at FROM campaigns WHERE id = $1 AND workspace_id = $2`, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, placement_search, placement_recommendations, can_change_nms, created_at, updated_at FROM campaigns WHERE id = $1 AND workspace_id = $2`, arg.ID, arg.WorkspaceID)
 	var i Campaign
-	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.WbCampaignID, &i.Name, &i.Status, &i.CampaignType, &i.BidType, &i.PaymentType, &i.DailyBudget, &i.PlacementSearch, &i.PlacementRecommendations, &i.CreatedAt, &i.UpdatedAt)
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.WbCampaignID, &i.Name, &i.Status, &i.CampaignType, &i.BidType, &i.PaymentType, &i.DailyBudget, &i.PlacementSearch, &i.PlacementRecommendations, &i.CanChangeNms, &i.CreatedAt, &i.UpdatedAt)
 	return i, err
 }
 

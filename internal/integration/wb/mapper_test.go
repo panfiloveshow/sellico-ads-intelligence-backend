@@ -64,15 +64,17 @@ func TestMapCampaignDTO_FullFields(t *testing.T) {
 	wsID := uuid.New()
 	scID := uuid.New()
 	budget := int64(50000)
+	canChangeNMs := true
 
 	dto := WBCampaignDTO{
-		AdvertID:    12345,
-		Name:        "Test Campaign",
-		Status:      9,
-		Type:        9,
-		DailyBudget: &budget,
-		BidType:     1,
-		PaymentType: "cpm",
+		AdvertID:     12345,
+		Name:         "Test Campaign",
+		Status:       9,
+		Type:         9,
+		DailyBudget:  &budget,
+		BidType:      1,
+		PaymentType:  "cpm",
+		CanChangeNMs: &canChangeNMs,
 	}
 
 	c := MapCampaignDTO(dto, wsID, scID)
@@ -86,6 +88,8 @@ func TestMapCampaignDTO_FullFields(t *testing.T) {
 	assert.Equal(t, 9, c.CampaignType)
 	assert.Equal(t, domain.BidTypeUnified, c.BidType)
 	assert.Equal(t, "cpm", c.PaymentType)
+	require.NotNil(t, c.CanChangeNMs)
+	assert.True(t, *c.CanChangeNMs)
 	require.NotNil(t, c.DailyBudget)
 	assert.Equal(t, int64(50000), *c.DailyBudget)
 	assert.False(t, c.CreatedAt.IsZero())

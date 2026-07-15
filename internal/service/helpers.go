@@ -601,7 +601,7 @@ func extensionDOMRowSnapshotFromSqlc(e sqlcgen.ExtensionDomRowSnapshot) domain.E
 }
 
 func recommendationFromSqlc(r sqlcgen.Recommendation) domain.Recommendation {
-	return domain.Recommendation{
+	recommendation := domain.Recommendation{
 		ID:            uuidFromPgtype(r.ID),
 		WorkspaceID:   uuidFromPgtype(r.WorkspaceID),
 		CampaignID:    uuidToPtr(r.CampaignID),
@@ -618,6 +618,29 @@ func recommendationFromSqlc(r sqlcgen.Recommendation) domain.Recommendation {
 		CreatedAt:     r.CreatedAt.Time,
 		UpdatedAt:     r.UpdatedAt.Time,
 	}
+	enrichRecommendationDecisionMetadata(&recommendation)
+	return recommendation
+}
+
+func enrichRecommendationDecisionMetadata(recommendation *domain.Recommendation) {
+	if recommendation == nil || len(recommendation.SourceMetrics) == 0 {
+		return
+	}
+	var metadata struct {
+		AnalysisWindow    *domain.RecommendationAnalysisWindow    `json:"analysis_window"`
+		PreviousWindow    *domain.RecommendationAnalysisWindow    `json:"previous_window"`
+		ConfidenceFactors []domain.RecommendationConfidenceFactor `json:"confidence_factors"`
+		Action            *domain.RecommendationAction            `json:"action"`
+		DecisionBasis     string                                  `json:"decision_basis"`
+	}
+	if err := json.Unmarshal(recommendation.SourceMetrics, &metadata); err != nil {
+		return
+	}
+	recommendation.AnalysisWindow = metadata.AnalysisWindow
+	recommendation.PreviousWindow = metadata.PreviousWindow
+	recommendation.ConfidenceFactors = metadata.ConfidenceFactors
+	recommendation.Action = metadata.Action
+	recommendation.DecisionBasis = metadata.DecisionBasis
 }
 
 func exportFromSqlc(e sqlcgen.Export) domain.Export {

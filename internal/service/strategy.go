@@ -128,6 +128,45 @@ func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uu
 	return &result, nil
 }
 
+func (s *StrategyService) ListShadowDecisions(ctx context.Context, workspaceID, strategyID uuid.UUID, limit, offset int32) ([]domain.BidDecisionObservation, error) {
+	if _, err := s.Get(ctx, workspaceID, strategyID); err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListBidDecisionObservationsByStrategy(ctx, sqlcgen.ListBidDecisionObservationsByStrategyParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		StrategyID:  uuidToPgtype(strategyID),
+		Limit:       limit,
+		Offset:      offset,
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list shadow bid decisions")
+	}
+	result := make([]domain.BidDecisionObservation, len(rows))
+	for index, row := range rows {
+		result[index] = domain.BidDecisionObservation{
+			ID:                uuidFromPgtype(row.ID),
+			WorkspaceID:       uuidFromPgtype(row.WorkspaceID),
+			SellerCabinetID:   uuidFromPgtype(row.SellerCabinetID),
+			StrategyID:        uuidFromPgtype(row.StrategyID),
+			StrategyBindingID: uuidFromPgtype(row.StrategyBindingID),
+			CampaignID:        uuidFromPgtype(row.CampaignID),
+			ProductID:         uuidToPtr(row.ProductID),
+			WBCampaignID:      row.WBCampaignID,
+			WBProductID:       row.WBProductID,
+			Placement:         row.Placement,
+			OldBid:            int(row.OldBid),
+			ProposedBid:       int(row.ProposedBid),
+			Reason:            row.Reason,
+			Metrics:           json.RawMessage(row.Metrics),
+			AutomationLevel:   int(row.AutomationLevel),
+			BidObservedAt:     row.BidObservedAt.Time,
+			FirstSeenAt:       row.FirstSeenAt.Time,
+			LastSeenAt:        row.LastSeenAt.Time,
+		}
+	}
+	return result, nil
+}
+
 func validateStrategyForSave(input domain.Strategy) error {
 	if strings.TrimSpace(input.Name) == "" {
 		return apperror.New(apperror.ErrValidation, "strategy name is required")

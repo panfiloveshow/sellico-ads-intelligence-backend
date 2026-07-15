@@ -47,6 +47,7 @@ type Campaign struct {
 	WbStartedAt              pgtype.Timestamptz `json:"wb_started_at"`
 	WbUpdatedAt              pgtype.Timestamptz `json:"wb_updated_at"`
 	WbDeletedAt              pgtype.Timestamptz `json:"wb_deleted_at"`
+	CanChangeNms             pgtype.Bool        `json:"can_change_nms"`
 	CreatedAt                pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
 }

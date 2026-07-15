@@ -40,6 +40,11 @@ type CreateCampaignActionInput struct {
 	PlacementTypes  []string
 }
 
+type CampaignProductChangeInput struct {
+	Add    []int64
+	Delete []int64
+}
+
 func WithCampaignActionUnitEconomicsReadinessProvider(provider UnitEconomicsReadinessProvider) CampaignActionOption {
 	return func(s *CampaignActionService) {
 		s.economics = provider
@@ -831,6 +836,150 @@ func (s *CampaignActionService) GetMinimumBids(ctx context.Context, workspaceID,
 	})
 }
 
+// UpdateCampaignProducts adds and/or deletes real product cards in WB. It
+// fails closed unless the latest campaign sync explicitly says WB allows the
+// operation; an unknown capability is never treated as permission.
+func (s *CampaignActionService) UpdateCampaignProducts(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID, input CampaignProductChangeInput) (wb.CampaignProductUpdateResult, error) {
+	campaign, token, err := s.resolveCampaignWithToken(ctx, workspaceID, campaignID)
+	if err != nil {
+		return wb.CampaignProductUpdateResult{}, err
+	}
+	if err := validateCampaignProductMutationCapability(campaign); err != nil {
+		return wb.CampaignProductUpdateResult{}, err
+	}
+	if err := s.ensureCampaignProductSyncFreshness(ctx, campaign); err != nil {
+		return wb.CampaignProductUpdateResult{}, err
+	}
+	if err := s.preflightCampaignAction(ctx, campaign, wbEndpointCampaignProducts, "campaign_products"); err != nil {
+		return wb.CampaignProductUpdateResult{}, err
+	}
+
+	request, err := wb.NormalizeCampaignProductUpdatesRequest(wb.CampaignProductUpdatesRequest{
+		NMs: []wb.CampaignProductUpdate{{
+			AdvertID: campaign.WbCampaignID,
+			NMs: wb.CampaignProductNMChanges{
+				Add:    input.Add,
+				Delete: input.Delete,
+			},
+		}},
+	})
+	if err != nil {
+		return wb.CampaignProductUpdateResult{}, apperror.New(apperror.ErrValidation, err.Error())
+	}
+	change := request.NMs[0].NMs
+	if err := s.validateCampaignProductChangeEvidence(ctx, campaign, change); err != nil {
+		return wb.CampaignProductUpdateResult{}, err
+	}
+
+	response, actionErr := s.wbClient.UpdateCampaignProducts(ctx, token, request)
+	s.recordActionRateLimitFromError(ctx, campaign.SellerCabinetID, wbEndpointCampaignProducts, actionErr)
+	result := campaignProductResultForAdvert(response, campaign.WbCampaignID)
+	s.recordCampaignProductChangeAudit(ctx, workspaceID, actorID, campaign, change, result, actionErr)
+	if actionErr != nil {
+		return wb.CampaignProductUpdateResult{}, actionErr
+	}
+	return result, nil
+}
+
+func (s *CampaignActionService) ensureCampaignProductSyncFreshness(ctx context.Context, campaign sqlcgen.Campaign) error {
+	state, err := s.queries.GetSellerCabinetSyncState(ctx, campaign.SellerCabinetID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apperror.New(apperror.ErrValidation, "campaign sync freshness is unknown; sync the seller cabinet before changing products")
+	}
+	if err != nil {
+		return apperror.New(apperror.ErrInternal, "failed to verify campaign sync freshness")
+	}
+	if reason := SellerCabinetAutomationReadinessBlockReason(state, time.Now().UTC(), 24*time.Hour); reason != "" {
+		return apperror.New(apperror.ErrValidation, reason)
+	}
+	return nil
+}
+
+func validateCampaignProductMutationCapability(campaign sqlcgen.Campaign) error {
+	if !campaign.CanChangeNms.Valid {
+		return apperror.New(apperror.ErrValidation, "campaign product-list capability is unknown; sync the campaign before changing products")
+	}
+	if !campaign.CanChangeNms.Bool {
+		return apperror.New(apperror.ErrValidation, "WB does not allow changing the product list for this campaign")
+	}
+	return nil
+}
+
+func (s *CampaignActionService) validateCampaignProductChangeEvidence(ctx context.Context, campaign sqlcgen.Campaign, change wb.CampaignProductNMChanges) error {
+	links, err := s.queries.ListCampaignProductsByCampaign(ctx, campaign.ID)
+	if err != nil {
+		return apperror.New(apperror.ErrInternal, "failed to load campaign products")
+	}
+	linked := make(map[int64]struct{}, len(links))
+	for _, link := range links {
+		linked[link.WbProductID] = struct{}{}
+	}
+	addedProductIDs := make([]uuid.UUID, 0, len(change.Add))
+	addedWBProductIDs := make([]int64, 0, len(change.Add))
+	for _, nmID := range change.Add {
+		if _, exists := linked[nmID]; exists {
+			return apperror.New(apperror.ErrValidation, fmt.Sprintf("WB product %d is already linked to the campaign", nmID))
+		}
+		product, loadErr := s.queries.GetProductByWBProductID(ctx, sqlcgen.GetProductByWBProductIDParams{
+			WorkspaceID: campaign.WorkspaceID,
+			WbProductID: nmID,
+		})
+		if errors.Is(loadErr, pgx.ErrNoRows) || (loadErr == nil && product.SellerCabinetID != campaign.SellerCabinetID) {
+			return apperror.New(apperror.ErrValidation, fmt.Sprintf("real WB product %d is unavailable in this seller cabinet; sync products before adding it", nmID))
+		}
+		if loadErr != nil {
+			return apperror.New(apperror.ErrInternal, "failed to verify campaign product")
+		}
+		stock := latestProductStockEvidence(ctx, s.queries, product.ID)
+		if !stock.OK {
+			return apperror.New(apperror.ErrValidation, fmt.Sprintf("real stock evidence for WB product %d is unavailable; sync stock before adding it", nmID))
+		}
+		if stock.QuantityKnown && stock.Stock <= 0 {
+			return apperror.New(apperror.ErrValidation, fmt.Sprintf("WB product %d has no confirmed stock; adding it is blocked", nmID))
+		}
+		if reason := productReputationBidIncreaseBlockReason(product); reason != "" {
+			return apperror.New(apperror.ErrValidation, reason)
+		}
+		addedProductIDs = append(addedProductIDs, uuidFromPgtype(product.ID))
+		addedWBProductIDs = append(addedWBProductIDs, nmID)
+	}
+	if len(addedProductIDs) > 0 {
+		if s.economics == nil {
+			return apperror.New(apperror.ErrValidation, "unit economics readiness provider is not configured; adding products is blocked")
+		}
+		readiness, readinessErr := s.economics.CheckBidIncreaseReadiness(ctx, UnitEconomicsReadinessInput{
+			WorkspaceID:     uuidFromPgtype(campaign.WorkspaceID),
+			SellerCabinetID: uuidFromPgtype(campaign.SellerCabinetID),
+			ProductIDs:      addedProductIDs,
+			WBProductIDs:    addedWBProductIDs,
+		})
+		if readinessErr != nil {
+			return apperror.New(apperror.ErrValidation, "unit economics readiness could not be loaded; adding products is blocked")
+		}
+		if !readiness.AllowsBidIncrease() {
+			return apperror.New(apperror.ErrValidation, readiness.BlockReason())
+		}
+	}
+	for _, nmID := range change.Delete {
+		if _, exists := linked[nmID]; !exists {
+			return apperror.New(apperror.ErrValidation, fmt.Sprintf("WB product %d is not linked to the campaign; sync campaign products before deleting it", nmID))
+		}
+	}
+	if len(change.Delete) >= len(linked)+len(change.Add) {
+		return apperror.New(apperror.ErrValidation, "campaign must retain at least one product card")
+	}
+	return nil
+}
+
+func campaignProductResultForAdvert(response wb.CampaignProductUpdatesResponse, advertID int64) wb.CampaignProductUpdateResult {
+	for _, item := range response.NMs {
+		if item.AdvertID == advertID {
+			return item
+		}
+	}
+	return wb.CampaignProductUpdateResult{AdvertID: advertID}
+}
+
 func minimumBidPlacementTypes(campaign sqlcgen.Campaign) ([]string, error) {
 	switch campaign.BidType {
 	case domain.BidTypeUnified:
@@ -899,7 +1048,7 @@ func (s *CampaignActionService) preflightCampaignAction(ctx context.Context, cam
 		if status != "ready" {
 			return apperror.New(apperror.ErrValidation, "campaign can be deleted only from ready status")
 		}
-	case "bid", "cluster_bid", "cluster_minus", "budget_deposit":
+	case "bid", "cluster_bid", "cluster_minus", "budget_deposit", "campaign_products":
 		if status != "active" && status != "paused" && status != "ready" {
 			return apperror.New(apperror.ErrValidation, "campaign action is unavailable for current status")
 		}
@@ -926,8 +1075,7 @@ func (s *CampaignActionService) recordActionRateLimitFromError(ctx context.Conte
 	if err == nil || !isRateLimitIssue(err.Error()) {
 		return
 	}
-	delay := wbEndpointFallbackDelay(endpointKey)
-	next := time.Now().UTC().Add(delay)
+	next, retryAfterSeconds := wbRateLimitWindowFromError(endpointKey, err)
 	lastError := strings.TrimSpace(err.Error())
 	if len(lastError) > 500 {
 		lastError = lastError[:500]
@@ -936,12 +1084,45 @@ func (s *CampaignActionService) recordActionRateLimitFromError(ctx context.Conte
 		SellerCabinetID:   sellerCabinetID,
 		EndpointKey:       endpointKey,
 		NextAllowedAt:     pgtype.Timestamptz{Time: next, Valid: true},
-		RetryAfterSeconds: int32(delay.Seconds()),
+		RetryAfterSeconds: boundedInt32(retryAfterSeconds),
 		LastStatus:        429,
 		LastError:         pgtype.Text{String: lastError, Valid: lastError != ""},
 	}); upsertErr != nil {
 		s.logger.Warn().Err(upsertErr).Str("endpoint", endpointKey).Msg("failed to persist WB action rate limit")
 	}
+}
+
+func (s *CampaignActionService) recordCampaignProductChangeAudit(ctx context.Context, workspaceID, actorID uuid.UUID, campaign sqlcgen.Campaign, requested wb.CampaignProductNMChanges, result wb.CampaignProductUpdateResult, actionErr error) {
+	status := "applied"
+	if actionErr != nil {
+		status = "failed"
+		if wb.CampaignProductUpdateOutcomeUnknown(actionErr) {
+			status = "unknown"
+		}
+	}
+	metadata := map[string]any{
+		"action_type":      "campaign_products_update",
+		"status":           status,
+		"campaign_id":      uuidFromPgtype(campaign.ID),
+		"wb_campaign_id":   campaign.WbCampaignID,
+		"requested_add":    requested.Add,
+		"requested_delete": requested.Delete,
+		"added":            result.NMs.Added,
+		"deleted":          result.NMs.Deleted,
+		"sync_required":    actionErr == nil || status == "unknown",
+	}
+	if actionErr != nil {
+		metadata["error"] = actionErr.Error()
+	}
+	payload, _ := json.Marshal(metadata)
+	writeAuditLog(ctx, s.queries, sqlcgen.CreateAuditLogParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		UserID:      uuidToPgtype(actorID),
+		Action:      "wb_campaign_action",
+		EntityType:  "campaign",
+		EntityID:    campaign.ID,
+		Metadata:    payload,
+	})
 }
 
 func (s *CampaignActionService) ListBidHistory(ctx context.Context, workspaceID, campaignID uuid.UUID, limit, offset int32) ([]domain.BidChange, error) {

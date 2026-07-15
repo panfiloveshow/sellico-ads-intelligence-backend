@@ -19,7 +19,7 @@ func TestListCampaigns_Success(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "-1,4,7,8,9,11", r.URL.Query().Get("statuses"))
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"adverts":[{"advertId":123,"name":"Promo Test","type":8,"status":9,"dailyBudget":5000,"bid_type":"manual","paymentType":"cpm"},{"id":456,"type":9,"status":11,"bid_type":"manual","settings":{"name":"Auction Test","payment_type":"cpm"}}]}`))
+		w.Write([]byte(`{"adverts":[{"advertId":123,"name":"Promo Test","type":8,"status":9,"dailyBudget":5000,"bid_type":"manual","paymentType":"cpm","restrictions":{"can_change_nms":true}},{"id":456,"type":9,"status":11,"bid_type":"manual","settings":{"name":"Auction Test","payment_type":"cpm"},"restrictions":{"can_change_nms":false}},{"id":789,"name":"Restriction Unknown","type":9,"status":4,"nm_settings":[{"nm_id":777}]}]}`))
 	}))
 	defer server.Close()
 
@@ -27,17 +27,41 @@ func TestListCampaigns_Success(t *testing.T) {
 	result, err := client.ListCampaigns(context.Background(), "token")
 
 	require.NoError(t, err)
-	require.Len(t, result, 2)
+	require.Len(t, result, 3)
 	assert.Equal(t, 123, result[0].AdvertID)
 	assert.Equal(t, "Promo Test", result[0].Name)
 	assert.Equal(t, 9, result[0].Status)
 	assert.Equal(t, 8, result[0].Type)
 	assert.Equal(t, 0, result[0].BidType)
 	assert.Equal(t, "cpm", result[0].PaymentType)
+	require.NotNil(t, result[0].CanChangeNMs)
+	assert.True(t, *result[0].CanChangeNMs)
 	assert.Equal(t, 456, result[1].AdvertID)
 	assert.Equal(t, "Auction Test", result[1].Name)
 	assert.Equal(t, 11, result[1].Status)
 	assert.Equal(t, 9, result[1].Type)
+	require.NotNil(t, result[1].CanChangeNMs)
+	assert.False(t, *result[1].CanChangeNMs)
+	assert.Nil(t, result[2].CanChangeNMs)
+}
+
+func TestMergeAdvertV2FillsRestrictionFromDetailWithoutOverwritingBase(t *testing.T) {
+	fromDetail := true
+	baseValue := false
+
+	merged := mergeAdvertV2(
+		wbAdvertV2{},
+		wbAdvertV2{Restrictions: wbAdvertRestrictions{CanChangeNMs: &fromDetail}},
+	)
+	require.NotNil(t, merged.Restrictions.CanChangeNMs)
+	assert.True(t, *merged.Restrictions.CanChangeNMs)
+
+	merged = mergeAdvertV2(
+		wbAdvertV2{Restrictions: wbAdvertRestrictions{CanChangeNMs: &baseValue}},
+		wbAdvertV2{Restrictions: wbAdvertRestrictions{CanChangeNMs: &fromDetail}},
+	)
+	require.NotNil(t, merged.Restrictions.CanChangeNMs)
+	assert.False(t, *merged.Restrictions.CanChangeNMs)
 }
 
 func TestListCampaigns_UnmarshalError(t *testing.T) {

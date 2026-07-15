@@ -84,6 +84,7 @@ func TestCampaignList_Success(t *testing.T) {
 	workspaceID := uuid.New()
 	sellerCabinetID := uuid.New()
 	now := time.Now().UTC()
+	canChangeNMs := true
 	mock := &mockCampaignService{
 		listFn: func(_ context.Context, wsID uuid.UUID, filter service.CampaignListFilter, limit, offset int32) ([]domain.Campaign, error) {
 			assert.Equal(t, workspaceID, wsID)
@@ -103,6 +104,7 @@ func TestCampaignList_Success(t *testing.T) {
 				CampaignType:    1,
 				BidType:         "auto",
 				PaymentType:     "cpm",
+				CanChangeNMs:    &canChangeNMs,
 				CreatedAt:       now,
 				UpdatedAt:       now,
 			}}, nil
@@ -124,6 +126,8 @@ func TestCampaignList_Success(t *testing.T) {
 	item := decodeCampaign(t, items[0])
 	assert.Equal(t, sellerCabinetID, item.SellerCabinetID)
 	assert.Equal(t, "Campaign One", item.Name)
+	require.NotNil(t, item.CanChangeNMs)
+	assert.True(t, *item.CanChangeNMs)
 }
 
 func TestCampaignList_NameOnlyFilter(t *testing.T) {

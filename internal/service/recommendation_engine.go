@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -23,6 +24,7 @@ type Notifier interface {
 type RecommendationEngine struct {
 	queries         *sqlcgen.Queries
 	recommendations *RecommendationService
+	insights        recommendationInsightsReader
 	notifier        Notifier
 	logger          zerolog.Logger
 }
@@ -34,6 +36,14 @@ func NewRecommendationEngine(queries *sqlcgen.Queries, recommendations *Recommen
 		notifier:        notifier,
 		logger:          logger,
 	}
+}
+
+// WithAdsReadInsights switches campaign recommendations from the latest-day
+// snapshot to the same real, period-aware read model that powers the ads
+// dashboard. The legacy path remains available for tests and degraded wiring.
+func (e *RecommendationEngine) WithAdsReadInsights(reader recommendationInsightsReader) *RecommendationEngine {
+	e.insights = reader
+	return e
 }
 
 // loadThresholds loads per-workspace thresholds, falling back to defaults.
@@ -64,210 +74,213 @@ func (e *RecommendationEngine) GenerateForWorkspace(ctx context.Context, workspa
 		return nil, err
 	}
 
-	// Preload latest stats for all campaigns in one query (avoid N+1).
-	campaignStatsBatch, err := e.queries.GetLatestCampaignStatsBatch(ctx, uuidToPgtype(workspaceID))
-	if err != nil {
-		return nil, err
-	}
-	campaignStatMap := make(map[uuid.UUID]sqlcgen.CampaignStat, len(campaignStatsBatch))
-	for _, cs := range campaignStatsBatch {
-		campaignStatMap[uuidFromPgtype(cs.CampaignID)] = cs
-	}
-
-	for _, campaign := range campaigns {
-		stat, ok := campaignStatMap[uuidFromPgtype(campaign.ID)]
-		if !ok {
-			continue
+	if e.insights == nil {
+		// Compatibility path for tests and deliberately degraded wiring. The
+		// production worker uses the period-aware read model below instead.
+		campaignStatsBatch, batchErr := e.queries.GetLatestCampaignStatsBatch(ctx, uuidToPgtype(workspaceID))
+		if batchErr != nil {
+			return nil, batchErr
+		}
+		campaignStatMap := make(map[uuid.UUID]sqlcgen.CampaignStat, len(campaignStatsBatch))
+		for _, cs := range campaignStatsBatch {
+			campaignStatMap[uuidFromPgtype(cs.CampaignID)] = cs
 		}
 
-		campaignID := nullableUUID(uuidFromPgtype(campaign.ID))
-
-		if stat.Impressions >= int64(th.CampaignHighImpressions) && stat.Clicks == 0 {
-			rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
-				WorkspaceID: workspaceID,
-				CampaignID:  campaignID,
-				Title:       "Много показов без кликов",
-				Description: fmt.Sprintf("Кампания %q собрала %d показов, но 0 кликов за %s.", campaign.Name, stat.Impressions, stat.Date.Time.Format("2006-01-02")),
-				Type:        domain.RecommendationTypeLowCTR,
-				Severity:    domain.SeverityHigh,
-				Confidence:  0.84,
-				SourceMetrics: map[string]any{
-					"impressions": stat.Impressions,
-					"clicks":      stat.Clicks,
-					"date":        stat.Date.Time.Format("2006-01-02"),
-				},
-				NextAction: strPtr("Проверьте релевантность листинга и улучшите CTR прежде чем увеличивать расход."),
-			})
-			if upsertErr != nil {
-				return nil, upsertErr
+		for _, campaign := range campaigns {
+			stat, ok := campaignStatMap[uuidFromPgtype(campaign.ID)]
+			if !ok {
+				continue
 			}
-			generated = append(generated, *rec)
-		} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowCTR, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
 
-		orders := nullableInt64(stat.Orders)
-		if stat.Spend >= th.CampaignMaxTestSpend && stat.Clicks < int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) {
-			rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
-				WorkspaceID: workspaceID,
-				CampaignID:  campaignID,
-				Title:       "Тестовый расход кампании достиг лимита",
-				Description: fmt.Sprintf("Кампания %q потратила %d ₽ без заказов за %s, но собрала только %d кликов из %d для полноценного решения. Тестовый лимит расхода: %d ₽.", campaign.Name, stat.Spend, stat.Date.Time.Format("2006-01-02"), stat.Clicks, th.CampaignZeroOrdersClick, th.CampaignMaxTestSpend),
-				Type:        domain.RecommendationTypeCampaignTestSpend,
-				Severity:    domain.SeverityMedium,
-				Confidence:  0.73,
-				SourceMetrics: map[string]any{
-					"clicks":                      stat.Clicks,
-					"orders":                      0,
-					"spend":                       stat.Spend,
-					"campaign_zero_orders_click":  th.CampaignZeroOrdersClick,
-					"campaign_max_test_spend":     th.CampaignMaxTestSpend,
-					"campaign_max_spend_no_order": th.CampaignMaxSpendNoOrder,
-					"date":                        stat.Date.Time.Format("2006-01-02"),
-				},
-				NextAction: strPtr("Остановите расширение теста или снизьте ставку до появления конверсионных сигналов."),
-			})
-			if upsertErr != nil {
-				return nil, upsertErr
-			}
-			generated = append(generated, *rec)
-		} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeCampaignTestSpend, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
+			campaignID := nullableUUID(uuidFromPgtype(campaign.ID))
 
-		if stat.Clicks >= int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) && stat.Spend >= th.CampaignMaxSpendNoOrder {
-			rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
-				WorkspaceID: workspaceID,
-				CampaignID:  campaignID,
-				Title:       "Клики не конвертируются в заказы",
-				Description: fmt.Sprintf("Кампания %q получила %d кликов и потратила %d ₽, но 0 заказов за %s. Расход достиг лимита без заказа %d ₽.", campaign.Name, stat.Clicks, stat.Spend, stat.Date.Time.Format("2006-01-02"), th.CampaignMaxSpendNoOrder),
-				Type:        domain.RecommendationTypeHighSpendLowOrders,
-				Severity:    domain.SeverityHigh,
-				Confidence:  0.81,
-				SourceMetrics: map[string]any{
-					"clicks":                      stat.Clicks,
-					"orders":                      0,
-					"spend":                       stat.Spend,
-					"campaign_max_spend_no_order": th.CampaignMaxSpendNoOrder,
-					"date":                        stat.Date.Time.Format("2006-01-02"),
-				},
-				NextAction: strPtr("Проверьте поисковые запросы и качество конверсии; рассмотрите паузу слабого трафика."),
-			})
-			if upsertErr != nil {
-				return nil, upsertErr
-			}
-			generated = append(generated, *rec)
-		} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeHighSpendLowOrders, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
-
-		// Mutual exclusion: evaluate lower_bid vs raise_bid — only one can be active per campaign.
-		lowerBidFired := false
-		raiseBidFired := false
-
-		if stat.Clicks > 0 {
-			cpc := float64(stat.Spend) / float64(stat.Clicks)
-			cpo := th.CampaignPoorCPO + 1
-			if orders != nil && *orders > 0 {
-				cpo = float64(stat.Spend) / float64(*orders)
-			}
-			if cpc >= th.CampaignHighCPC && cpo >= th.CampaignPoorCPO {
+			if stat.Impressions >= int64(th.CampaignHighImpressions) && stat.Clicks == 0 {
 				rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
 					WorkspaceID: workspaceID,
 					CampaignID:  campaignID,
-					Title:       "Ставка кампании слишком высока для текущей отдачи",
-					Description: fmt.Sprintf("Кампания %q: CPC %.2f, CPO %.2f — неэффективный расход при текущей ставке.", campaign.Name, cpc, cpo),
-					// Campaign aggregates do not contain a single authoritative current
-					// bid/placement. Keep this as a manager decision, not an executable
-					// raise/lower action; phrase-level recommendations carry real bids.
-					Type:       domain.RecommendationTypeBidAdjustment,
-					Severity:   domain.SeverityMedium,
-					Confidence: 0.76,
+					Title:       "Много показов без кликов",
+					Description: fmt.Sprintf("Кампания %q собрала %d показов, но 0 кликов за %s.", campaign.Name, stat.Impressions, stat.Date.Time.Format("2006-01-02")),
+					Type:        domain.RecommendationTypeLowCTR,
+					Severity:    domain.SeverityHigh,
+					Confidence:  0.84,
 					SourceMetrics: map[string]any{
-						"cpc":    cpc,
-						"cpo":    cpo,
-						"clicks": stat.Clicks,
-						"spend":  stat.Spend,
+						"impressions": stat.Impressions,
+						"clicks":      stat.Clicks,
+						"date":        stat.Date.Time.Format("2006-01-02"),
 					},
-					NextAction: strPtr("Снизьте ставки или приостановите дорогие размещения с низкой отдачей."),
+					NextAction: strPtr("Проверьте релевантность листинга и улучшите CTR прежде чем увеличивать расход."),
 				})
 				if upsertErr != nil {
 					return nil, upsertErr
 				}
 				generated = append(generated, *rec)
-				lowerBidFired = true
+			} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowCTR, campaignID, nil, nil); closeErr != nil {
+				return nil, closeErr
+			}
+
+			orders := nullableInt64(stat.Orders)
+			if stat.Spend >= th.CampaignMaxTestSpend && stat.Clicks < int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) {
+				rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
+					WorkspaceID: workspaceID,
+					CampaignID:  campaignID,
+					Title:       "Тестовый расход кампании достиг лимита",
+					Description: fmt.Sprintf("Кампания %q потратила %d ₽ без заказов за %s, но собрала только %d кликов из %d для полноценного решения. Тестовый лимит расхода: %d ₽.", campaign.Name, stat.Spend, stat.Date.Time.Format("2006-01-02"), stat.Clicks, th.CampaignZeroOrdersClick, th.CampaignMaxTestSpend),
+					Type:        domain.RecommendationTypeCampaignTestSpend,
+					Severity:    domain.SeverityMedium,
+					Confidence:  0.73,
+					SourceMetrics: map[string]any{
+						"clicks":                      stat.Clicks,
+						"orders":                      0,
+						"spend":                       stat.Spend,
+						"campaign_zero_orders_click":  th.CampaignZeroOrdersClick,
+						"campaign_max_test_spend":     th.CampaignMaxTestSpend,
+						"campaign_max_spend_no_order": th.CampaignMaxSpendNoOrder,
+						"date":                        stat.Date.Time.Format("2006-01-02"),
+					},
+					NextAction: strPtr("Остановите расширение теста или снизьте ставку до появления конверсионных сигналов."),
+				})
+				if upsertErr != nil {
+					return nil, upsertErr
+				}
+				generated = append(generated, *rec)
+			} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeCampaignTestSpend, campaignID, nil, nil); closeErr != nil {
+				return nil, closeErr
+			}
+
+			if stat.Clicks >= int64(th.CampaignZeroOrdersClick) && (orders == nil || *orders == 0) && stat.Spend >= th.CampaignMaxSpendNoOrder {
+				rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
+					WorkspaceID: workspaceID,
+					CampaignID:  campaignID,
+					Title:       "Клики не конвертируются в заказы",
+					Description: fmt.Sprintf("Кампания %q получила %d кликов и потратила %d ₽, но 0 заказов за %s. Расход достиг лимита без заказа %d ₽.", campaign.Name, stat.Clicks, stat.Spend, stat.Date.Time.Format("2006-01-02"), th.CampaignMaxSpendNoOrder),
+					Type:        domain.RecommendationTypeHighSpendLowOrders,
+					Severity:    domain.SeverityHigh,
+					Confidence:  0.81,
+					SourceMetrics: map[string]any{
+						"clicks":                      stat.Clicks,
+						"orders":                      0,
+						"spend":                       stat.Spend,
+						"campaign_max_spend_no_order": th.CampaignMaxSpendNoOrder,
+						"date":                        stat.Date.Time.Format("2006-01-02"),
+					},
+					NextAction: strPtr("Проверьте поисковые запросы и качество конверсии; рассмотрите паузу слабого трафика."),
+				})
+				if upsertErr != nil {
+					return nil, upsertErr
+				}
+				generated = append(generated, *rec)
+			} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeHighSpendLowOrders, campaignID, nil, nil); closeErr != nil {
+				return nil, closeErr
+			}
+
+			// Mutual exclusion: evaluate lower_bid vs raise_bid — only one can be active per campaign.
+			lowerBidFired := false
+			raiseBidFired := false
+
+			if stat.Clicks > 0 {
+				cpc := float64(stat.Spend) / float64(stat.Clicks)
+				cpo := th.CampaignPoorCPO + 1
+				if orders != nil && *orders > 0 {
+					cpo = float64(stat.Spend) / float64(*orders)
+				}
+				if cpc >= th.CampaignHighCPC && cpo >= th.CampaignPoorCPO {
+					rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
+						WorkspaceID: workspaceID,
+						CampaignID:  campaignID,
+						Title:       "Ставка кампании слишком высока для текущей отдачи",
+						Description: fmt.Sprintf("Кампания %q: CPC %.2f, CPO %.2f — неэффективный расход при текущей ставке.", campaign.Name, cpc, cpo),
+						// Campaign aggregates do not contain a single authoritative current
+						// bid/placement. Keep this as a manager decision, not an executable
+						// raise/lower action; phrase-level recommendations carry real bids.
+						Type:       domain.RecommendationTypeBidAdjustment,
+						Severity:   domain.SeverityMedium,
+						Confidence: 0.76,
+						SourceMetrics: map[string]any{
+							"cpc":    cpc,
+							"cpo":    cpo,
+							"clicks": stat.Clicks,
+							"spend":  stat.Spend,
+						},
+						NextAction: strPtr("Снизьте ставки или приостановите дорогие размещения с низкой отдачей."),
+					})
+					if upsertErr != nil {
+						return nil, upsertErr
+					}
+					generated = append(generated, *rec)
+					lowerBidFired = true
+				} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
+					return nil, closeErr
+				}
 			} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
 				return nil, closeErr
 			}
-		} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
 
-		revenue := nullableInt64(stat.Revenue)
-		if !lowerBidFired && stat.Spend > 0 && stat.Clicks >= int64(th.CampaignRaiseBidClicks) && orders != nil && *orders >= int64(th.CampaignRaiseBidOrders) && revenue != nil {
-			roas := float64(*revenue) / float64(stat.Spend)
-			if roas >= th.CampaignStrongROAS {
-				severity := domain.SeverityMedium
-				if roas >= th.CampaignStrongROAS*1.5 {
-					severity = domain.SeverityHigh
-				}
+			revenue := nullableInt64(stat.Revenue)
+			if !lowerBidFired && stat.Spend > 0 && stat.Clicks >= int64(th.CampaignRaiseBidClicks) && orders != nil && *orders >= int64(th.CampaignRaiseBidOrders) && revenue != nil {
+				roas := float64(*revenue) / float64(stat.Spend)
+				if roas >= th.CampaignStrongROAS {
+					severity := domain.SeverityMedium
+					if roas >= th.CampaignStrongROAS*1.5 {
+						severity = domain.SeverityHigh
+					}
 
-				rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
-					WorkspaceID: workspaceID,
-					CampaignID:  campaignID,
-					Title:       "Кампания конвертирует эффективно — можно масштабировать",
-					Description: fmt.Sprintf("Кампания %q: %d заказов, ROAS %.2f за %s — есть потенциал для масштабирования.", campaign.Name, *orders, roas, stat.Date.Time.Format("2006-01-02")),
-					// Campaign aggregates cannot safely identify one current bid and
-					// placement, so this remains a non-executable manager decision.
-					Type:       domain.RecommendationTypeBidAdjustment,
-					Severity:   severity,
-					Confidence: 0.75,
-					SourceMetrics: map[string]any{
-						"clicks":  stat.Clicks,
-						"orders":  *orders,
-						"spend":   stat.Spend,
-						"revenue": *revenue,
-						"roas":    roas,
-					},
-					NextAction: strPtr("Осторожно повышайте ставки на лучших размещениях, контролируя CPC и качество конверсии."),
-				})
-				if upsertErr != nil {
-					return nil, upsertErr
+					rec, upsertErr := e.recommendations.UpsertActive(ctx, RecommendationUpsertInput{
+						WorkspaceID: workspaceID,
+						CampaignID:  campaignID,
+						Title:       "Кампания конвертирует эффективно — можно масштабировать",
+						Description: fmt.Sprintf("Кампания %q: %d заказов, ROAS %.2f за %s — есть потенциал для масштабирования.", campaign.Name, *orders, roas, stat.Date.Time.Format("2006-01-02")),
+						// Campaign aggregates cannot safely identify one current bid and
+						// placement, so this remains a non-executable manager decision.
+						Type:       domain.RecommendationTypeBidAdjustment,
+						Severity:   severity,
+						Confidence: 0.75,
+						SourceMetrics: map[string]any{
+							"clicks":  stat.Clicks,
+							"orders":  *orders,
+							"spend":   stat.Spend,
+							"revenue": *revenue,
+							"roas":    roas,
+						},
+						NextAction: strPtr("Осторожно повышайте ставки на лучших размещениях, контролируя CPC и качество конверсии."),
+					})
+					if upsertErr != nil {
+						return nil, upsertErr
+					}
+					generated = append(generated, *rec)
+					raiseBidFired = true
+				} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
+					return nil, closeErr
 				}
-				generated = append(generated, *rec)
-				raiseBidFired = true
 			} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
 				return nil, closeErr
 			}
-		} else if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
 
-		// Mutual exclusion enforcement: if lower_bid fired, close any stale raise_bid (and vice versa)
-		if lowerBidFired {
-			if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
-				return nil, closeErr
+			// Mutual exclusion enforcement: if lower_bid fired, close any stale raise_bid (and vice versa)
+			if lowerBidFired {
+				if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
+					return nil, closeErr
+				}
 			}
-		}
-		if raiseBidFired {
+			if raiseBidFired {
+				if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
+					return nil, closeErr
+				}
+			}
+			// Retire legacy campaign-level executable recommendations. Only
+			// phrase-level raise/lower recommendations have an authoritative bid.
 			if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
 				return nil, closeErr
 			}
-		}
-		// Retire legacy campaign-level executable recommendations. Only
-		// phrase-level raise/lower recommendations have an authoritative bid.
-		if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeLowerBid, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
-		if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
-			return nil, closeErr
-		}
-		if !lowerBidFired && !raiseBidFired {
-			if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeBidAdjustment, campaignID, nil, nil); closeErr != nil {
+			if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeRaiseBid, campaignID, nil, nil); closeErr != nil {
 				return nil, closeErr
 			}
+			if !lowerBidFired && !raiseBidFired {
+				if closeErr := e.recommendations.CloseActive(ctx, workspaceID, domain.RecommendationTypeBidAdjustment, campaignID, nil, nil); closeErr != nil {
+					return nil, closeErr
+				}
+			}
+			_ = raiseBidFired // prevent unused warning
 		}
-		_ = raiseBidFired // prevent unused warning
 	}
 
 	phrases, err := e.queries.ListPhrasesByWorkspace(ctx, sqlcgen.ListPhrasesByWorkspaceParams{
@@ -711,6 +724,15 @@ func (e *RecommendationEngine) GenerateForWorkspace(ctx context.Context, workspa
 				return nil, closeErr
 			}
 		}
+	}
+
+	if e.insights != nil {
+		windowed, windowErr := e.generateWindowedCampaignRecommendations(ctx, workspaceID, th, time.Now().UTC())
+		if windowErr != nil {
+			return nil, windowErr
+		}
+		generated = append(generated, windowed...)
+		generated = dedupeRecommendationsByID(generated)
 	}
 
 	e.logger.Info().

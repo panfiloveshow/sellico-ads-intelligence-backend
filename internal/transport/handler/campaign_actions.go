@@ -36,6 +36,7 @@ type campaignActionServicer interface {
 	GetClusterMinus(ctx context.Context, workspaceID, campaignID uuid.UUID, nmID int64) ([]string, error)
 	DepositBudget(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID, amount int64) error
 	GetMinimumBids(ctx context.Context, workspaceID, campaignID uuid.UUID, nmIDs []int) ([]wb.WBMinimumBidDTO, error)
+	UpdateCampaignProducts(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID, input service.CampaignProductChangeInput) (wb.CampaignProductUpdateResult, error)
 	ListBidHistory(ctx context.Context, workspaceID, campaignID uuid.UUID, limit, offset int32) ([]domain.BidChange, error)
 	ApplyRecommendation(ctx context.Context, workspaceID, recommendationID, actorID uuid.UUID) (*domain.Recommendation, error)
 }
@@ -208,6 +209,53 @@ func (h *CampaignActionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 type setBidRequest struct {
 	Placement string `json:"placement"`
 	NewBid    int    `json:"new_bid"`
+}
+
+type updateCampaignProductsRequest struct {
+	Add    []int64 `json:"add"`
+	Delete []int64 `json:"delete"`
+}
+
+type updateCampaignProductsResponse struct {
+	AdvertID     int64   `json:"advert_id"`
+	Added        []int64 `json:"added"`
+	Deleted      []int64 `json:"deleted"`
+	SyncRequired bool    `json:"sync_required"`
+}
+
+// UpdateProducts changes the product-card list in WB. The service performs all
+// capability, status, real-data, and rate-limit checks before the WB request.
+func (h *CampaignActionHandler) UpdateProducts(w http.ResponseWriter, r *http.Request) {
+	workspaceID, campaignID, err := h.extractIDs(r)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	actorID, ok := r.Context().Value(middleware.UserIDKey).(uuid.UUID)
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "missing user"))
+		return
+	}
+
+	var req updateCampaignProductsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid body")
+		return
+	}
+	result, err := h.actions.UpdateCampaignProducts(r.Context(), workspaceID, campaignID, actorID, service.CampaignProductChangeInput{
+		Add:    req.Add,
+		Delete: req.Delete,
+	})
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, updateCampaignProductsResponse{
+		AdvertID:     result.AdvertID,
+		Added:        result.NMs.Added,
+		Deleted:      result.NMs.Deleted,
+		SyncRequired: true,
+	})
 }
 
 func (r setBidRequest) validate() map[string]string {

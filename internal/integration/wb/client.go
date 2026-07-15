@@ -89,7 +89,12 @@ type Client struct {
 	// Prices & Discounts has a separate shared account bucket (10 requests per
 	// 6 seconds) across list/upload/poll/quarantine endpoints.
 	priceLimiters *boundedLRU[*rate.Limiter]
-	breakers      *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
+	// campaignProductLimiters enforces the documented account-wide limit for
+	// PATCH /adv/v0/auction/nms (one request per second for Personal/Service
+	// access). It is separate from the general advertising API limiter because
+	// the endpoint has a stricter bucket than most campaign operations.
+	campaignProductLimiters *boundedLRU[*rate.Limiter]
+	breakers                *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
 }
 
 // NewClient creates a new WB API client from the application config.
@@ -134,6 +139,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		logger:                   logger.With().Str("component", "wb_client").Logger(),
 		limiters:                 newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		priceLimiters:            newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
+		campaignProductLimiters:  newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		breakers:                 newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
 }
@@ -240,6 +246,15 @@ func (c *Client) priceLimiterForToken(token string) *rate.Limiter {
 	// from starving polling or uploads.
 	lim := rate.NewLimiter(rate.Every(600*time.Millisecond), 1)
 	c.priceLimiters.Set(token, lim)
+	return lim
+}
+
+func (c *Client) campaignProductLimiterForToken(token string) *rate.Limiter {
+	if lim, ok := c.campaignProductLimiters.Get(token); ok {
+		return lim
+	}
+	lim := rate.NewLimiter(rate.Every(time.Second), 1)
+	c.campaignProductLimiters.Set(token, lim)
 	return lim
 }
 

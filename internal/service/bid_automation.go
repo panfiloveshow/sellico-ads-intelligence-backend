@@ -78,12 +78,9 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 	if err != nil {
 		return 0, fmt.Errorf("load workspace automation settings: %w", err)
 	}
-	if reason, settingsErr := workspaceAutomationGuardrailReason(settingsRaw); settingsErr != nil {
+	workspaceAutoApplyBlockReason, settingsErr := workspaceAutomationGuardrailReason(settingsRaw)
+	if settingsErr != nil {
 		return 0, settingsErr
-	} else if reason != "" {
-		s.logger.Warn().Str("workspace_id", workspaceID.String()).Str("reason", reason).
-			Msg("skipping bid automation because workspace auto-apply is disabled")
-		return 0, nil
 	}
 
 	totalChanges := 0
@@ -103,6 +100,15 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 				Msg("skipping bid automation because strategy is not allowed to auto-apply actions")
 			continue
 		}
+		shadowMode := strategy.Params.Merged().AutomationLevel < 3
+		if !shadowMode && workspaceAutoApplyBlockReason != "" {
+			s.logger.Warn().
+				Str("workspace_id", workspaceID.String()).
+				Str("strategy_id", strategy.ID.String()).
+				Str("reason", workspaceAutoApplyBlockReason).
+				Msg("skipping live bid automation because workspace auto-apply is disabled")
+			continue
+		}
 		state, stateErr := s.queries.GetSellerCabinetSyncState(ctx, uuidToPgtype(strategy.SellerCabinetID))
 		if stateErr != nil && !errors.Is(stateErr, pgx.ErrNoRows) {
 			runErrors = append(runErrors, fmt.Errorf("strategy %s cabinet sync state: %w", strategy.ID, stateErr))
@@ -113,14 +119,14 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 				Str("reason", reason).Msg("skipping bid automation because cabinet sync state is not ready")
 			continue
 		}
-		if reason, guardErr := s.wbActionRateLimitGuardrail(ctx, strategy.SellerCabinetID); guardErr != nil {
+		if reason, guardErr := s.wbActionRateLimitGuardrail(ctx, strategy.SellerCabinetID); !shadowMode && guardErr != nil {
 			s.logger.Warn().
 				Err(guardErr).
 				Str("workspace_id", workspaceID.String()).
 				Str("seller_cabinet_id", strategy.SellerCabinetID.String()).
 				Msg("skipping bid automation because WB action rate limit guard could not be loaded")
 			continue
-		} else if reason != "" {
+		} else if !shadowMode && reason != "" {
 			s.logger.Warn().
 				Str("workspace_id", workspaceID.String()).
 				Str("seller_cabinet_id", strategy.SellerCabinetID.String()).
@@ -129,7 +135,7 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 			continue
 		}
 
-		changes, strategyErr := s.executeStrategy(ctx, workspaceID, strategy)
+		changes, strategyErr := s.executeStrategy(ctx, workspaceID, strategy, !shadowMode)
 		if strategyErr != nil {
 			s.logger.Error().
 				Err(strategyErr).
@@ -203,9 +209,6 @@ func strategyAutomationSkipReason(strategy domain.Strategy) string {
 	if level < 1 || level > 4 {
 		return fmt.Sprintf("automation_level %d is invalid", level)
 	}
-	if level < 3 {
-		return fmt.Sprintf("automation_level %d is analytics/semi-auto only", level)
-	}
 	return ""
 }
 
@@ -245,7 +248,7 @@ func wbAPIAutomationGuardrailReason(sync *domain.SellerCabinetAutoSyncSummary, n
 	return ""
 }
 
-func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID uuid.UUID, strategy domain.Strategy) (int, error) {
+func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID uuid.UUID, strategy domain.Strategy, applyToWB bool) (int, error) {
 	if len(strategy.Bindings) == 0 {
 		return 0, nil
 	}
@@ -267,21 +270,23 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		if binding.CampaignID == nil {
 			continue
 		}
-		if reason, guardErr := s.wbActionRateLimitGuardrail(ctx, strategy.SellerCabinetID); guardErr != nil {
-			s.logger.Warn().
-				Err(guardErr).
-				Str("strategy_id", strategy.ID.String()).
-				Str("campaign_id", binding.CampaignID.String()).
-				Msg("skipping bid automation because WB action rate limit guard could not be loaded")
-			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s rate-limit guard: %w", binding.ID, guardErr))
-			continue
-		} else if reason != "" {
-			s.logger.Warn().
-				Str("strategy_id", strategy.ID.String()).
-				Str("campaign_id", binding.CampaignID.String()).
-				Str("reason", reason).
-				Msg("stopping bid automation strategy because WB campaign actions are cooling down")
-			break
+		if applyToWB {
+			if reason, guardErr := s.wbActionRateLimitGuardrail(ctx, strategy.SellerCabinetID); guardErr != nil {
+				s.logger.Warn().
+					Err(guardErr).
+					Str("strategy_id", strategy.ID.String()).
+					Str("campaign_id", binding.CampaignID.String()).
+					Msg("skipping bid automation because WB action rate limit guard could not be loaded")
+				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s rate-limit guard: %w", binding.ID, guardErr))
+				continue
+			} else if reason != "" {
+				s.logger.Warn().
+					Str("strategy_id", strategy.ID.String()).
+					Str("campaign_id", binding.CampaignID.String()).
+					Str("reason", reason).
+					Msg("stopping bid automation strategy because WB campaign actions are cooling down")
+				break
+			}
 		}
 
 		campaign, err := s.queries.GetCampaignByID(ctx, uuidToPgtype(*binding.CampaignID))
@@ -448,6 +453,19 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		newBid32, newBidErr := checkedInt32(decision.NewBid)
 		if newBidErr != nil {
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s new bid: %w", binding.ID, newBidErr))
+			continue
+		}
+		if !applyToWB {
+			if shadowErr := s.recordShadowBidDecision(ctx, workspaceID, strategy, binding, campaign, targetNMID, decision, bidCtx, observedAt, dateFrom, dateTo, oldBid32, newBid32); shadowErr != nil {
+				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s record shadow decision: %w", binding.ID, shadowErr))
+				continue
+			}
+			s.logger.Info().
+				Str("strategy_id", strategy.ID.String()).
+				Str("campaign_id", binding.CampaignID.String()).
+				Int("old_bid", decision.OldBid).
+				Int("proposed_bid", decision.NewBid).
+				Msg("recorded shadow bid decision without calling WB")
 			continue
 		}
 
@@ -767,6 +785,59 @@ func automationBidActionKeys(campaign sqlcgen.Campaign, targetNMID int64, decisi
 	base := fmt.Sprintf("%s:%d:%d:%s:%d:%s", uuidFromPgtype(campaign.SellerCabinetID), campaign.WbCampaignID,
 		targetNMID, decision.Placement, decision.OldBid, observedAt.UTC().Format(time.RFC3339Nano))
 	return fmt.Sprintf("%s:%d", base, decision.NewBid), base
+}
+
+func (s *BidAutomationService) recordShadowBidDecision(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	strategy domain.Strategy,
+	binding domain.StrategyBinding,
+	campaign sqlcgen.Campaign,
+	targetNMID int64,
+	decision *BidDecision,
+	bidCtx BidContext,
+	observedAt time.Time,
+	dateFrom time.Time,
+	dateTo time.Time,
+	oldBid int32,
+	proposedBid int32,
+) error {
+	transitionKey, _ := automationBidActionKeys(campaign, targetNMID, decision, observedAt)
+	metricsJSON, err := json.Marshal(map[string]any{
+		"data_mode":       "exact",
+		"date_from":       normalizeStatDate(dateFrom).Format("2006-01-02"),
+		"date_to":         normalizeStatDate(dateTo).Format("2006-01-02"),
+		"impressions":     bidCtx.Impressions,
+		"clicks":          bidCtx.Clicks,
+		"spend":           bidCtx.Spend,
+		"revenue":         bidCtx.Revenue,
+		"orders":          bidCtx.Orders,
+		"acos":            decision.ACoS,
+		"roas":            decision.ROAS,
+		"decision_time":   bidCtx.DecisionTime.UTC().Format(time.RFC3339),
+		"bid_observed_at": observedAt.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return fmt.Errorf("encode shadow metrics: %w", err)
+	}
+	return s.queries.UpsertBidDecisionObservation(ctx, sqlcgen.UpsertBidDecisionObservationParams{
+		ObservationKey:    transitionKey,
+		WorkspaceID:       uuidToPgtype(workspaceID),
+		SellerCabinetID:   campaign.SellerCabinetID,
+		StrategyID:        uuidToPgtype(strategy.ID),
+		StrategyBindingID: uuidToPgtype(binding.ID),
+		CampaignID:        campaign.ID,
+		ProductID:         uuidToPgtypePtr(binding.ProductID),
+		WBCampaignID:      campaign.WbCampaignID,
+		WBProductID:       targetNMID,
+		Placement:         decision.Placement,
+		OldBid:            oldBid,
+		ProposedBid:       proposedBid,
+		Reason:            decision.Reason,
+		Metrics:           metricsJSON,
+		AutomationLevel:   boundedInt32(strategy.Params.Merged().AutomationLevel),
+		BidObservedAt:     observedAt.UTC(),
+	})
 }
 
 func (s *BidAutomationService) financialIncreaseGuardrail(ctx context.Context, campaign sqlcgen.Campaign, stats []sqlcgen.CampaignStat, decision *BidDecision, now time.Time) (string, error) {
