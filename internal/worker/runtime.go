@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -277,15 +276,24 @@ func (r *Runtime) collectQueueMetrics() {
 	if r.inspector == nil {
 		return
 	}
+	existingQueues, err := r.inspector.Queues()
+	if err != nil {
+		r.logger.Warn().Err(err).Msg("failed to list asynq queues for metrics")
+		return
+	}
+	exists := make(map[string]struct{}, len(existingQueues))
+	for _, queue := range existingQueues {
+		exists[queue] = struct{}{}
+	}
 	for _, queue := range r.queues {
+		if _, ok := exists[queue]; !ok {
+			// Asynq removes an empty queue key. That is a healthy zero state,
+			// not an operational warning worth emitting every scrape interval.
+			setQueueMetrics(queue, 0, 0, 0, 0, 0, 0, 0)
+			continue
+		}
 		info, err := r.inspector.GetQueueInfo(queue)
 		if err != nil {
-			if errors.Is(err, asynq.ErrQueueNotFound) {
-				// Asynq removes an empty queue key. That is a healthy zero state,
-				// not an operational warning worth emitting every scrape interval.
-				setQueueMetrics(queue, 0, 0, 0, 0, 0, 0, 0)
-				continue
-			}
 			r.logger.Warn().Err(err).Str("queue", queue).Msg("failed to collect asynq queue metrics")
 			continue
 		}
