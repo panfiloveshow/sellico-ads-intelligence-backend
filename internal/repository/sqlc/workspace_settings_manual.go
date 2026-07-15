@@ -37,7 +37,8 @@ func (q *Queries) BeginWorkspaceSettingsUpdateTx(ctx context.Context, workspaceI
 
 const updateWorkspaceSettings = `-- name: UpdateWorkspaceSettings :one
 WITH automation_lock AS MATERIALIZED (
-	SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':workspace-daily-bid-actions', 0))
+	-- ($1::uuid)::text, not $1::text: a text-pinned $1 breaks "w.id = $1" (42883).
+	SELECT pg_advisory_xact_lock(hashtextextended(($1::uuid)::text || ':workspace-daily-bid-actions', 0))
 )
 UPDATE workspaces w
 SET settings = $2, updated_at = now()

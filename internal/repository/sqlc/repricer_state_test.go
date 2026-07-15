@@ -16,6 +16,14 @@ func TestEnqueuePriceChangeSerializesAndPreservesSupersededAudit(t *testing.T) {
 	require.Contains(t, enqueuePriceChange, "superseded_dependency")
 	require.NotContains(t, enqueuePriceChange, "ON CONFLICT")
 	require.NotContains(t, enqueuePriceChange, "schedule_entry_id = EXCLUDED")
+
+	// Server-side type inference pins a parameter to the type of its FIRST use.
+	// A bare $2::text/$5::text inside the advisory-lock key made every later
+	// "seller_cabinet_id = $2" resolve as uuid = text (SQLSTATE 42883) and
+	// broke all price-change enqueues in production. Keep the first use typed.
+	require.Contains(t, enqueuePriceChange, "($2::uuid)::text")
+	require.Contains(t, enqueuePriceChange, "($5::bigint)::text")
+	require.NotContains(t, enqueuePriceChange, "hashtextextended($2::text")
 }
 
 func TestPendingClaimFreezesPayloadBeforeHTTP(t *testing.T) {

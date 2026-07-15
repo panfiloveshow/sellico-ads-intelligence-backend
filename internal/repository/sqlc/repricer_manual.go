@@ -803,7 +803,11 @@ func (q *Queries) CreatePriceChange(ctx context.Context, arg CreatePriceChangePa
 
 const enqueuePriceChange = `
 WITH locked AS (
-  SELECT pg_advisory_xact_lock(hashtextextended($2::text || ':' || $5::text, 0))
+  -- The FIRST use of a parameter fixes its type when the server infers types
+  -- (pgx prepares without OIDs). A bare $2::text here pinned $2 to text and
+  -- every later "seller_cabinet_id = $2" failed with "uuid = text" (42883),
+  -- silently breaking ALL price-change enqueues. Cast to the real type first.
+  SELECT pg_advisory_xact_lock(hashtextextended(($2::uuid)::text || ':' || ($5::bigint)::text, 0))
 ), superseded AS (
   UPDATE price_changes old_intent
   SET wb_status = 'failed',

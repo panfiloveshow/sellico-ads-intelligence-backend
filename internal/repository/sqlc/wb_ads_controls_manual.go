@@ -94,12 +94,14 @@ type ClaimAutomationBidActionParams struct {
 }
 
 const claimAutomationBidAction = `WITH workspace_lock AS MATERIALIZED (
-	SELECT pg_advisory_xact_lock(hashtextextended($3::text || ':workspace-daily-bid-actions', 0))
+	-- ($N::uuid)::text, not $N::text: the first use fixes the inferred param
+	-- type, and a text-pinned $3/$5 breaks the later uuid comparisons (42883).
+	SELECT pg_advisory_xact_lock(hashtextextended(($3::uuid)::text || ':workspace-daily-bid-actions', 0))
 ), scope_lock AS MATERIALIZED (
 	-- Serialize all scopes for a campaign placement. This deliberately keeps a
 	-- product-wide action (NULL norm_query) from racing a cluster action whose
 	-- unresolved-scope predicate treats the product-wide row as a wildcard.
-	SELECT pg_advisory_xact_lock(hashtextextended($5::text || ':' || $12, 0))
+	SELECT pg_advisory_xact_lock(hashtextextended(($5::uuid)::text || ':' || $12, 0))
 	FROM workspace_lock
 ), workspace_state AS MATERIALIZED (
 	SELECT
@@ -215,7 +217,8 @@ type AutomationBidActionPreWriteGuardParams struct {
 }
 
 const automationBidActionPreWriteGuard = `WITH workspace_lock AS MATERIALIZED (
-	SELECT pg_advisory_xact_lock(hashtextextended($2::text || ':workspace-daily-bid-actions', 0))
+	-- ($2::uuid)::text, not $2::text — see claimAutomationBidAction.
+	SELECT pg_advisory_xact_lock(hashtextextended(($2::uuid)::text || ':workspace-daily-bid-actions', 0))
 ), state AS MATERIALIZED (
 	SELECT
 		EXISTS (
