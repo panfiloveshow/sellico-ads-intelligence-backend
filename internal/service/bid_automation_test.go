@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
@@ -117,6 +118,135 @@ func TestCampaignSpendCapIncreaseGuardrailUsesConfiguredOrSyncedLimit(t *testing
 	}, true, stats, decision, now), "reached")
 }
 
+func TestClosedCampaignStatsExcludeIncompleteTodayFromEfficiencyMetrics(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	yesterday := now.AddDate(0, 0, -1)
+	stats := []sqlcgen.CampaignStat{
+		{
+			Date:        pgtype.Date{Time: yesterday, Valid: true},
+			Impressions: 1000,
+			Clicks:      20,
+			Spend:       100,
+			Orders:      pgtype.Int8{Int64: 10, Valid: true},
+			Revenue:     pgtype.Int8{Int64: 1000, Valid: true},
+		},
+		{
+			// Today's spend can arrive before today's orders and revenue. It must
+			// remain available to pacing guardrails, but not efficiency decisions.
+			Date:        pgtype.Date{Time: now, Valid: true},
+			Impressions: 5000,
+			Clicks:      100,
+			Spend:       9000,
+			Orders:      pgtype.Int8{Int64: 0, Valid: true},
+			Revenue:     pgtype.Int8{Int64: 0, Valid: true},
+		},
+	}
+
+	closed := closedCampaignStats(stats, now)
+	require.Len(t, closed, 1)
+	impressions, clicks, orders, spend, revenue := aggregateBidPerformance(closed)
+	require.Equal(t, int64(1000), impressions)
+	require.Equal(t, int64(20), clicks)
+	require.Equal(t, int64(10), orders)
+	require.Equal(t, float64(100), spend)
+	require.Equal(t, float64(1000), revenue)
+
+	// Intraday pacing still sees the real current-day spend.
+	todaySpend, ok := campaignSpendForDate(stats, now)
+	require.True(t, ok)
+	require.Equal(t, int64(9000), todaySpend)
+}
+
+func TestClosedCampaignStatsUseMoscowCalendarBoundary(t *testing.T) {
+	// 22:30 UTC is already the next calendar day in Moscow.
+	now := time.Date(2026, 7, 14, 22, 30, 0, 0, time.UTC)
+	stats := []sqlcgen.CampaignStat{
+		{Date: pgtype.Date{Time: time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC), Valid: true}, Spend: 100},
+		{Date: pgtype.Date{Time: time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC), Valid: true}, Spend: 200},
+	}
+
+	closed := closedCampaignStats(stats, now)
+	require.Len(t, closed, 1)
+	require.Equal(t, int64(100), closed[0].Spend)
+	require.Equal(t, "2026-07-14", lastClosedCampaignStatDate(now).Format("2006-01-02"))
+}
+
+func TestClosedCampaignStatsFreshnessCannotBeMaskedByToday(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	stats := []sqlcgen.CampaignStat{
+		{
+			Date:      pgtype.Date{Time: now.AddDate(0, 0, -1), Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: now.Add(-48 * time.Hour), Valid: true},
+		},
+		{
+			Date:      pgtype.Date{Time: now, Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		},
+	}
+
+	stale, age := campaignStatsAreStale(closedCampaignStats(stats, now), 36, now)
+	require.True(t, stale)
+	require.Equal(t, 48*time.Hour, age)
+}
+
+func TestClosedDayPerformanceDrivesACoSAndCPOGuardrails(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	stats := []sqlcgen.CampaignStat{
+		{
+			Date:    pgtype.Date{Time: now.AddDate(0, 0, -1), Valid: true},
+			Clicks:  20,
+			Spend:   100,
+			Orders:  pgtype.Int8{Int64: 10, Valid: true},
+			Revenue: pgtype.Int8{Int64: 1000, Valid: true},
+		},
+		{
+			Date:    pgtype.Date{Time: now, Valid: true},
+			Clicks:  100,
+			Spend:   9000,
+			Orders:  pgtype.Int8{Int64: 0, Valid: true},
+			Revenue: pgtype.Int8{Int64: 0, Valid: true},
+		},
+	}
+
+	_, clicks, orders, spend, revenue := aggregateBidPerformance(closedCampaignStats(stats, now))
+	decision := NewBidEngine(zerolog.Nop()).CalculateBid(domain.Strategy{
+		Type: domain.StrategyTypeACoS,
+		Params: domain.StrategyParams{
+			TargetACoS:       20,
+			MaxCPO:           50,
+			MinClicks:        10,
+			MaxChangePercent: 15,
+		},
+	}, BidContext{
+		CurrentBid: 100,
+		Clicks:     clicks,
+		Orders:     orders,
+		Spend:      spend,
+		Revenue:    revenue,
+	})
+
+	require.NotNil(t, decision)
+	require.Greater(t, decision.NewBid, decision.OldBid)
+	require.NotNil(t, decision.ACoS)
+	require.Equal(t, float64(10), *decision.ACoS)
+}
+
+func TestClosedDayPerformancePreventsTodayFromTriggeringAntiWaste(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	stats := []sqlcgen.CampaignStat{
+		{Date: pgtype.Date{Time: now.AddDate(0, 0, -1), Valid: true}, Clicks: 20, Spend: 100, Revenue: pgtype.Int8{Int64: 1000, Valid: true}},
+		{Date: pgtype.Date{Time: now, Valid: true}, Clicks: 60, Spend: 5000, Revenue: pgtype.Int8{Int64: 0, Valid: true}},
+	}
+
+	_, clicks, orders, spend, revenue := aggregateBidPerformance(closedCampaignStats(stats, now))
+	decision := NewBidEngine(zerolog.Nop()).CalculateBid(domain.Strategy{
+		Type:   domain.StrategyTypeAntiSliv,
+		Params: domain.StrategyParams{MaxACoS: 30},
+	}, BidContext{CurrentBid: 100, Clicks: clicks, Orders: orders, Spend: spend, Revenue: revenue})
+
+	require.Nil(t, decision)
+}
+
 func TestProductBidObservationUsesExactCampaignProduct(t *testing.T) {
 	productID := uuid.New()
 	otherID := uuid.New()
@@ -136,6 +266,42 @@ func TestProductBidObservationUsesExactCampaignProduct(t *testing.T) {
 	_, _, ok, err = productBidObservationFromLinks(links, productID, "combined")
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+func TestCampaignStatsFromProductStatsPreservesExactAttribution(t *testing.T) {
+	productID := uuid.New()
+	campaignID := uuid.New()
+	createdAt := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	date := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+
+	stats := campaignStatsFromProductStats([]sqlcgen.ProductStat{{
+		ProductID:   uuidToPgtype(productID),
+		CampaignID:  uuidToPgtype(campaignID),
+		Date:        pgtype.Date{Time: date, Valid: true},
+		Impressions: 101,
+		Clicks:      12,
+		Spend:       345,
+		Orders:      pgtype.Int8{Int64: 4, Valid: true},
+		Revenue:     pgtype.Int8{Int64: 6789, Valid: true},
+		CreatedAt:   pgtype.Timestamptz{Time: createdAt, Valid: true},
+	}})
+
+	require.Len(t, stats, 1)
+	require.Equal(t, uuidToPgtype(campaignID), stats[0].CampaignID)
+	require.Equal(t, int64(101), stats[0].Impressions)
+	require.Equal(t, int64(12), stats[0].Clicks)
+	require.Equal(t, int64(345), stats[0].Spend)
+	require.Equal(t, int64(4), stats[0].Orders.Int64)
+	require.Equal(t, int64(6789), stats[0].Revenue.Int64)
+	require.Equal(t, createdAt, stats[0].CreatedAt.Time)
+
+	// The bid engine consumes the converted slice, so metrics from other
+	// products in the campaign cannot leak into a product-level decision.
+	var totalSpend int64
+	for _, stat := range stats {
+		totalSpend += stat.Spend
+	}
+	require.Equal(t, int64(345), totalSpend)
 }
 
 func TestSellerBalanceIncreaseGuardrailRequiresFreshPositiveBalance(t *testing.T) {

@@ -276,3 +276,55 @@ func (q *Queries) ListProductStatsByWorkspaceDateRange(ctx context.Context, arg 
 	}
 	return items, rows.Err()
 }
+
+const getProductStatsByProductCampaignDateRange = `
+SELECT ps.id, ps.product_id, ps.campaign_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.orders, ps.revenue, ps.atbs, ps.canceled, ps.shks, ps.created_at, ps.updated_at
+FROM product_stats ps
+WHERE ps.product_id = $1
+  AND ps.campaign_id = $2
+  AND ps.date BETWEEN $3 AND $4
+ORDER BY ps.date
+`
+
+type GetProductStatsByProductCampaignDateRangeParams struct {
+	ProductID  pgtype.UUID
+	CampaignID pgtype.UUID
+	DateFrom   pgtype.Date
+	DateTo     pgtype.Date
+}
+
+// GetProductStatsByProductCampaignDateRange returns only the real attributed
+// statistics for one product inside one campaign. Bid automation uses this for
+// product-level bindings so another SKU's performance cannot affect its bid.
+func (q *Queries) GetProductStatsByProductCampaignDateRange(ctx context.Context, arg GetProductStatsByProductCampaignDateRangeParams) ([]ProductStat, error) {
+	rows, err := q.db.Query(ctx, getProductStatsByProductCampaignDateRange, arg.ProductID, arg.CampaignID, arg.DateFrom, arg.DateTo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []ProductStat
+	for rows.Next() {
+		var item ProductStat
+		if err := rows.Scan(
+			&item.ID,
+			&item.ProductID,
+			&item.CampaignID,
+			&item.Date,
+			&item.Impressions,
+			&item.Clicks,
+			&item.Spend,
+			&item.Orders,
+			&item.Revenue,
+			&item.Atbs,
+			&item.Canceled,
+			&item.Shks,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}

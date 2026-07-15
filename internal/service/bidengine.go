@@ -69,8 +69,9 @@ type BidContext struct {
 
 // BidIncreaseGuardrail blocks scale-up decisions when real readiness data is missing.
 type BidIncreaseGuardrail struct {
-	Allowed bool
-	Reason  string
+	Allowed              bool
+	Reason               string
+	MaxAllowedDRRPercent float64
 }
 
 const (
@@ -127,6 +128,11 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 	}
 
 	if newBid > ctx.CurrentBid {
+		if guardrailReason := economicsDRRIncreaseGuardrailReason(params, ctx); guardrailReason != "" {
+			e.logger.Info().Str("placement", ctx.Placement).Str("reason", guardrailReason).
+				Msg("bid increase blocked by unit economics DRR ceiling")
+			return nil
+		}
 		if guardrailReason := maxACoSIncreaseGuardrailReason(params, ctx); guardrailReason != "" {
 			e.logger.Info().
 				Str("placement", ctx.Placement).
@@ -168,6 +174,33 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 		ACoS:      acos,
 		ROAS:      roas,
 	}
+}
+
+func economicsDRRIncreaseGuardrailReason(params domain.StrategyParams, ctx BidContext) string {
+	if ctx.IncreaseGuardrail == nil {
+		return ""
+	}
+	if ctx.IncreaseGuardrail.MaxAllowedDRRPercent <= 0 {
+		return "unit economics DRR ceiling is unavailable"
+	}
+	ceiling := ctx.IncreaseGuardrail.MaxAllowedDRRPercent
+	if ctx.Revenue <= 0 {
+		return "current DRR evidence is unavailable"
+	}
+	currentDRR := ctx.Spend / ctx.Revenue * 100
+	if currentDRR >= ceiling {
+		return fmt.Sprintf("current DRR %.1f%% is at or above unit economics ceiling %.1f%%", currentDRR, ceiling)
+	}
+	if params.TargetACoS > 0 && params.TargetACoS > ceiling {
+		return fmt.Sprintf("target ACoS %.1f%% exceeds unit economics ceiling %.1f%%", params.TargetACoS, ceiling)
+	}
+	if params.TargetROAS > 0 {
+		minimumROAS := 100 / ceiling
+		if params.TargetROAS < minimumROAS {
+			return fmt.Sprintf("target ROAS %.2f is below unit economics break-even %.2f", params.TargetROAS, minimumROAS)
+		}
+	}
+	return ""
 }
 
 func (e *BidEngine) calculateACoSBid(params domain.StrategyParams, ctx BidContext) (int, string, *float64) {

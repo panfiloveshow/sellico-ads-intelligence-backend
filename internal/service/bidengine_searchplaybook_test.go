@@ -14,11 +14,11 @@ func playbook(tier string, maxACoS float64) domain.Strategy {
 	return domain.Strategy{
 		Type: domain.StrategyTypeSearchPlaybook,
 		Params: domain.StrategyParams{
-			FrequencyTier:    tier,
-			MaxACoS:          maxACoS,
-			MaxChangePercent: 15,
-			MinBid:           50,
-			MaxBid:           5000,
+			FrequencyTier:             tier,
+			MaxACoS:                   maxACoS,
+			MaxChangePercent:          15,
+			MinBid:                    50,
+			MaxBid:                    5000,
 			AllowIncreaseWithoutStock: true, // isolate the engine from stock/economics guardrails
 		}.Merged(),
 	}
@@ -28,15 +28,15 @@ func TestSearchPlaybook_ClimbsWhenBelowTargetPosition(t *testing.T) {
 	engine := NewBidEngine(zerolog.Nop())
 	// mid tier → target position 3; we sit at 6.2 → should raise.
 	d := engine.CalculateBid(playbook("mid", 0), BidContext{
-		CurrentBid:  100,
-		Impressions: 500,
-		Orders:      2,
-		Revenue:     4000,
-		Spend:       200,
-		AvgPosition: 6.2,
-		HasPosition: true,
-		Placement:   "search",
-		IncreaseGuardrail: &BidIncreaseGuardrail{Allowed: true},
+		CurrentBid:        100,
+		Impressions:       500,
+		Orders:            2,
+		Revenue:           4000,
+		Spend:             200,
+		AvgPosition:       6.2,
+		HasPosition:       true,
+		Placement:         "search",
+		IncreaseGuardrail: &BidIncreaseGuardrail{Allowed: true, MaxAllowedDRRPercent: 100},
 	})
 	require.NotNil(t, d)
 	require.Greater(t, d.NewBid, d.OldBid)

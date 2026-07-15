@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type UnitEconomicsReadinessRequest struct {
+	IntegrationID   string   `json:"integration_id,omitempty"`
 	WorkspaceID     string   `json:"workspace_id"`
 	SellerCabinetID string   `json:"seller_cabinet_id"`
 	ProductIDs      []string `json:"product_ids"`
@@ -18,11 +20,15 @@ type UnitEconomicsReadinessRequest struct {
 }
 
 type UnitEconomicsReadinessResponse struct {
+	IntegrationID              string
 	Source                     string
 	CheckedAt                  time.Time
+	Complete                   bool
+	CheckedProductIDs          []int64
 	MissingEconomicsProductIDs []int64
 	UnprofitableProductIDs     []int64
 	StaleProductIDs            []int64
+	MaxAllowedDRRByProduct     map[int64]float64
 }
 
 func (c *Client) CheckUnitEconomicsReadiness(ctx context.Context, serviceToken, path string, req UnitEconomicsReadinessRequest) (*UnitEconomicsReadinessResponse, error) {
@@ -79,11 +85,58 @@ func parseUnitEconomicsReadinessPayload(payload any) UnitEconomicsReadinessRespo
 	}
 
 	return UnitEconomicsReadinessResponse{
+		IntegrationID:              stringify(raw["integration_id"]),
 		Source:                     firstNonEmpty(stringify(raw["source"]), stringify(raw["data_source"])),
 		CheckedAt:                  parseTimeField(raw["checked_at"]),
+		Complete:                   boolField(raw["complete"]),
+		CheckedProductIDs:          int64List(raw["checked_product_ids"], raw["checkedProductIds"], raw["checked_nm_ids"]),
 		MissingEconomicsProductIDs: int64List(raw["missing_economics_product_ids"], raw["missingEconomicsProductIds"], raw["missing_nm_ids"]),
 		UnprofitableProductIDs:     int64List(raw["unprofitable_product_ids"], raw["unprofitableProductIds"], raw["unprofitable_nm_ids"]),
 		StaleProductIDs:            int64List(raw["stale_product_ids"], raw["staleProductIds"], raw["stale_nm_ids"]),
+		MaxAllowedDRRByProduct:     readinessDRRCeilings(raw["items"]),
+	}
+}
+
+func readinessDRRCeilings(value any) map[int64]float64 {
+	result := map[int64]float64{}
+	for _, item := range unwrapAnyList(value) {
+		raw := unwrapObject(item)
+		nmID, ok := parseInt64(raw["nm_id"])
+		if !ok || nmID <= 0 || stringify(raw["status"]) != "ready" {
+			continue
+		}
+		value, ok := parseFloat64(raw["max_allowed_drr_percent"])
+		if ok && value > 0 && value <= 100 {
+			result[nmID] = value
+		}
+	}
+	return result
+}
+
+func parseFloat64(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func boolField(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err == nil && parsed
+	default:
+		return false
 	}
 }
 

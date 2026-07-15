@@ -65,8 +65,11 @@ func (p *SellicoUnitEconomicsReadinessProvider) CheckBidIncreaseReadiness(ctx co
 	}
 
 	return &UnitEconomicsReadiness{
+		IntegrationID:              response.IntegrationID,
 		Source:                     response.Source,
 		CheckedAt:                  response.CheckedAt,
+		Complete:                   response.Complete,
+		CheckedProductIDs:          response.CheckedProductIDs,
 		MissingEconomicsProductIDs: response.MissingEconomicsProductIDs,
 		UnprofitableProductIDs:     response.UnprofitableProductIDs,
 		StaleProductIDs:            response.StaleProductIDs,

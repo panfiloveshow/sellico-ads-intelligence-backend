@@ -54,7 +54,17 @@ func main() {
 		Email:       cfg.SellicoServiceEmail,
 		Password:    cfg.SellicoServicePassword,
 	})
-	unitEconomicsReadinessConfigured := sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != ""
+	productsClient := sellico.NewClient(cfg.ProductsAPIBaseURL, cfg.SellicoAPITimeout)
+	var unitEconomicsReadinessProvider service.UnitEconomicsReadinessProvider
+	if cfg.ProductsAPIBaseURL != "" && cfg.ProductsAPIToken != "" && cfg.ProductsUnitEconomicsReadinessPath != "" {
+		unitEconomicsReadinessProvider = service.NewProductsUnitEconomicsReadinessProvider(
+			deps.Queries, productsClient, cfg.ProductsAPIToken,
+			cfg.ProductsUnitEconomicsReadinessPath, cfg.ProductsUnitEconomicsMaxAge,
+		)
+	} else if sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != "" {
+		unitEconomicsReadinessProvider = service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger)
+	}
+	unitEconomicsReadinessConfigured := unitEconomicsReadinessProvider != nil
 	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
 		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
 		service.WithAdsReadBackendVersion(cfg.AppVersion),
@@ -80,9 +90,9 @@ func main() {
 	bidAutomationOpts := []service.BidAutomationOption{}
 	if unitEconomicsReadinessConfigured {
 		bidAutomationOpts = append(bidAutomationOpts, service.WithUnitEconomicsReadinessProvider(
-			service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger),
+			unitEconomicsReadinessProvider,
 		))
-		deps.Logger.Info().Str("path", cfg.SellicoUnitEconomicsReadinessPath).Msg("sellico unit-economics readiness enabled for bid automation")
+		deps.Logger.Info().Str("path", cfg.ProductsUnitEconomicsReadinessPath).Msg("unit-economics readiness enabled for bid automation")
 	} else {
 		deps.Logger.Info().Msg("sellico unit-economics readiness NOT configured; bid automation will not increase bids")
 	}
@@ -97,7 +107,6 @@ func main() {
 	// strategy). Separate host + shared service token, not the CRM token flow.
 	var economicsSyncService *service.SellicoEconomicsSyncService
 	if cfg.ProductsAPIBaseURL != "" && cfg.ProductsAPIToken != "" && cfg.SellicoUnitEconomicsExportPath != "" {
-		productsClient := sellico.NewClient(cfg.ProductsAPIBaseURL, cfg.SellicoAPITimeout)
 		economicsSyncService = service.NewSellicoEconomicsSyncService(
 			deps.Queries, productsClient, cfg.ProductsAPIToken,
 			service.NewProductEconomicsService(deps.Queries),

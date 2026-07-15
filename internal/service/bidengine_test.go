@@ -302,7 +302,7 @@ func TestBidEngine_ExplainsMaxBidLimitInDecisionReason(t *testing.T) {
 		Revenue:    10000,
 		Placement:  "search",
 		IncreaseGuardrail: &BidIncreaseGuardrail{
-			Allowed: true,
+			Allowed: true, MaxAllowedDRRPercent: 100,
 		},
 	})
 
@@ -329,7 +329,7 @@ func TestBidEngine_ExplainsMaxChangeLimitInDecisionReason(t *testing.T) {
 		Revenue:    10000,
 		Placement:  "search",
 		IncreaseGuardrail: &BidIncreaseGuardrail{
-			Allowed: true,
+			Allowed: true, MaxAllowedDRRPercent: 100,
 		},
 	})
 
@@ -382,7 +382,7 @@ func TestBidEngine_MinBidFloorWinsOverMaxChangePercent(t *testing.T) {
 		Revenue:    10000,
 		Placement:  "search",
 		IncreaseGuardrail: &BidIncreaseGuardrail{
-			Allowed: true,
+			Allowed: true, MaxAllowedDRRPercent: 100,
 		},
 	})
 
@@ -394,11 +394,27 @@ func TestBidEngine_MinBidFloorWinsOverMaxChangePercent(t *testing.T) {
 func TestDefaultStrategyParams_AutopilotGuardrails(t *testing.T) {
 	params := domain.DefaultStrategyParams()
 
-	require.Equal(t, 3, params.AutomationLevel)
+	require.Equal(t, 1, params.AutomationLevel)
 	require.Equal(t, float64(15), params.MaxChangePercent)
 	require.Equal(t, 120, params.CooldownMinutes)
 	require.Equal(t, 3, params.MaxChangesPerDay)
 	require.Equal(t, 36, params.MaxDataAgeHours)
+}
+
+func TestEconomicsDRRIncreaseGuardrailUsesRealBreakEvenCeiling(t *testing.T) {
+	ctx := BidContext{
+		Spend:   190,
+		Revenue: 1000,
+		IncreaseGuardrail: &BidIncreaseGuardrail{
+			Allowed: true, MaxAllowedDRRPercent: 18,
+		},
+	}
+	require.Contains(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{}, ctx), "at or above")
+
+	ctx.Spend = 100
+	require.Contains(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{TargetACoS: 20}, ctx), "exceeds")
+	require.Contains(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{TargetROAS: 4}, ctx), "below")
+	require.Empty(t, economicsDRRIncreaseGuardrailReason(domain.StrategyParams{TargetACoS: 15, TargetROAS: 6}, ctx))
 }
 
 func TestStrategyAutomationSkipReasonHonorsTrustLevels(t *testing.T) {

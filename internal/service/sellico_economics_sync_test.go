@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 )
@@ -9,8 +10,12 @@ import (
 func TestBuildEconomicsInputs(t *testing.T) {
 	comm := 15.0
 	tax := 6.0
+	logistics := 121.4
+	other := 54.6
+	maxDRR := 19.6
+	calculatedAt := time.Date(2026, 7, 15, 9, 45, 0, 0, time.UTC)
 	rows := []sellico.WBUnitEconomics{
-		{NmID: 100, CostPrice: 349.6, CommissionPercent: &comm, TaxPercent: &tax}, // rounds to 350
+		{NmID: 100, CostPrice: 349.6, CommissionPercent: &comm, TaxPercent: &tax, LogisticsCost: &logistics, OtherCosts: &other, MaxAllowedDRR: &maxDRR, CalculatedAt: &calculatedAt, Source: "sellico-products-unit-economics"}, // rounds to 350
 		{NmID: 0, CostPrice: 200},   // dropped: no nmID
 		{NmID: 101, CostPrice: 0},   // dropped: no cost
 		{NmID: 102, CostPrice: 500}, // no commission/tax
@@ -27,8 +32,14 @@ func TestBuildEconomicsInputs(t *testing.T) {
 	if got[0].CommissionPercent == nil || *got[0].CommissionPercent != 15 {
 		t.Fatalf("row 0: commission not carried through: %v", got[0].CommissionPercent)
 	}
-	if got[0].Source != "sellico" {
-		t.Fatalf("row 0: want source=sellico, got %q", got[0].Source)
+	if got[0].Source != "sellico-products-unit-economics" {
+		t.Fatalf("row 0: unexpected source %q", got[0].Source)
+	}
+	if got[0].LogisticsCost == nil || *got[0].LogisticsCost != 121 || got[0].OtherCosts == nil || *got[0].OtherCosts != 55 {
+		t.Fatalf("row 0: full costs not carried through: logistics=%v other=%v", got[0].LogisticsCost, got[0].OtherCosts)
+	}
+	if got[0].MaxAllowedDRR == nil || *got[0].MaxAllowedDRR != 19.6 || got[0].EffectiveAt == nil {
+		t.Fatalf("row 0: margin ceiling/freshness not carried through: max_drr=%v effective_at=%v", got[0].MaxAllowedDRR, got[0].EffectiveAt)
 	}
 	if got[1].WBProductID != 102 || got[1].CommissionPercent != nil {
 		t.Fatalf("row 1: want nm=102 with nil commission, got nm=%d comm=%v", got[1].WBProductID, got[1].CommissionPercent)

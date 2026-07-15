@@ -265,6 +265,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 	now := time.Now()
 	dateFrom := now.AddDate(0, 0, -params.LookbackDays)
 	dateTo := now
+	decisionDateTo := lastClosedCampaignStatDate(now)
 
 	for _, binding := range strategy.Bindings {
 		if binding.CampaignID == nil {
@@ -310,8 +311,10 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			continue
 		}
 
-		// Get stats for lookback period
-		stats, err := s.queries.GetCampaignStatsByDateRange(ctx, sqlcgen.GetCampaignStatsByDateRangeParams{
+		// Keep the campaign aggregate for campaign-wide financial limits. The
+		// decision itself must use exact product attribution whenever the binding
+		// targets a product, otherwise one strong SKU can raise another SKU's bid.
+		campaignStats, err := s.queries.GetCampaignStatsByDateRange(ctx, sqlcgen.GetCampaignStatsByDateRangeParams{
 			CampaignID: uuidToPgtype(*binding.CampaignID),
 			Date:       pgtype.Date{Time: dateFrom, Valid: true},
 			Date_2:     pgtype.Date{Time: dateTo, Valid: true},
@@ -322,32 +325,46 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s stats: %w", binding.ID, err))
 			continue
 		}
+		stats := campaignStats
+		if binding.ProductID != nil {
+			productStats, productStatsErr := s.queries.GetProductStatsByProductCampaignDateRange(ctx, sqlcgen.GetProductStatsByProductCampaignDateRangeParams{
+				ProductID:  uuidToPgtype(*binding.ProductID),
+				CampaignID: uuidToPgtype(*binding.CampaignID),
+				DateFrom:   pgtype.Date{Time: dateFrom, Valid: true},
+				DateTo:     pgtype.Date{Time: dateTo, Valid: true},
+			})
+			if productStatsErr != nil {
+				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s product stats: %w", binding.ID, productStatsErr))
+				continue
+			}
+			stats = campaignStatsFromProductStats(productStats)
+		}
 		if len(stats) == 0 {
 			continue
 		}
-		if stale, age := campaignStatsAreStale(stats, params.MaxDataAgeHours, time.Now()); stale {
+
+		// Efficiency metrics must use completed calendar days only. WB's current-day
+		// orders and revenue can lag spend, so including today would bias ACoS, ROAS,
+		// CPO and anti-waste decisions toward unnecessary bid reductions. Keep the
+		// full stats slice below for explicit intraday pacing/click guardrails.
+		decisionStats := closedCampaignStats(stats, now)
+		if len(decisionStats) == 0 {
+			s.logger.Info().
+				Str("campaign_id", binding.CampaignID.String()).
+				Msg("skipping bid automation because no completed-day campaign stats are available")
+			continue
+		}
+		if stale, age := campaignStatsAreStale(decisionStats, params.MaxDataAgeHours, now); stale {
 			s.logger.Warn().
 				Str("campaign_id", binding.CampaignID.String()).
 				Dur("age", age).
 				Int("max_data_age_hours", params.MaxDataAgeHours).
-				Msg("skipping bid automation because campaign stats are stale")
+				Msg("skipping bid automation because completed-day campaign stats are stale")
 			continue
 		}
 
-		// Aggregate stats over lookback period
-		var totalImpressions, totalClicks, totalOrders int64
-		var totalSpend, totalRevenue float64
-		for _, stat := range stats {
-			totalImpressions += stat.Impressions
-			totalClicks += stat.Clicks
-			totalSpend += float64(stat.Spend)
-			if stat.Orders.Valid {
-				totalOrders += stat.Orders.Int64
-			}
-			if stat.Revenue.Valid {
-				totalRevenue += float64(stat.Revenue.Int64)
-			}
-		}
+		// Aggregate completed-day stats over the lookback period.
+		totalImpressions, totalClicks, totalOrders, totalSpend, totalRevenue := aggregateBidPerformance(decisionStats)
 
 		currentBid, observedAt, ok, bidErr := currentBidObservation(ctx, s.queries, *binding.CampaignID, binding.ProductID, placement)
 		if bidErr != nil {
@@ -387,7 +404,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			bidCtx.DaypartingSlotApplied = dayparting.SlotApplied
 		}
 		if strategy.Type == domain.StrategyTypeSearchPlaybook {
-			s.augmentSearchPlaybookContext(ctx, *binding.CampaignID, binding, stats, &bidCtx)
+			s.augmentSearchPlaybookContext(ctx, *binding.CampaignID, binding, decisionStats, &bidCtx)
 		}
 
 		decision := s.engine.CalculateBid(strategy, bidCtx)
@@ -403,7 +420,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Msg("skipping bid automation because recent click guardrail blocked the increase")
 			continue
 		}
-		if reason := dailyBudgetIncreaseGuardrailReason(campaign, stats, decision, time.Now()); reason != "" {
+		if reason := dailyBudgetIncreaseGuardrailReason(campaign, campaignStats, decision, time.Now()); reason != "" {
 			s.logger.Info().
 				Str("strategy_id", strategy.ID.String()).
 				Str("campaign_id", binding.CampaignID.String()).
@@ -411,7 +428,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Msg("skipping bid automation because daily budget guardrail blocked the increase")
 			continue
 		}
-		if reason, financialErr := s.financialIncreaseGuardrail(ctx, campaign, stats, decision, now); financialErr != nil {
+		if reason, financialErr := s.financialIncreaseGuardrail(ctx, campaign, campaignStats, decision, now); financialErr != nil {
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s financial guard: %w", binding.ID, financialErr))
 			continue
 		} else if reason != "" {
@@ -456,7 +473,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			continue
 		}
 		if !applyToWB {
-			if shadowErr := s.recordShadowBidDecision(ctx, workspaceID, strategy, binding, campaign, targetNMID, decision, bidCtx, observedAt, dateFrom, dateTo, oldBid32, newBid32); shadowErr != nil {
+			if shadowErr := s.recordShadowBidDecision(ctx, workspaceID, strategy, binding, campaign, targetNMID, decision, bidCtx, observedAt, dateFrom, decisionDateTo, oldBid32, newBid32); shadowErr != nil {
 				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s record shadow decision: %w", binding.ID, shadowErr))
 				continue
 			}
@@ -976,6 +993,28 @@ func campaignStatsAreStale(stats []sqlcgen.CampaignStat, maxAgeHours int, now ti
 	return age > time.Duration(maxAgeHours)*time.Hour, age
 }
 
+func campaignStatsFromProductStats(stats []sqlcgen.ProductStat) []sqlcgen.CampaignStat {
+	result := make([]sqlcgen.CampaignStat, 0, len(stats))
+	for _, stat := range stats {
+		result = append(result, sqlcgen.CampaignStat{
+			ID:          stat.ID,
+			CampaignID:  stat.CampaignID,
+			Date:        stat.Date,
+			Impressions: stat.Impressions,
+			Clicks:      stat.Clicks,
+			Spend:       stat.Spend,
+			Orders:      stat.Orders,
+			Revenue:     stat.Revenue,
+			CreatedAt:   stat.CreatedAt,
+			UpdatedAt:   stat.UpdatedAt,
+			Atbs:        stat.Atbs,
+			Canceled:    stat.Canceled,
+			Shks:        stat.Shks,
+		})
+	}
+	return result
+}
+
 func latestCampaignStatsCreatedAt(stats []sqlcgen.CampaignStat) (time.Time, bool) {
 	var latest time.Time
 	for _, stat := range stats {
@@ -991,6 +1030,48 @@ func latestCampaignStatsCreatedAt(stats []sqlcgen.CampaignStat) (time.Time, bool
 		return time.Time{}, false
 	}
 	return latest, true
+}
+
+// closedCampaignStats returns only completed WB calendar days. Advertising spend
+// arrives during the current Moscow day before orders and revenue are fully
+// attributed, so current-day rows are unsuitable for efficiency decisions.
+func closedCampaignStats(stats []sqlcgen.CampaignStat, now time.Time) []sqlcgen.CampaignStat {
+	cutoff := normalizeStatDate(moscowTime(now))
+	result := make([]sqlcgen.CampaignStat, 0, len(stats))
+	for _, stat := range stats {
+		if !stat.Date.Valid || !normalizeStatDate(stat.Date.Time).Before(cutoff) {
+			continue
+		}
+		result = append(result, stat)
+	}
+	return result
+}
+
+func aggregateBidPerformance(stats []sqlcgen.CampaignStat) (impressions, clicks, orders int64, spend, revenue float64) {
+	for _, stat := range stats {
+		impressions += stat.Impressions
+		clicks += stat.Clicks
+		spend += float64(stat.Spend)
+		if stat.Orders.Valid {
+			orders += stat.Orders.Int64
+		}
+		if stat.Revenue.Valid {
+			revenue += float64(stat.Revenue.Int64)
+		}
+	}
+	return impressions, clicks, orders, spend, revenue
+}
+
+func lastClosedCampaignStatDate(now time.Time) time.Time {
+	return normalizeStatDate(moscowTime(now)).AddDate(0, 0, -1)
+}
+
+func moscowTime(value time.Time) time.Time {
+	location, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		location = time.FixedZone("MSK", 3*60*60)
+	}
+	return value.In(location)
 }
 
 func (s *BidAutomationService) bidActionGuardrail(ctx context.Context, strategy domain.Strategy, binding domain.StrategyBinding, campaignID uuid.UUID, decision *BidDecision) (string, error) {
@@ -1216,7 +1297,7 @@ func (s *BidAutomationService) bidIncreaseGuardrail(ctx context.Context, strateg
 		return &BidIncreaseGuardrail{Reason: readiness.BlockReason()}
 	}
 
-	return &BidIncreaseGuardrail{Allowed: true}
+	return &BidIncreaseGuardrail{Allowed: true, MaxAllowedDRRPercent: readiness.MaxAllowedDRRPercent}
 }
 
 func (s *BidAutomationService) extensionBidMismatchGuardrail(ctx context.Context, workspaceID, campaignID uuid.UUID, currentBid int) (string, error) {

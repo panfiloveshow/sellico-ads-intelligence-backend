@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/google/uuid"
@@ -79,6 +80,10 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 			s.logger.Warn().Err(err).Str("integration_id", integrationID).Msg("fetch sellico economics failed")
 			continue
 		}
+		if err := s.verifyCabinetProducts(ctx, workspaceID, uuidFromPgtype(cab.ID), rows); err != nil {
+			s.logger.Warn().Err(err).Str("integration_id", integrationID).Msg("reject sellico economics snapshot")
+			continue
+		}
 
 		inputs := buildEconomicsInputs(rows)
 		if len(inputs) == 0 {
@@ -103,6 +108,22 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 	return imported, nil
 }
 
+func (s *SellicoEconomicsSyncService) verifyCabinetProducts(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID, rows []sellico.WBUnitEconomics) error {
+	for _, row := range rows {
+		product, err := s.queries.GetProductByWBProductID(ctx, sqlcgen.GetProductByWBProductIDParams{
+			WorkspaceID: uuidToPgtype(workspaceID),
+			WbProductID: row.NmID,
+		})
+		if err != nil {
+			return fmt.Errorf("WB product %d is not present in the workspace cabinet: %w", row.NmID, err)
+		}
+		if uuidFromPgtype(product.SellerCabinetID) != sellerCabinetID {
+			return fmt.Errorf("WB product %d belongs to another seller cabinet", row.NmID)
+		}
+	}
+	return nil
+}
+
 func importedPricePresentation(row sellico.WBUnitEconomics) (pgtype.Float8, pgtype.Int8) {
 	spp := pgtype.Float8{}
 	if row.SppPercent != nil && *row.SppPercent >= 0 && *row.SppPercent <= 100 {
@@ -125,12 +146,30 @@ func buildEconomicsInputs(rows []sellico.WBUnitEconomics) []domain.ProductEconom
 			continue
 		}
 		cost := int64(math.Round(r.CostPrice))
+		var logisticsCost *int64
+		if r.LogisticsCost != nil {
+			value := int64(math.Round(*r.LogisticsCost))
+			logisticsCost = &value
+		}
+		var otherCosts *int64
+		if r.OtherCosts != nil {
+			value := int64(math.Round(*r.OtherCosts))
+			otherCosts = &value
+		}
+		source := r.Source
+		if source == "" {
+			source = "sellico-products-unit-economics"
+		}
 		inputs = append(inputs, domain.ProductEconomicsInput{
 			WBProductID:       r.NmID,
 			CostPrice:         &cost,
+			LogisticsCost:     logisticsCost,
+			OtherCosts:        otherCosts,
 			CommissionPercent: r.CommissionPercent,
 			TaxRatePercent:    r.TaxPercent,
-			Source:            "sellico",
+			MaxAllowedDRR:     r.MaxAllowedDRR,
+			EffectiveAt:       r.CalculatedAt,
+			Source:            source,
 		})
 	}
 	return inputs

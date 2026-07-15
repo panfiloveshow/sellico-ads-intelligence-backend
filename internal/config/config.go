@@ -70,8 +70,10 @@ type Config struct {
 	SellicoUnitEconomicsExportPath    string        // env: SELLICO_UNIT_ECONOMICS_EXPORT_PATH, cost/commission/tax by nmID; empty disables the repricer economics bridge
 
 	// Products-backend (cost bridge) — separate host from the CRM (sellico.ru/api).
-	ProductsAPIBaseURL string // env: PRODUCTS_API_BASE_URL, default "https://products.sellico.ru/api"
-	ProductsAPIToken   string // env: PRODUCTS_API_TOKEN, shared secret for the economics export; empty disables the bridge
+	ProductsAPIBaseURL                 string        // env: PRODUCTS_API_BASE_URL, default "https://products.sellico.ru/api"
+	ProductsAPIToken                   string        // env: PRODUCTS_API_TOKEN, shared secret for economics endpoints
+	ProductsUnitEconomicsReadinessPath string        // env: PRODUCTS_UNIT_ECONOMICS_READINESS_PATH
+	ProductsUnitEconomicsMaxAge        time.Duration // env: PRODUCTS_UNIT_ECONOMICS_MAX_AGE, default 72h
 
 	// Sellico service-account credentials. The backend uses them to call the
 	// service-account endpoints documented in financial-dashboard/rules.md
@@ -94,9 +96,9 @@ type Config struct {
 	RateLimitBurst int     // env: RATE_LIMIT_BURST, default: 40
 
 	// Worker Schedules
-	SyncInterval           string // env: SYNC_INTERVAL, default: "@every 1h"
-	RecommendationInterval string // env: RECOMMENDATION_INTERVAL, default: "@every 2h"
-	BidAutomationInterval  string // env: BID_AUTOMATION_INTERVAL, default: "@every 15m"
+	SyncInterval             string // env: SYNC_INTERVAL, default: "@every 1h"
+	RecommendationInterval   string // env: RECOMMENDATION_INTERVAL, default: "@every 2h"
+	BidAutomationInterval    string // env: BID_AUTOMATION_INTERVAL, default: "@every 15m"
 	RepricerInterval         string // env: REPRICER_INTERVAL, default: "@every 1h"
 	RepricerPollInterval     string // env: REPRICER_POLL_INTERVAL, default: "@every 5m"
 	RepricerScheduleInterval string // env: REPRICER_SCHEDULE_INTERVAL, default: "@every 15m"
@@ -109,52 +111,54 @@ type Config struct {
 // and terminates the process with a descriptive message if any required variable is missing.
 func Load() *Config {
 	cfg := &Config{
-		ServerHost:                        getEnvOrDefault("SERVER_HOST", "0.0.0.0"),
-		ServerPort:                        getEnvAsInt("SERVER_PORT", 8080),
-		AppVersion:                        getEnvOrDefault("APP_VERSION", "dev"),
-		DatabaseURL:                       requireEnv("DATABASE_URL"),
-		DBMaxConns:                        getEnvAsInt("DB_MAX_CONNS", 25),
-		DBMinConns:                        getEnvAsInt("DB_MIN_CONNS", 5),
-		DBMaxConnIdleTime:                 getEnvAsDuration("DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
-		RedisURL:                          requireEnv("REDIS_URL"),
-		JWTSecret:                         requireEnv("JWT_SECRET"),
-		JWTAccessTokenTTL:                 getEnvAsDuration("JWT_ACCESS_TOKEN_TTL", 15*time.Minute),
-		JWTRefreshTokenTTL:                getEnvAsDuration("JWT_REFRESH_TOKEN_TTL", 168*time.Hour),
-		EncryptionKey:                     requireEnv("ENCRYPTION_KEY"),
-		WBAPIBaseURL:                      getEnvOrDefault("WB_API_BASE_URL", "https://advert-api.wildberries.ru"),
-		WBAPIRateLimit:                    getEnvAsInt("WB_API_RATE_LIMIT", 10),
-		WBServiceUserAgent:                getEnvOrDefault("WB_SERVICE_USER_AGENT", "wbas_sellico.ru2823"),
-		AdsReadEntityLimit:                getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
-		AdsReadStatsLimit:                 getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
-		WBParserMinDelay:                  getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
-		WBParserProxies:                   getEnvAsSlice("WB_PARSER_PROXIES", ","),
-		ExportStoragePath:                 getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
-		SMTPHost:                          getEnvOrDefault("SMTP_HOST", ""),
-		SMTPPort:                          getEnvAsInt("SMTP_PORT", 587),
-		SMTPUsername:                      getEnvOrDefault("SMTP_USERNAME", ""),
-		SMTPPassword:                      getEnvOrDefault("SMTP_PASSWORD", ""),
-		SMTPFromEmail:                     getEnvOrDefault("SMTP_FROM_EMAIL", ""),
-		SMTPFromName:                      getEnvOrDefault("SMTP_FROM_NAME", "Sellico Ads Intelligence"),
-		SMTPTimeout:                       getEnvAsDuration("SMTP_TIMEOUT", 10*time.Second),
-		SellicoAPIBaseURL:                 getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
-		SellicoAPITimeout:                 getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
-		SellicoUnitEconomicsReadinessPath: getEnvOrDefault("SELLICO_UNIT_ECONOMICS_READINESS_PATH", ""),
-		SellicoUnitEconomicsExportPath:    getEnvOrDefault("SELLICO_UNIT_ECONOMICS_EXPORT_PATH", "/products/unit-economics/export"),
-		ProductsAPIBaseURL:                getEnvOrDefault("PRODUCTS_API_BASE_URL", "https://products.sellico.ru/api"),
-		ProductsAPIToken:                  getEnvOrDefault("PRODUCTS_API_TOKEN", ""),
-		SellicoServiceToken:               getEnvOrDefault("SELLICO_API_TOKEN", ""),
-		SellicoServiceEmail:               getEnvOrDefault("SELLICO_EMAIL", ""),
-		SellicoServicePassword:            getEnvOrDefault("SELLICO_PASSWORD", ""),
-		SyncInterval:                      getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
-		RecommendationInterval:            getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
-		BidAutomationInterval:             getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),
-		RepricerInterval:                  getEnvOrDefault("REPRICER_INTERVAL", "@every 1h"),
-		RepricerPollInterval:              getEnvOrDefault("REPRICER_POLL_INTERVAL", "@every 5m"),
-		RepricerScheduleInterval:          getEnvOrDefault("REPRICER_SCHEDULE_INTERVAL", "@every 15m"),
-		CORSAllowOrigins:                  getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
-		RateLimitRPS:                      getEnvAsFloat("RATE_LIMIT_RPS", 20),
-		RateLimitBurst:                    getEnvAsInt("RATE_LIMIT_BURST", 40),
-		LogLevel:                          getEnvOrDefault("LOG_LEVEL", "info"),
+		ServerHost:                         getEnvOrDefault("SERVER_HOST", "0.0.0.0"),
+		ServerPort:                         getEnvAsInt("SERVER_PORT", 8080),
+		AppVersion:                         getEnvOrDefault("APP_VERSION", "dev"),
+		DatabaseURL:                        requireEnv("DATABASE_URL"),
+		DBMaxConns:                         getEnvAsInt("DB_MAX_CONNS", 25),
+		DBMinConns:                         getEnvAsInt("DB_MIN_CONNS", 5),
+		DBMaxConnIdleTime:                  getEnvAsDuration("DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
+		RedisURL:                           requireEnv("REDIS_URL"),
+		JWTSecret:                          requireEnv("JWT_SECRET"),
+		JWTAccessTokenTTL:                  getEnvAsDuration("JWT_ACCESS_TOKEN_TTL", 15*time.Minute),
+		JWTRefreshTokenTTL:                 getEnvAsDuration("JWT_REFRESH_TOKEN_TTL", 168*time.Hour),
+		EncryptionKey:                      requireEnv("ENCRYPTION_KEY"),
+		WBAPIBaseURL:                       getEnvOrDefault("WB_API_BASE_URL", "https://advert-api.wildberries.ru"),
+		WBAPIRateLimit:                     getEnvAsInt("WB_API_RATE_LIMIT", 10),
+		WBServiceUserAgent:                 getEnvOrDefault("WB_SERVICE_USER_AGENT", "wbas_sellico.ru2823"),
+		AdsReadEntityLimit:                 getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
+		AdsReadStatsLimit:                  getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
+		WBParserMinDelay:                   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
+		WBParserProxies:                    getEnvAsSlice("WB_PARSER_PROXIES", ","),
+		ExportStoragePath:                  getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
+		SMTPHost:                           getEnvOrDefault("SMTP_HOST", ""),
+		SMTPPort:                           getEnvAsInt("SMTP_PORT", 587),
+		SMTPUsername:                       getEnvOrDefault("SMTP_USERNAME", ""),
+		SMTPPassword:                       getEnvOrDefault("SMTP_PASSWORD", ""),
+		SMTPFromEmail:                      getEnvOrDefault("SMTP_FROM_EMAIL", ""),
+		SMTPFromName:                       getEnvOrDefault("SMTP_FROM_NAME", "Sellico Ads Intelligence"),
+		SMTPTimeout:                        getEnvAsDuration("SMTP_TIMEOUT", 10*time.Second),
+		SellicoAPIBaseURL:                  getEnvOrDefault("SELLICO_API_BASE_URL", "https://sellico.ru/api"),
+		SellicoAPITimeout:                  getEnvAsDuration("SELLICO_API_TIMEOUT", 5*time.Second),
+		SellicoUnitEconomicsReadinessPath:  getEnvOrDefault("SELLICO_UNIT_ECONOMICS_READINESS_PATH", ""),
+		SellicoUnitEconomicsExportPath:     getEnvOrDefault("SELLICO_UNIT_ECONOMICS_EXPORT_PATH", "/products/unit-economics/export"),
+		ProductsAPIBaseURL:                 getEnvOrDefault("PRODUCTS_API_BASE_URL", "https://products.sellico.ru/api"),
+		ProductsAPIToken:                   getEnvOrDefault("PRODUCTS_API_TOKEN", ""),
+		ProductsUnitEconomicsReadinessPath: getEnvOrDefault("PRODUCTS_UNIT_ECONOMICS_READINESS_PATH", "/products/unit-economics/readiness"),
+		ProductsUnitEconomicsMaxAge:        getEnvAsDuration("PRODUCTS_UNIT_ECONOMICS_MAX_AGE", 72*time.Hour),
+		SellicoServiceToken:                getEnvOrDefault("SELLICO_API_TOKEN", ""),
+		SellicoServiceEmail:                getEnvOrDefault("SELLICO_EMAIL", ""),
+		SellicoServicePassword:             getEnvOrDefault("SELLICO_PASSWORD", ""),
+		SyncInterval:                       getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
+		RecommendationInterval:             getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
+		BidAutomationInterval:              getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),
+		RepricerInterval:                   getEnvOrDefault("REPRICER_INTERVAL", "@every 1h"),
+		RepricerPollInterval:               getEnvOrDefault("REPRICER_POLL_INTERVAL", "@every 5m"),
+		RepricerScheduleInterval:           getEnvOrDefault("REPRICER_SCHEDULE_INTERVAL", "@every 15m"),
+		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
+		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
+		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),
+		LogLevel:                           getEnvOrDefault("LOG_LEVEL", "info"),
 	}
 
 	if err := validateConfig(cfg); err != nil {

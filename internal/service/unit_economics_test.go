@@ -9,12 +9,26 @@ import (
 
 func TestUnitEconomicsReadiness_AllowsBidIncreaseOnlyWithFreshCompleteSource(t *testing.T) {
 	readiness := &UnitEconomicsReadiness{
-		Source:    "sellico-unit-economics",
-		CheckedAt: time.Now(),
+		Source:               "sellico-unit-economics",
+		CheckedAt:            time.Now(),
+		Complete:             true,
+		CheckedProductIDs:    []int64{101},
+		MaxAllowedDRRPercent: 20,
 	}
 
 	require.True(t, readiness.AllowsBidIncrease())
 	require.Empty(t, readiness.BlockReason())
+}
+
+func TestUnitEconomicsReadiness_BlocksMissingTimestampAndCoverage(t *testing.T) {
+	readiness := &UnitEconomicsReadiness{Source: "sellico-unit-economics", Complete: true, CheckedProductIDs: []int64{101}, MaxAllowedDRRPercent: 20}
+	require.False(t, readiness.AllowsBidIncrease())
+	require.Equal(t, "unit economics check timestamp is unavailable", readiness.BlockReason())
+
+	readiness.CheckedAt = time.Now()
+	readiness.Complete = false
+	require.False(t, readiness.AllowsBidIncrease())
+	require.Equal(t, "unit economics coverage is incomplete", readiness.BlockReason())
 }
 
 func TestUnitEconomicsReadiness_BlocksMissingSource(t *testing.T) {

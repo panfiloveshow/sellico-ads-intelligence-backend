@@ -25,11 +25,15 @@ type UnitEconomicsReadinessInput struct {
 }
 
 type UnitEconomicsReadiness struct {
+	IntegrationID              string
 	Source                     string
 	CheckedAt                  time.Time
+	Complete                   bool
+	CheckedProductIDs          []int64
 	MissingEconomicsProductIDs []int64
 	UnprofitableProductIDs     []int64
 	StaleProductIDs            []int64
+	MaxAllowedDRRPercent       float64
 }
 
 func (r *UnitEconomicsReadiness) AllowsBidIncrease() bool {
@@ -37,6 +41,10 @@ func (r *UnitEconomicsReadiness) AllowsBidIncrease() bool {
 		return false
 	}
 	return r.Source != "" &&
+		!r.CheckedAt.IsZero() &&
+		r.Complete &&
+		len(r.CheckedProductIDs) > 0 &&
+		r.MaxAllowedDRRPercent > 0 &&
 		len(r.MissingEconomicsProductIDs) == 0 &&
 		len(r.UnprofitableProductIDs) == 0 &&
 		len(r.StaleProductIDs) == 0
@@ -57,6 +65,15 @@ func (r *UnitEconomicsReadiness) BlockReason() string {
 	}
 	if len(r.StaleProductIDs) > 0 {
 		return fmt.Sprintf("unit economics is stale for %d product(s): wb_product_ids=%s", len(r.StaleProductIDs), unitEconomicsIDSample(r.StaleProductIDs))
+	}
+	if r.CheckedAt.IsZero() {
+		return "unit economics check timestamp is unavailable"
+	}
+	if !r.Complete || len(r.CheckedProductIDs) == 0 {
+		return "unit economics coverage is incomplete"
+	}
+	if r.MaxAllowedDRRPercent <= 0 {
+		return "unit economics DRR ceiling is unavailable"
 	}
 	return ""
 }

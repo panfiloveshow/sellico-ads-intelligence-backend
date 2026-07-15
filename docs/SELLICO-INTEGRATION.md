@@ -9,7 +9,11 @@ documented in `financial-dashboard/rules.md` and `backandrules.md`.
 | Variable | Required | Purpose |
 |---|---|---|
 | `SELLICO_API_BASE_URL` | yes (default `https://sellico.ru/api`) | Upstream base URL |
-| `SELLICO_UNIT_ECONOMICS_READINESS_PATH` | optional | POST endpoint for real unit-economics readiness checks before bid scale-up; empty disables scale-up economics approval |
+| `PRODUCTS_API_BASE_URL` | yes (default `https://products.sellico.ru/api`) | Products backend with real unit economics |
+| `PRODUCTS_API_TOKEN` | yes for economics automation | Shared service token matching products-backend `REPRICER_SERVICE_TOKEN` |
+| `PRODUCTS_UNIT_ECONOMICS_READINESS_PATH` | yes for bid increases | Strict readiness endpoint, default `/products/unit-economics/readiness` |
+| `PRODUCTS_UNIT_ECONOMICS_MAX_AGE` | optional | Maximum accepted readiness age, default `72h` |
+| `SELLICO_UNIT_ECONOMICS_READINESS_PATH` | legacy fallback | CRM readiness endpoint used only when products readiness is not configured |
 | `SELLICO_API_TOKEN` | one-of | Static service-account bearer (preferred in prod) |
 | `SELLICO_EMAIL` + `SELLICO_PASSWORD` | one-of | Backend auto-logs-in via `POST /api/login` and caches the token for 23h |
 
@@ -20,14 +24,15 @@ personal token).
 
 ### Unit economics readiness for bid scale-up
 
-When `SELLICO_UNIT_ECONOMICS_READINESS_PATH` is set and the service-account
-token is configured, the worker and API call that upstream Sellico endpoint
+When `PRODUCTS_API_TOKEN` and `PRODUCTS_UNIT_ECONOMICS_READINESS_PATH` are set,
+the worker and API call the products backend
 before bid increases. This covers automated strategy runs plus manual or
 recommendation-applied campaign bid increases. The request is a POST with
 real product ids:
 
 ```json
 {
+  "integration_id": "17",
   "workspace_id": "<local workspace uuid>",
   "seller_cabinet_id": "<local cabinet uuid>",
   "product_ids": ["<local product uuid>"],
@@ -39,8 +44,11 @@ Expected response shape:
 
 ```json
 {
-  "source": "sellico-unit-economics",
+  "source": "sellico-products-unit-economics",
+  "integration_id": "17",
   "checked_at": "2026-05-27T12:00:00Z",
+  "complete": true,
+  "checked_product_ids": [123456789],
   "missing_economics_product_ids": [],
   "unprofitable_product_ids": [],
   "stale_product_ids": []

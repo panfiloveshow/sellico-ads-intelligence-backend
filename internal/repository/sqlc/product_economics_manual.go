@@ -47,15 +47,15 @@ INSERT INTO product_economics (
   source, effective_at, updated_by
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT (workspace_id, wb_product_id) DO UPDATE SET
-  cost_price = EXCLUDED.cost_price,
-  logistics_cost = EXCLUDED.logistics_cost,
-  other_costs = EXCLUDED.other_costs,
-  tax_rate_percent = EXCLUDED.tax_rate_percent,
-  commission_percent = EXCLUDED.commission_percent,
-  target_margin_percent = EXCLUDED.target_margin_percent,
-  max_allowed_drr = EXCLUDED.max_allowed_drr,
+  cost_price = COALESCE(EXCLUDED.cost_price, product_economics.cost_price),
+  logistics_cost = COALESCE(EXCLUDED.logistics_cost, product_economics.logistics_cost),
+  other_costs = COALESCE(EXCLUDED.other_costs, product_economics.other_costs),
+  tax_rate_percent = COALESCE(EXCLUDED.tax_rate_percent, product_economics.tax_rate_percent),
+  commission_percent = COALESCE(EXCLUDED.commission_percent, product_economics.commission_percent),
+  target_margin_percent = COALESCE(EXCLUDED.target_margin_percent, product_economics.target_margin_percent),
+  max_allowed_drr = COALESCE(EXCLUDED.max_allowed_drr, product_economics.max_allowed_drr),
   source = EXCLUDED.source,
-  effective_at = EXCLUDED.effective_at,
+  effective_at = COALESCE(EXCLUDED.effective_at, product_economics.effective_at),
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
 RETURNING id, workspace_id, wb_product_id, cost_price, logistics_cost, other_costs,

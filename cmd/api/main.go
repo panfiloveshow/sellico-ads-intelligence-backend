@@ -62,7 +62,17 @@ func main() {
 		Email:       cfg.SellicoServiceEmail,
 		Password:    cfg.SellicoServicePassword,
 	})
-	unitEconomicsReadinessConfigured := sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != ""
+	productsClient := sellico.NewClient(cfg.ProductsAPIBaseURL, cfg.SellicoAPITimeout)
+	var unitEconomicsReadinessProvider service.UnitEconomicsReadinessProvider
+	if cfg.ProductsAPIBaseURL != "" && cfg.ProductsAPIToken != "" && cfg.ProductsUnitEconomicsReadinessPath != "" {
+		unitEconomicsReadinessProvider = service.NewProductsUnitEconomicsReadinessProvider(
+			deps.Queries, productsClient, cfg.ProductsAPIToken,
+			cfg.ProductsUnitEconomicsReadinessPath, cfg.ProductsUnitEconomicsMaxAge,
+		)
+	} else if sellicoTokenManager.IsConfigured() && cfg.SellicoUnitEconomicsReadinessPath != "" {
+		unitEconomicsReadinessProvider = service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger)
+	}
+	unitEconomicsReadinessConfigured := unitEconomicsReadinessProvider != nil
 	authService := service.NewAuthService(deps.Queries, cfg.JWTSecret, cfg.JWTAccessTokenTTL, cfg.JWTRefreshTokenTTL)
 	workspaceService := service.NewWorkspaceService(deps.Queries)
 	sellicoBridgeService := service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
@@ -122,9 +132,9 @@ func main() {
 	campaignActionOpts := []service.CampaignActionOption{}
 	if unitEconomicsReadinessConfigured {
 		campaignActionOpts = append(campaignActionOpts, service.WithCampaignActionUnitEconomicsReadinessProvider(
-			service.NewSellicoUnitEconomicsReadinessProvider(sellicoClient, sellicoTokenManager, cfg.SellicoUnitEconomicsReadinessPath, deps.Logger),
+			unitEconomicsReadinessProvider,
 		))
-		deps.Logger.Info().Str("path", cfg.SellicoUnitEconomicsReadinessPath).Msg("sellico unit-economics readiness enabled for campaign actions")
+		deps.Logger.Info().Str("path", cfg.ProductsUnitEconomicsReadinessPath).Msg("unit-economics readiness enabled for campaign actions")
 	}
 	campaignActionService := service.NewCampaignActionService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger, campaignActionOpts...)
 	campaignPhraseService := service.NewCampaignPhraseService(deps.Queries)

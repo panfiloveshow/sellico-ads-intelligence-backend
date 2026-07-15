@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // WBUnitEconomics is one product's cost data pulled from Sellico's unit economics
@@ -18,6 +19,12 @@ type WBUnitEconomics struct {
 	TaxPercent        *float64
 	SppPercent        *float64
 	CustomerPrice     *float64
+	LogisticsCost     *float64
+	OtherCosts        *float64
+	MaxAllowedDRR     *float64
+	CalculatedAt      *time.Time
+	Source            string
+	Ready             bool
 }
 
 // ListWBUnitEconomics fetches cost/commission/tax by nmID for one Sellico
@@ -60,7 +67,13 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 			TaxPercent        *json.Number `json:"tax_percent"`
 			SppPercent        *json.Number `json:"spp_percent"`
 			CustomerPrice     *json.Number `json:"customer_price"`
+			LogisticsCost     *json.Number `json:"logistics_cost"`
+			OtherCosts        *json.Number `json:"other_costs"`
+			MaxAllowedDRR     *json.Number `json:"max_allowed_drr"`
+			CalculatedAt      string       `json:"calculated_at"`
+			Ready             bool         `json:"ready"`
 		} `json:"items"`
+		Source string `json:"source"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
@@ -76,7 +89,7 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 		if err != nil || cost <= 0 {
 			continue
 		}
-		row := WBUnitEconomics{NmID: nm, CostPrice: cost}
+		row := WBUnitEconomics{NmID: nm, CostPrice: cost, Source: strings.TrimSpace(payload.Source), Ready: it.Ready}
 		if it.CommissionPercent != nil {
 			if v, err := it.CommissionPercent.Float64(); err == nil {
 				row.CommissionPercent = &v
@@ -96,6 +109,24 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 			if v, err := it.CustomerPrice.Float64(); err == nil && v > 0 {
 				row.CustomerPrice = &v
 			}
+		}
+		if it.LogisticsCost != nil {
+			if v, err := it.LogisticsCost.Float64(); err == nil && v >= 0 {
+				row.LogisticsCost = &v
+			}
+		}
+		if it.OtherCosts != nil {
+			if v, err := it.OtherCosts.Float64(); err == nil && v >= 0 {
+				row.OtherCosts = &v
+			}
+		}
+		if it.MaxAllowedDRR != nil {
+			if v, err := it.MaxAllowedDRR.Float64(); err == nil && v >= 0 && v <= 100 {
+				row.MaxAllowedDRR = &v
+			}
+		}
+		if parsed := parseTimeField(it.CalculatedAt); !parsed.IsZero() {
+			row.CalculatedAt = &parsed
 		}
 		out = append(out, row)
 	}

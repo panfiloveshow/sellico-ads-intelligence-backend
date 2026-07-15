@@ -111,7 +111,7 @@ type StrategyParams struct {
 	MaxBid                    int     `json:"max_bid,omitempty"`                      // default: 5000
 	MaxCPC                    float64 `json:"max_cpc,omitempty"`                      // optional bid-increase guardrail
 	MaxCPO                    float64 `json:"max_cpo,omitempty"`                      // optional bid-increase guardrail
-	AutomationLevel           int     `json:"automation_level,omitempty"`             // default: 3
+	AutomationLevel           int     `json:"automation_level,omitempty"`             // default: 1 (shadow only)
 	MaxChangePercent          float64 `json:"max_change_percent,omitempty"`           // default: 15
 	MinClicks                 int     `json:"min_clicks,omitempty"`                   // default: 10
 	LookbackDays              int     `json:"lookback_days,omitempty"`                // default: 7
@@ -277,7 +277,7 @@ func DefaultStrategyParams() StrategyParams {
 	return StrategyParams{
 		MinBid:              50,
 		MaxBid:              5000,
-		AutomationLevel:     3,
+		AutomationLevel:     1,
 		MaxChangePercent:    15,
 		MinClicks:           10,
 		LookbackDays:        7,
