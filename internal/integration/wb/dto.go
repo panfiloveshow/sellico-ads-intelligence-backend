@@ -9,23 +9,27 @@ import "time"
 
 // WBCampaignDTO represents a campaign from the WB Advertising API.
 type WBCampaignDTO struct {
-	AdvertID                 int                    `json:"advertId"`
-	Name                     string                 `json:"name"`
-	Status                   int                    `json:"status"`
-	Type                     int                    `json:"type"`
-	DailyBudget              *int64                 `json:"dailyBudget"`
-	BidType                  int                    `json:"bidType"`
-	PaymentType              string                 `json:"paymentType"`
-	CanChangeNMs             *bool                  `json:"canChangeNms,omitempty"`
-	NMIDs                    []int64                `json:"-"`
-	Products                 []WBCampaignProductDTO `json:"-"`
-	PlacementSearch          *bool                  `json:"placementSearch,omitempty"`
-	PlacementRecommendations *bool                  `json:"placementRecommendations,omitempty"`
-	WBCreatedAt              *time.Time             `json:"wbCreatedAt,omitempty"`
-	WBStartedAt              *time.Time             `json:"wbStartedAt,omitempty"`
-	WBUpdatedAt              *time.Time             `json:"wbUpdatedAt,omitempty"`
-	WBDeletedAt              *time.Time             `json:"wbDeletedAt,omitempty"`
-	PartialError             string                 `json:"-"`
+	AdvertID     int                    `json:"advertId"`
+	Name         string                 `json:"name"`
+	Status       int                    `json:"status"`
+	Type         int                    `json:"type"`
+	DailyBudget  *int64                 `json:"dailyBudget"`
+	BidType      int                    `json:"bidType"`
+	PaymentType  string                 `json:"paymentType"`
+	CanChangeNMs *bool                  `json:"canChangeNms,omitempty"`
+	NMIDs        []int64                `json:"-"`
+	Products     []WBCampaignProductDTO `json:"-"`
+	// ProductMembershipComplete is true only when WB returned an explicit
+	// product-membership field (including an explicit empty array). Consumers
+	// may remove stale local links only for such authoritative snapshots.
+	ProductMembershipComplete bool       `json:"-"`
+	PlacementSearch           *bool      `json:"placementSearch,omitempty"`
+	PlacementRecommendations  *bool      `json:"placementRecommendations,omitempty"`
+	WBCreatedAt               *time.Time `json:"wbCreatedAt,omitempty"`
+	WBStartedAt               *time.Time `json:"wbStartedAt,omitempty"`
+	WBUpdatedAt               *time.Time `json:"wbUpdatedAt,omitempty"`
+	WBDeletedAt               *time.Time `json:"wbDeletedAt,omitempty"`
+	PartialError              string     `json:"-"`
 }
 
 type WBCampaignProductDTO struct {

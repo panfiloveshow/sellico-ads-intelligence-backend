@@ -122,28 +122,35 @@ func (c *Client) ListCampaigns(ctx context.Context, token string) ([]WBCampaignD
 		}
 
 		dto := WBCampaignDTO{
-			AdvertID:                 int(advertID),
-			Name:                     name,
-			Status:                   advert.Status,
-			Type:                     advert.Type,
-			DailyBudget:              rawOptionalInt64(advert.DailyBudget),
-			BidType:                  mapRawBidType(advert.BidType),
-			PaymentType:              paymentType,
-			CanChangeNMs:             advert.Restrictions.CanChangeNMs,
-			PartialError:             partialErrors[advertID],
-			NMIDs:                    collectAdvertNMIDs(advert),
-			Products:                 collectAdvertProductSettings(advert),
-			PlacementSearch:          advert.Settings.Placements.Search,
-			PlacementRecommendations: advert.Settings.Placements.Recommendations,
-			WBCreatedAt:              parseOptionalWBTime(advert.Timestamps.Created),
-			WBStartedAt:              parseOptionalWBTime(advert.Timestamps.Started),
-			WBUpdatedAt:              parseOptionalWBTime(advert.Timestamps.Updated),
-			WBDeletedAt:              parseOptionalWBTime(advert.Timestamps.Deleted),
+			AdvertID:                  int(advertID),
+			Name:                      name,
+			Status:                    advert.Status,
+			Type:                      advert.Type,
+			DailyBudget:               rawOptionalInt64(advert.DailyBudget),
+			BidType:                   mapRawBidType(advert.BidType),
+			PaymentType:               paymentType,
+			CanChangeNMs:              advert.Restrictions.CanChangeNMs,
+			PartialError:              partialErrors[advertID],
+			NMIDs:                     collectAdvertNMIDs(advert),
+			Products:                  collectAdvertProductSettings(advert),
+			ProductMembershipComplete: advertProductMembershipComplete(advert),
+			PlacementSearch:           advert.Settings.Placements.Search,
+			PlacementRecommendations:  advert.Settings.Placements.Recommendations,
+			WBCreatedAt:               parseOptionalWBTime(advert.Timestamps.Created),
+			WBStartedAt:               parseOptionalWBTime(advert.Timestamps.Started),
+			WBUpdatedAt:               parseOptionalWBTime(advert.Timestamps.Updated),
+			WBDeletedAt:               parseOptionalWBTime(advert.Timestamps.Deleted),
 		}
 		result = append(result, dto)
 	}
 
 	return result, nil
+}
+
+func advertProductMembershipComplete(advert wbAdvertV2) bool {
+	// A non-nil empty slice means WB explicitly returned an empty membership,
+	// while nil means the field was absent from this response.
+	return advert.AutoParams.NMs != nil || advert.NMSettings != nil
 }
 
 func collectPromotionCountItems(value interface{}, out *[]WBPromotionCountDTO) {
@@ -232,7 +239,7 @@ func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, ad
 	for i := range adverts {
 		advertID := firstNonZeroInt64(adverts[i].ID, adverts[i].AdvertID)
 		detail, ok := detailsByID[advertID]
-		if !ok || (len(collectAdvertNMIDs(detail)) == 0 && detail.Restrictions.CanChangeNMs == nil) {
+		if !ok || (!advertProductMembershipComplete(detail) && detail.Restrictions.CanChangeNMs == nil) {
 			continue
 		}
 		adverts[i] = mergeAdvertV2(adverts[i], detail)
@@ -265,10 +272,10 @@ func mergeAdvertV2(base, detail wbAdvertV2) wbAdvertV2 {
 	if base.Restrictions.CanChangeNMs == nil {
 		base.Restrictions.CanChangeNMs = detail.Restrictions.CanChangeNMs
 	}
-	if len(base.AutoParams.NMs) == 0 {
+	if len(base.AutoParams.NMs) == 0 && detail.AutoParams.NMs != nil {
 		base.AutoParams.NMs = detail.AutoParams.NMs
 	}
-	if len(base.NMSettings) == 0 {
+	if len(base.NMSettings) == 0 && detail.NMSettings != nil {
 		base.NMSettings = detail.NMSettings
 	}
 	return base

@@ -71,6 +71,66 @@ func TestMergeAdvertV2FillsRestrictionFromDetailWithoutOverwritingBase(t *testin
 	assert.False(t, *merged.Restrictions.CanChangeNMs)
 }
 
+func TestAdvertProductMembershipCompletenessDistinguishesExplicitEmptyFromMissing(t *testing.T) {
+	require.False(t, advertProductMembershipComplete(wbAdvertV2{}))
+	var explicitAutoParams wbAdvertV2
+	require.NoError(t, json.Unmarshal([]byte(`{"autoParams":{"nms":[]}}`), &explicitAutoParams))
+	require.True(t, advertProductMembershipComplete(explicitAutoParams))
+	var explicitNMSettings wbAdvertV2
+	require.NoError(t, json.Unmarshal([]byte(`{"nm_settings":[]}`), &explicitNMSettings))
+	require.True(t, advertProductMembershipComplete(explicitNMSettings))
+
+	base := wbAdvertV2{}
+	base.AutoParams.NMs = []int64{}
+	merged := mergeAdvertV2(base, wbAdvertV2{})
+	require.True(t, advertProductMembershipComplete(merged), "merge must preserve an explicit empty membership")
+}
+
+func TestListCampaignsPreservesKnownMembershipAndRestrictionsWhenBidEnrichmentFails(t *testing.T) {
+	withFastWBRetryTiming(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ids") != "" {
+			http.Error(w, "detail unavailable", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"adverts":[
+			{"id":101,"status":9,"autoParams":{"nms":[111]},"restrictions":{"can_change_nms":false}},
+			{"id":202,"status":9,"restrictions":{"can_change_nms":true}}
+		]}`))
+	}))
+	defer server.Close()
+
+	result, err := newTestClient(server.URL).ListCampaigns(context.Background(), "token")
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	require.True(t, result[0].ProductMembershipComplete)
+	require.Equal(t, []int64{111}, result[0].NMIDs)
+	require.NotNil(t, result[0].CanChangeNMs)
+	require.False(t, *result[0].CanChangeNMs)
+	require.NotEmpty(t, result[0].PartialError)
+	require.False(t, result[1].ProductMembershipComplete)
+	require.NotNil(t, result[1].CanChangeNMs)
+	require.True(t, *result[1].CanChangeNMs)
+	require.NotEmpty(t, result[1].PartialError)
+}
+
+func TestListCampaignsTreatsExplicitEmptyDetailMembershipAsAuthoritative(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ids") != "" {
+			_, _ = w.Write([]byte(`{"adverts":[{"id":303,"status":9,"nm_settings":[]}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"adverts":[{"id":303,"status":9}]}`))
+	}))
+	defer server.Close()
+
+	result, err := newTestClient(server.URL).ListCampaigns(context.Background(), "token")
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.True(t, result[0].ProductMembershipComplete)
+	require.Empty(t, result[0].NMIDs)
+}
+
 func TestListCampaigns_UnmarshalError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

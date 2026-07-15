@@ -469,7 +469,7 @@ func (s *SyncService) syncSingleCabinet(ctx context.Context, workspaceID, cabine
 				summary.addIssue("campaigns.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "upsert: %v", upsertErr)
 				continue
 			}
-			if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, dto.NMIDs, dto.Products); linkErr != nil {
+			if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, dto.NMIDs, dto.Products, dto.ProductMembershipComplete); linkErr != nil {
 				summary.addIssue("campaign_products.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "link products: %v", linkErr)
 			} else if linked > 0 {
 				s.logger.Debug().Int("links", linked).Int64("campaign_id", campaign.WBCampaignID).Msg("campaign products linked")
@@ -656,7 +656,7 @@ func (s *SyncService) syncCampaignsForCabinet(ctx context.Context, workspaceID u
 			summary.addIssue("campaigns.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "upsert: %v", upsertErr)
 			continue
 		}
-		if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, dto.NMIDs, dto.Products); linkErr != nil {
+		if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, dto.NMIDs, dto.Products, dto.ProductMembershipComplete); linkErr != nil {
 			summary.addIssue("campaign_products.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "link products: %v", linkErr)
 		} else if linked > 0 {
 			s.logger.Debug().Int("links", linked).Int64("campaign_id", campaign.WBCampaignID).Msg("campaign products linked")
@@ -724,7 +724,7 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 				summary.addIssue("campaigns.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "failed to upsert campaign: %v", upsertErr)
 				continue
 			}
-			if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, campaignDTO.NMIDs, campaignDTO.Products); linkErr != nil {
+			if linked, linkErr := s.upsertCampaignProductLinks(ctx, workspaceID, cabinet.cabinet.ID, row, campaignDTO.NMIDs, campaignDTO.Products, campaignDTO.ProductMembershipComplete); linkErr != nil {
 				summary.addIssue("campaign_products.upsert", fmt.Sprintf("%d", campaign.WBCampaignID), "link products: %v", linkErr)
 			} else if linked > 0 {
 				s.logger.Debug().Int("links", linked).Int64("campaign_id", campaign.WBCampaignID).Msg("campaign products linked")
@@ -850,20 +850,29 @@ func (s *SyncService) SyncCampaignStats(ctx context.Context, workspaceID uuid.UU
 	return summary, summary.Error()
 }
 
-func (s *SyncService) upsertCampaignProductLinks(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaign sqlcgen.Campaign, nmIDs []int64, productSettings []wb.WBCampaignProductDTO) (int, error) {
+func (s *SyncService) upsertCampaignProductLinks(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaign sqlcgen.Campaign, nmIDs []int64, productSettings []wb.WBCampaignProductDTO, membershipComplete bool) (int, error) {
+	if !membershipComplete {
+		// A partial/summary WB response must never add or remove current
+		// membership links. Historical product_stats remain stored separately.
+		return 0, nil
+	}
+	queries, tx, err := s.queries.BeginCampaignProductMembershipTx(ctx, campaign.ID)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	linked := 0
+	currentNMIDs := normalizeCampaignMembershipNMIDs(nmIDs)
 	settingsByNMID := make(map[int64]wb.WBCampaignProductDTO, len(productSettings))
 	for _, setting := range productSettings {
 		if setting.NmID != 0 {
 			settingsByNMID[setting.NmID] = setting
 		}
 	}
-	for _, nmID := range nmIDs {
-		if nmID == 0 {
-			continue
-		}
+	for _, nmID := range currentNMIDs {
 		setting := settingsByNMID[nmID]
-		productRow, err := s.queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{
+		productRow, err := queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{
 			WorkspaceID:     uuidToPgtype(workspaceID),
 			SellerCabinetID: uuidToPgtype(cabinetID),
 			WbProductID:     nmID,
@@ -876,7 +885,7 @@ func (s *SyncService) upsertCampaignProductLinks(ctx context.Context, workspaceI
 		if err != nil {
 			return linked, err
 		}
-		if _, err := s.queries.UpsertCampaignProduct(ctx, sqlcgen.UpsertCampaignProductParams{
+		if _, err := queries.UpsertCampaignProduct(ctx, sqlcgen.UpsertCampaignProductParams{
 			CampaignID:         campaign.ID,
 			ProductID:          productRow.ID,
 			WorkspaceID:        uuidToPgtype(workspaceID),
@@ -891,7 +900,43 @@ func (s *SyncService) upsertCampaignProductLinks(ctx context.Context, workspaceI
 		}
 		linked++
 	}
+	removed, err := queries.DeleteStaleCampaignProducts(ctx, sqlcgen.DeleteStaleCampaignProductsParams{
+		CampaignID:         campaign.ID,
+		WorkspaceID:        uuidToPgtype(workspaceID),
+		SellerCabinetID:    uuidToPgtype(cabinetID),
+		WBCampaignID:       campaign.WbCampaignID,
+		CurrentNMIDs:       currentNMIDs,
+		MembershipComplete: membershipComplete,
+	})
+	if err != nil {
+		return linked, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return linked, err
+	}
+	if removed > 0 {
+		s.logger.Info().
+			Int64("stale_links_removed", removed).
+			Int64("wb_campaign_id", campaign.WbCampaignID).
+			Msg("removed campaign product links absent from complete WB snapshot")
+	}
 	return linked, nil
+}
+
+func normalizeCampaignMembershipNMIDs(nmIDs []int64) []int64 {
+	currentNMIDs := make([]int64, 0, len(nmIDs))
+	seenNMIDs := make(map[int64]struct{}, len(nmIDs))
+	for _, nmID := range nmIDs {
+		if nmID <= 0 {
+			continue
+		}
+		if _, exists := seenNMIDs[nmID]; exists {
+			continue
+		}
+		seenNMIDs[nmID] = struct{}{}
+		currentNMIDs = append(currentNMIDs, nmID)
+	}
+	return currentNMIDs
 }
 
 func (s *SyncService) upsertProductStatsFromCampaignStat(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaign sqlcgen.Campaign, statDTO wb.WBCampaignStatDTO) (int, error) {
@@ -908,16 +953,6 @@ func (s *SyncService) upsertProductStatsFromCampaignStat(ctx context.Context, wo
 			Price:           pgtype.Int8{},
 		})
 		if err != nil {
-			return upserted, err
-		}
-		if _, err := s.queries.UpsertCampaignProduct(ctx, sqlcgen.UpsertCampaignProductParams{
-			CampaignID:      campaign.ID,
-			ProductID:       productRow.ID,
-			WorkspaceID:     uuidToPgtype(workspaceID),
-			SellerCabinetID: uuidToPgtype(cabinetID),
-			WbCampaignID:    campaign.WbCampaignID,
-			WbProductID:     productDTO.NmID,
-		}); err != nil {
 			return upserted, err
 		}
 		stat, err := wb.MapProductStatDTO(productDTO, uuidFromPgtype(productRow.ID), uuidFromPgtype(campaign.ID))

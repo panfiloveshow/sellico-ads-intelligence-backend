@@ -2,9 +2,38 @@ package sqlcgen
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const campaignProductMembershipAdvisoryLock = `SELECT pg_advisory_xact_lock(
+	hashtextextended($1::text || ':campaign-product-membership', 0)
+)`
+
+type campaignProductTxBeginner interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+// BeginCampaignProductMembershipTx serializes and atomically applies the
+// complete WB membership snapshot for one campaign.
+func (q *Queries) BeginCampaignProductMembershipTx(ctx context.Context, campaignID pgtype.UUID) (*Queries, pgx.Tx, error) {
+	beginner, ok := q.db.(campaignProductTxBeginner)
+	if !ok {
+		return nil, nil, fmt.Errorf("database does not support campaign product transactions")
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := tx.Exec(ctx, campaignProductMembershipAdvisoryLock, campaignID); err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, nil, err
+	}
+	return q.WithTx(tx), tx, nil
+}
 
 type UpsertCampaignProductParams struct {
 	CampaignID         pgtype.UUID
@@ -74,6 +103,38 @@ func (q *Queries) UpsertCampaignProduct(ctx context.Context, arg UpsertCampaignP
 		&item.UpdatedAt,
 	)
 	return item, err
+}
+
+type DeleteStaleCampaignProductsParams struct {
+	CampaignID         pgtype.UUID
+	WorkspaceID        pgtype.UUID
+	SellerCabinetID    pgtype.UUID
+	WBCampaignID       int64
+	CurrentNMIDs       []int64
+	MembershipComplete bool
+}
+
+const deleteStaleCampaignProducts = `
+DELETE FROM campaign_products
+WHERE campaign_id = $1
+  AND workspace_id = $2
+  AND seller_cabinet_id = $3
+  AND wb_campaign_id = $4
+  AND NOT (wb_product_id = ANY($5::bigint[]))
+`
+
+// DeleteStaleCampaignProducts removes links absent from a complete real WB
+// membership snapshot. The caller must not invoke it for partial snapshots.
+func (q *Queries) DeleteStaleCampaignProducts(ctx context.Context, arg DeleteStaleCampaignProductsParams) (int64, error) {
+	if !arg.MembershipComplete {
+		return 0, errors.New("campaign product membership snapshot is not complete")
+	}
+	command, err := q.db.Exec(ctx, deleteStaleCampaignProducts,
+		arg.CampaignID, arg.WorkspaceID, arg.SellerCabinetID, arg.WBCampaignID, arg.CurrentNMIDs)
+	if err != nil {
+		return 0, err
+	}
+	return command.RowsAffected(), nil
 }
 
 const listCampaignProductsByWorkspace = `
