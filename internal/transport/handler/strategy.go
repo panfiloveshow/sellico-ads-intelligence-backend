@@ -21,6 +21,7 @@ type strategyServicer interface {
 	Create(ctx context.Context, workspaceID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
 	Get(ctx context.Context, workspaceID, strategyID uuid.UUID) (*domain.Strategy, error)
 	List(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID, limit, offset int32) ([]domain.Strategy, error)
+	ListShadowDecisions(ctx context.Context, workspaceID, strategyID uuid.UUID, limit, offset int32) ([]domain.BidDecisionObservation, error)
 	Update(ctx context.Context, workspaceID, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
 	Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error
 	AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error)
@@ -155,6 +156,29 @@ func (h *StrategyHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, strategy)
+}
+
+func (h *StrategyHandler) ListShadowDecisions(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	pg := pagination.Parse(r)
+	limit, offset := pg.SQLLimitOffset()
+	items, err := h.svc.ListShadowDecisions(r.Context(), workspaceID, strategyID, limit, offset)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{
+		Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items)),
+	})
 }
 
 func (h *StrategyHandler) List(w http.ResponseWriter, r *http.Request) {

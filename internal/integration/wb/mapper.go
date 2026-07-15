@@ -61,6 +61,7 @@ func MapCampaignDTO(dto WBCampaignDTO, workspaceID, sellerCabinetID uuid.UUID) d
 		BidType:                  mapBidType(dto.BidType),
 		PaymentType:              dto.PaymentType,
 		DailyBudget:              dto.DailyBudget,
+		CanChangeNMs:             dto.CanChangeNMs,
 		PlacementSearch:          dto.PlacementSearch,
 		PlacementRecommendations: dto.PlacementRecommendations,
 		WBCreatedAt:              dto.WBCreatedAt,

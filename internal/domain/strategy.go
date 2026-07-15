@@ -1,10 +1,34 @@
 package domain
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// BidDecisionObservation is a shadow-mode decision calculated from real data.
+// It describes a counterfactual action and never means that WB was mutated.
+type BidDecisionObservation struct {
+	ID                uuid.UUID       `json:"id"`
+	WorkspaceID       uuid.UUID       `json:"workspace_id"`
+	SellerCabinetID   uuid.UUID       `json:"seller_cabinet_id"`
+	StrategyID        uuid.UUID       `json:"strategy_id"`
+	StrategyBindingID uuid.UUID       `json:"strategy_binding_id"`
+	CampaignID        uuid.UUID       `json:"campaign_id"`
+	ProductID         *uuid.UUID      `json:"product_id,omitempty"`
+	WBCampaignID      int64           `json:"wb_campaign_id"`
+	WBProductID       int64           `json:"wb_product_id"`
+	Placement         string          `json:"placement"`
+	OldBid            int             `json:"old_bid"`
+	ProposedBid       int             `json:"proposed_bid"`
+	Reason            string          `json:"reason"`
+	Metrics           json.RawMessage `json:"metrics"`
+	AutomationLevel   int             `json:"automation_level"`
+	BidObservedAt     time.Time       `json:"bid_observed_at"`
+	FirstSeenAt       time.Time       `json:"first_seen_at"`
+	LastSeenAt        time.Time       `json:"last_seen_at"`
+}
 
 // Strategy types for automated bid management.
 const (

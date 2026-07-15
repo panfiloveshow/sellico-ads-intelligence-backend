@@ -144,6 +144,7 @@ func campaignFromSqlc(c sqlcgen.Campaign) domain.Campaign {
 		CampaignType:             int(c.CampaignType),
 		BidType:                  c.BidType,
 		PaymentType:              c.PaymentType,
+		CanChangeNMs:             boolToPtr(c.CanChangeNms),
 		PlacementSearch:          boolToPtr(c.PlacementSearch),
 		PlacementRecommendations: boolToPtr(c.PlacementRecommendations),
 		WBCreatedAt:              timeToPtr(c.WbCreatedAt),

@@ -414,6 +414,7 @@ type CampaignResponse struct {
 	BidType         string    `json:"bid_type"`
 	PaymentType     string    `json:"payment_type"`
 	DailyBudget     *int64    `json:"daily_budget,omitempty"`
+	CanChangeNMs    *bool     `json:"can_change_nms"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -431,6 +432,7 @@ func CampaignFromDomain(c domain.Campaign) CampaignResponse {
 		BidType:         c.BidType,
 		PaymentType:     c.PaymentType,
 		DailyBudget:     c.DailyBudget,
+		CanChangeNMs:    c.CanChangeNMs,
 		CreatedAt:       c.CreatedAt,
 		UpdatedAt:       c.UpdatedAt,
 	}
@@ -1924,58 +1926,68 @@ func BidEstimateFromDomain(b domain.BidSnapshot) BidEstimateResponse {
 
 // RecommendationResponse is the public representation of a recommendation.
 type RecommendationResponse struct {
-	ID              uuid.UUID               `json:"id"`
-	WorkspaceID     uuid.UUID               `json:"workspace_id"`
-	CampaignID      *uuid.UUID              `json:"campaign_id,omitempty"`
-	PhraseID        *uuid.UUID              `json:"phrase_id,omitempty"`
-	ProductID       *uuid.UUID              `json:"product_id,omitempty"`
-	SellerCabinetID *uuid.UUID              `json:"seller_cabinet_id,omitempty"`
-	Title           string                  `json:"title"`
-	Description     string                  `json:"description"`
-	Type            string                  `json:"type"`
-	Severity        string                  `json:"severity"`
-	Confidence      float64                 `json:"confidence"`
-	SourceMetrics   json.RawMessage         `json:"source_metrics"`
-	NextAction      *string                 `json:"next_action,omitempty"`
-	Status          string                  `json:"status"`
-	TaskCategory    string                  `json:"task_category,omitempty"`
-	TaskOwnerRole   string                  `json:"task_owner_role,omitempty"`
-	TaskSLAHours    int                     `json:"task_sla_hours"`
-	TaskDueAt       *time.Time              `json:"task_due_at,omitempty"`
-	TaskAgeHours    int                     `json:"task_age_hours"`
-	IsOverdue       bool                    `json:"is_overdue"`
-	Evidence        *SourceEvidenceResponse `json:"evidence,omitempty"`
-	CreatedAt       time.Time               `json:"created_at"`
-	UpdatedAt       time.Time               `json:"updated_at"`
+	ID                uuid.UUID                               `json:"id"`
+	WorkspaceID       uuid.UUID                               `json:"workspace_id"`
+	CampaignID        *uuid.UUID                              `json:"campaign_id,omitempty"`
+	PhraseID          *uuid.UUID                              `json:"phrase_id,omitempty"`
+	ProductID         *uuid.UUID                              `json:"product_id,omitempty"`
+	SellerCabinetID   *uuid.UUID                              `json:"seller_cabinet_id,omitempty"`
+	Title             string                                  `json:"title"`
+	Description       string                                  `json:"description"`
+	Type              string                                  `json:"type"`
+	Severity          string                                  `json:"severity"`
+	Confidence        float64                                 `json:"confidence"`
+	SourceMetrics     json.RawMessage                         `json:"source_metrics"`
+	AnalysisWindow    *domain.RecommendationAnalysisWindow    `json:"analysis_window,omitempty"`
+	PreviousWindow    *domain.RecommendationAnalysisWindow    `json:"previous_window,omitempty"`
+	ConfidenceFactors []domain.RecommendationConfidenceFactor `json:"confidence_factors,omitempty"`
+	Action            *domain.RecommendationAction            `json:"action,omitempty"`
+	DecisionBasis     string                                  `json:"decision_basis,omitempty"`
+	NextAction        *string                                 `json:"next_action,omitempty"`
+	Status            string                                  `json:"status"`
+	TaskCategory      string                                  `json:"task_category,omitempty"`
+	TaskOwnerRole     string                                  `json:"task_owner_role,omitempty"`
+	TaskSLAHours      int                                     `json:"task_sla_hours"`
+	TaskDueAt         *time.Time                              `json:"task_due_at,omitempty"`
+	TaskAgeHours      int                                     `json:"task_age_hours"`
+	IsOverdue         bool                                    `json:"is_overdue"`
+	Evidence          *SourceEvidenceResponse                 `json:"evidence,omitempty"`
+	CreatedAt         time.Time                               `json:"created_at"`
+	UpdatedAt         time.Time                               `json:"updated_at"`
 }
 
 // RecommendationFromDomain maps domain.Recommendation to RecommendationResponse.
 func RecommendationFromDomain(r domain.Recommendation) RecommendationResponse {
 	taskAgeHours, taskDueAt, taskSLAHours, isOverdue := recommendationTaskMetadata(r, time.Now())
 	return RecommendationResponse{
-		ID:              r.ID,
-		WorkspaceID:     r.WorkspaceID,
-		CampaignID:      r.CampaignID,
-		PhraseID:        r.PhraseID,
-		ProductID:       r.ProductID,
-		SellerCabinetID: r.SellerCabinetID,
-		Title:           r.Title,
-		Description:     r.Description,
-		Type:            r.Type,
-		Severity:        r.Severity,
-		Confidence:      r.Confidence,
-		SourceMetrics:   r.SourceMetrics,
-		NextAction:      r.NextAction,
-		Status:          r.Status,
-		TaskCategory:    domain.RecommendationTaskCategory(r.Type),
-		TaskOwnerRole:   domain.RecommendationTaskOwnerRole(r.Type),
-		TaskSLAHours:    taskSLAHours,
-		TaskDueAt:       taskDueAt,
-		TaskAgeHours:    taskAgeHours,
-		IsOverdue:       isOverdue,
-		Evidence:        sourceEvidenceFromDomain(r.Evidence),
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
+		ID:                r.ID,
+		WorkspaceID:       r.WorkspaceID,
+		CampaignID:        r.CampaignID,
+		PhraseID:          r.PhraseID,
+		ProductID:         r.ProductID,
+		SellerCabinetID:   r.SellerCabinetID,
+		Title:             r.Title,
+		Description:       r.Description,
+		Type:              r.Type,
+		Severity:          r.Severity,
+		Confidence:        r.Confidence,
+		SourceMetrics:     r.SourceMetrics,
+		AnalysisWindow:    r.AnalysisWindow,
+		PreviousWindow:    r.PreviousWindow,
+		ConfidenceFactors: r.ConfidenceFactors,
+		Action:            r.Action,
+		DecisionBasis:     r.DecisionBasis,
+		NextAction:        r.NextAction,
+		Status:            r.Status,
+		TaskCategory:      domain.RecommendationTaskCategory(r.Type),
+		TaskOwnerRole:     domain.RecommendationTaskOwnerRole(r.Type),
+		TaskSLAHours:      taskSLAHours,
+		TaskDueAt:         taskDueAt,
+		TaskAgeHours:      taskAgeHours,
+		IsOverdue:         isOverdue,
+		Evidence:          sourceEvidenceFromDomain(r.Evidence),
+		CreatedAt:         r.CreatedAt,
+		UpdatedAt:         r.UpdatedAt,
 	}
 }
 

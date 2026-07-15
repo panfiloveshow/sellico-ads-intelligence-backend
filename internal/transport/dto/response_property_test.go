@@ -187,6 +187,27 @@ func TestAdsOverviewFromDomainMapsRecommendationTaskTotals(t *testing.T) {
 	}
 }
 
+func TestCampaignFromDomainPreservesNullableCanChangeNMs(t *testing.T) {
+	allowed := true
+	response := CampaignFromDomain(domain.Campaign{CanChangeNMs: &allowed})
+	if response.CanChangeNMs == nil || !*response.CanChangeNMs {
+		t.Fatalf("expected true WB restriction, got %v", response.CanChangeNMs)
+	}
+
+	unknown, err := json.Marshal(CampaignFromDomain(domain.Campaign{}))
+	if err != nil {
+		t.Fatalf("marshal campaign response: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(unknown, &payload); err != nil {
+		t.Fatalf("unmarshal campaign response: %v", err)
+	}
+	value, exists := payload["can_change_nms"]
+	if !exists || value != nil {
+		t.Fatalf("unknown WB restriction must be explicit null, got exists=%v value=%v", exists, value)
+	}
+}
+
 func TestRecommendationTaskMetadataUsesCreatedAtAndActiveStatus(t *testing.T) {
 	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
 

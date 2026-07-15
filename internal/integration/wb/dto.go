@@ -16,6 +16,7 @@ type WBCampaignDTO struct {
 	DailyBudget              *int64                 `json:"dailyBudget"`
 	BidType                  int                    `json:"bidType"`
 	PaymentType              string                 `json:"paymentType"`
+	CanChangeNMs             *bool                  `json:"canChangeNms,omitempty"`
 	NMIDs                    []int64                `json:"-"`
 	Products                 []WBCampaignProductDTO `json:"-"`
 	PlacementSearch          *bool                  `json:"placementSearch,omitempty"`

@@ -12,8 +12,11 @@ WHERE workspace_id = $1 AND wb_campaign_id = $2
 LIMIT 1;
 
 -- name: UpsertCampaign :one
-INSERT INTO campaigns (workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO campaigns (
+    workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget,
+    placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (wb_campaign_id, seller_cabinet_id) DO UPDATE SET
     name = EXCLUDED.name,
     status = EXCLUDED.status,
@@ -21,6 +24,13 @@ ON CONFLICT (wb_campaign_id, seller_cabinet_id) DO UPDATE SET
     bid_type = EXCLUDED.bid_type,
     payment_type = EXCLUDED.payment_type,
     daily_budget = EXCLUDED.daily_budget,
+    placement_search = EXCLUDED.placement_search,
+    placement_recommendations = EXCLUDED.placement_recommendations,
+    wb_created_at = COALESCE(EXCLUDED.wb_created_at, campaigns.wb_created_at),
+    wb_started_at = COALESCE(EXCLUDED.wb_started_at, campaigns.wb_started_at),
+    wb_updated_at = COALESCE(EXCLUDED.wb_updated_at, campaigns.wb_updated_at),
+    wb_deleted_at = COALESCE(EXCLUDED.wb_deleted_at, campaigns.wb_deleted_at),
+    can_change_nms = EXCLUDED.can_change_nms,
     updated_at = now()
 RETURNING *;
 

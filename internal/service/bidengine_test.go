@@ -402,13 +402,13 @@ func TestDefaultStrategyParams_AutopilotGuardrails(t *testing.T) {
 }
 
 func TestStrategyAutomationSkipReasonHonorsTrustLevels(t *testing.T) {
-	require.Contains(t, strategyAutomationSkipReason(domain.Strategy{
+	require.Empty(t, strategyAutomationSkipReason(domain.Strategy{
 		Params: domain.StrategyParams{AutomationLevel: 1},
-	}), "analytics/semi-auto")
+	}))
 
-	require.Contains(t, strategyAutomationSkipReason(domain.Strategy{
+	require.Empty(t, strategyAutomationSkipReason(domain.Strategy{
 		Params: domain.StrategyParams{AutomationLevel: 2},
-	}), "analytics/semi-auto")
+	}))
 
 	require.Empty(t, strategyAutomationSkipReason(domain.Strategy{
 		Params: domain.StrategyParams{AutomationLevel: 3},

@@ -68,7 +68,8 @@ func main() {
 		deps.Logger.Info().Msg("sellico service-account NOT configured; only legacy per-user discovery active")
 	}
 	recommendationService := service.NewRecommendationService(deps.Queries)
-	engine := service.NewRecommendationEngine(deps.Queries, recommendationService, notificationService, deps.Logger)
+	engine := service.NewRecommendationEngine(deps.Queries, recommendationService, notificationService, deps.Logger).
+		WithAdsReadInsights(adsReadService)
 	extendedEngine := service.NewExtendedRecommendationEngine(deps.Queries, recommendationService, deps.Logger)
 	semanticsService := service.NewSemanticsService(deps.Queries, deps.Logger)
 	competitorService := service.NewCompetitorService(deps.Queries, deps.Logger)

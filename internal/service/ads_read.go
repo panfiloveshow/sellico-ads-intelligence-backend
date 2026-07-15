@@ -243,7 +243,8 @@ func (s *AdsReadService) DataHealth(ctx context.Context, workspaceID uuid.UUID, 
 }
 
 func (s *AdsReadService) ListProductSummaries(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter ProductSummaryFilter) ([]domain.ProductAdsSummary, error) {
-	data, err := s.loadWorkspaceData(ctx, workspaceID, dateFrom, dateTo)
+	previousFrom, _ := previousPeriodRange(dateFrom, dateTo)
+	data, err := s.loadWorkspaceData(ctx, workspaceID, previousFrom, dateTo)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +268,8 @@ func (s *AdsReadService) GetProductSummary(ctx context.Context, workspaceID, pro
 }
 
 func (s *AdsReadService) ListCampaignSummaries(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter CampaignSummaryFilter) ([]domain.CampaignPerformanceSummary, error) {
-	data, err := s.loadWorkspaceData(ctx, workspaceID, dateFrom, dateTo)
+	previousFrom, _ := previousPeriodRange(dateFrom, dateTo)
+	data, err := s.loadWorkspaceData(ctx, workspaceID, previousFrom, dateTo)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +293,8 @@ func (s *AdsReadService) GetCampaignSummary(ctx context.Context, workspaceID, ca
 }
 
 func (s *AdsReadService) ListQuerySummaries(ctx context.Context, workspaceID uuid.UUID, dateFrom, dateTo time.Time, filter QuerySummaryFilter) ([]domain.QueryPerformanceSummary, error) {
-	data, err := s.loadWorkspaceData(ctx, workspaceID, dateFrom, dateTo)
+	previousFrom, _ := previousPeriodRange(dateFrom, dateTo)
+	data, err := s.loadWorkspaceData(ctx, workspaceID, previousFrom, dateTo)
 	if err != nil {
 		return nil, err
 	}

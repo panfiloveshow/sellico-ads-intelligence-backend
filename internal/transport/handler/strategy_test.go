@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
@@ -14,7 +15,15 @@ import (
 )
 
 type mockStrategyService struct {
-	listFn func(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID, limit, offset int32) ([]domain.Strategy, error)
+	listFn            func(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID, limit, offset int32) ([]domain.Strategy, error)
+	shadowDecisionsFn func(ctx context.Context, workspaceID, strategyID uuid.UUID, limit, offset int32) ([]domain.BidDecisionObservation, error)
+}
+
+func (m *mockStrategyService) ListShadowDecisions(ctx context.Context, workspaceID, strategyID uuid.UUID, limit, offset int32) ([]domain.BidDecisionObservation, error) {
+	if m.shadowDecisionsFn == nil {
+		return nil, nil
+	}
+	return m.shadowDecisionsFn(ctx, workspaceID, strategyID, limit, offset)
 }
 
 func (m *mockStrategyService) Create(context.Context, uuid.UUID, domain.Strategy) (*domain.Strategy, error) {
@@ -94,4 +103,29 @@ func TestStrategyList_InvalidSellerCabinetID(t *testing.T) {
 	handler.List(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestStrategyListShadowDecisions(t *testing.T) {
+	workspaceID := uuid.New()
+	strategyID := uuid.New()
+	handler := NewStrategyHandler(&mockStrategyService{
+		shadowDecisionsFn: func(_ context.Context, gotWorkspaceID, gotStrategyID uuid.UUID, limit, offset int32) ([]domain.BidDecisionObservation, error) {
+			assert.Equal(t, workspaceID, gotWorkspaceID)
+			assert.Equal(t, strategyID, gotStrategyID)
+			assert.Equal(t, int32(20), limit)
+			assert.Equal(t, int32(0), offset)
+			return []domain.BidDecisionObservation{{ID: uuid.New(), StrategyID: strategyID, AutomationLevel: 1}}, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/strategies/"+strategyID.String()+"/shadow-decisions?per_page=20", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID))
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("id", strategyID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeContext))
+	recorder := httptest.NewRecorder()
+
+	handler.ListShadowDecisions(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), strategyID.String())
 }

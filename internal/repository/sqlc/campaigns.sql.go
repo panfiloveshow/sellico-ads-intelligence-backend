@@ -13,7 +13,7 @@ import (
 
 const campaignSelectColumns = `id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget,
   placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at,
-  created_at, updated_at`
+  can_change_nms, created_at, updated_at`
 
 type rowScanner interface {
 	Scan(dest ...interface{}) error
@@ -38,6 +38,7 @@ func scanCampaign(row rowScanner) (Campaign, error) {
 		&i.WbStartedAt,
 		&i.WbUpdatedAt,
 		&i.WbDeletedAt,
+		&i.CanChangeNms,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -208,9 +209,9 @@ func (q *Queries) UpdateCampaign(ctx context.Context, arg UpdateCampaignParams) 
 const upsertCampaign = `-- name: UpsertCampaign :one
 INSERT INTO campaigns (
   workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget,
-  placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at
+  placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (wb_campaign_id, seller_cabinet_id) DO UPDATE SET
     name = EXCLUDED.name,
     status = EXCLUDED.status,
@@ -224,6 +225,7 @@ ON CONFLICT (wb_campaign_id, seller_cabinet_id) DO UPDATE SET
     wb_started_at = COALESCE(EXCLUDED.wb_started_at, campaigns.wb_started_at),
     wb_updated_at = COALESCE(EXCLUDED.wb_updated_at, campaigns.wb_updated_at),
     wb_deleted_at = COALESCE(EXCLUDED.wb_deleted_at, campaigns.wb_deleted_at),
+    can_change_nms = EXCLUDED.can_change_nms,
     updated_at = now()
 RETURNING ` + campaignSelectColumns + `
 `
@@ -244,6 +246,7 @@ type UpsertCampaignParams struct {
 	WbStartedAt              pgtype.Timestamptz `json:"wb_started_at"`
 	WbUpdatedAt              pgtype.Timestamptz `json:"wb_updated_at"`
 	WbDeletedAt              pgtype.Timestamptz `json:"wb_deleted_at"`
+	CanChangeNms             pgtype.Bool        `json:"can_change_nms"`
 }
 
 func (q *Queries) UpsertCampaign(ctx context.Context, arg UpsertCampaignParams) (Campaign, error) {
@@ -263,5 +266,6 @@ func (q *Queries) UpsertCampaign(ctx context.Context, arg UpsertCampaignParams) 
 		arg.WbStartedAt,
 		arg.WbUpdatedAt,
 		arg.WbDeletedAt,
+		arg.CanChangeNms,
 	))
 }

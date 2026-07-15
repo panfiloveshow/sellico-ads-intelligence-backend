@@ -278,6 +278,7 @@ type Campaign struct {
 	BidType                  string     `json:"bid_type"`
 	PaymentType              string     `json:"payment_type"`
 	DailyBudget              *int64     `json:"daily_budget,omitempty"`
+	CanChangeNMs             *bool      `json:"can_change_nms"`
 	PlacementSearch          *bool      `json:"placement_search,omitempty"`
 	PlacementRecommendations *bool      `json:"placement_recommendations,omitempty"`
 	WBCreatedAt              *time.Time `json:"wb_created_at,omitempty"`
@@ -482,23 +483,46 @@ type BidSnapshot struct {
 
 // Recommendation represents a generated optimization recommendation.
 type Recommendation struct {
-	ID              uuid.UUID       `json:"id"`
-	WorkspaceID     uuid.UUID       `json:"workspace_id"`
-	CampaignID      *uuid.UUID      `json:"campaign_id,omitempty"`
-	PhraseID        *uuid.UUID      `json:"phrase_id,omitempty"`
-	ProductID       *uuid.UUID      `json:"product_id,omitempty"`
-	SellerCabinetID *uuid.UUID      `json:"seller_cabinet_id,omitempty"`
-	Title           string          `json:"title"`
-	Description     string          `json:"description"`
-	Type            string          `json:"type"`
-	Severity        string          `json:"severity"`
-	Confidence      float64         `json:"confidence"`
-	SourceMetrics   json.RawMessage `json:"source_metrics"`
-	NextAction      *string         `json:"next_action,omitempty"`
-	Status          string          `json:"status"`
-	Evidence        *SourceEvidence `json:"evidence,omitempty"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID                uuid.UUID                        `json:"id"`
+	WorkspaceID       uuid.UUID                        `json:"workspace_id"`
+	CampaignID        *uuid.UUID                       `json:"campaign_id,omitempty"`
+	PhraseID          *uuid.UUID                       `json:"phrase_id,omitempty"`
+	ProductID         *uuid.UUID                       `json:"product_id,omitempty"`
+	SellerCabinetID   *uuid.UUID                       `json:"seller_cabinet_id,omitempty"`
+	Title             string                           `json:"title"`
+	Description       string                           `json:"description"`
+	Type              string                           `json:"type"`
+	Severity          string                           `json:"severity"`
+	Confidence        float64                          `json:"confidence"`
+	SourceMetrics     json.RawMessage                  `json:"source_metrics"`
+	AnalysisWindow    *RecommendationAnalysisWindow    `json:"analysis_window,omitempty"`
+	PreviousWindow    *RecommendationAnalysisWindow    `json:"previous_window,omitempty"`
+	ConfidenceFactors []RecommendationConfidenceFactor `json:"confidence_factors,omitempty"`
+	Action            *RecommendationAction            `json:"action,omitempty"`
+	DecisionBasis     string                           `json:"decision_basis,omitempty"`
+	NextAction        *string                          `json:"next_action,omitempty"`
+	Status            string                           `json:"status"`
+	Evidence          *SourceEvidence                  `json:"evidence,omitempty"`
+	CreatedAt         time.Time                        `json:"created_at"`
+	UpdatedAt         time.Time                        `json:"updated_at"`
+}
+
+type RecommendationAnalysisWindow struct {
+	DateFrom string `json:"date_from"`
+	DateTo   string `json:"date_to"`
+}
+
+type RecommendationConfidenceFactor struct {
+	Code   string  `json:"code"`
+	Impact float64 `json:"impact"`
+	Reason string  `json:"reason"`
+}
+
+type RecommendationAction struct {
+	Kind                 string  `json:"kind"`
+	CanApply             bool    `json:"can_apply"`
+	RequiresConfirmation bool    `json:"requires_confirmation"`
+	BlockReason          *string `json:"block_reason,omitempty"`
 }
 
 type SourceEvidence struct {

@@ -27,16 +27,21 @@ type wbAdvertsV2Response struct {
 	Adverts []wbAdvertV2 `json:"adverts"`
 }
 
+type wbAdvertRestrictions struct {
+	CanChangeNMs *bool `json:"can_change_nms"`
+}
+
 type wbAdvertV2 struct {
-	ID          int64  `json:"id"`
-	AdvertID    int64  `json:"advertId"`
-	Name        string `json:"name"`
-	Type        int    `json:"type"`
-	Status      int    `json:"status"`
-	DailyBudget int64  `json:"dailyBudget"`
-	BidType     string `json:"bid_type"`
-	PaymentType string `json:"paymentType"`
-	Settings    struct {
+	ID           int64                `json:"id"`
+	AdvertID     int64                `json:"advertId"`
+	Name         string               `json:"name"`
+	Type         int                  `json:"type"`
+	Status       int                  `json:"status"`
+	DailyBudget  int64                `json:"dailyBudget"`
+	BidType      string               `json:"bid_type"`
+	PaymentType  string               `json:"paymentType"`
+	Restrictions wbAdvertRestrictions `json:"restrictions"`
+	Settings     struct {
 		Name        string `json:"name"`
 		PaymentType string `json:"payment_type"`
 		Placements  struct {
@@ -124,6 +129,7 @@ func (c *Client) ListCampaigns(ctx context.Context, token string) ([]WBCampaignD
 			DailyBudget:              rawOptionalInt64(advert.DailyBudget),
 			BidType:                  mapRawBidType(advert.BidType),
 			PaymentType:              paymentType,
+			CanChangeNMs:             advert.Restrictions.CanChangeNMs,
 			PartialError:             partialErrors[advertID],
 			NMIDs:                    collectAdvertNMIDs(advert),
 			Products:                 collectAdvertProductSettings(advert),
@@ -226,7 +232,7 @@ func (c *Client) enrichAdvertsWithoutNMIDs(ctx context.Context, token string, ad
 	for i := range adverts {
 		advertID := firstNonZeroInt64(adverts[i].ID, adverts[i].AdvertID)
 		detail, ok := detailsByID[advertID]
-		if !ok || len(collectAdvertNMIDs(detail)) == 0 {
+		if !ok || (len(collectAdvertNMIDs(detail)) == 0 && detail.Restrictions.CanChangeNMs == nil) {
 			continue
 		}
 		adverts[i] = mergeAdvertV2(adverts[i], detail)
@@ -255,6 +261,9 @@ func mergeAdvertV2(base, detail wbAdvertV2) wbAdvertV2 {
 	}
 	if base.Settings.PaymentType == "" {
 		base.Settings.PaymentType = detail.Settings.PaymentType
+	}
+	if base.Restrictions.CanChangeNMs == nil {
+		base.Restrictions.CanChangeNMs = detail.Restrictions.CanChangeNMs
 	}
 	if len(base.AutoParams.NMs) == 0 {
 		base.AutoParams.NMs = detail.AutoParams.NMs

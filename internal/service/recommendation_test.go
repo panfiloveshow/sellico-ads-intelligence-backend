@@ -367,8 +367,9 @@ func (r *campaignRows) Scan(dest ...any) error {
 	*dest[13].(*pgtype.Timestamptz) = item.WbStartedAt
 	*dest[14].(*pgtype.Timestamptz) = item.WbUpdatedAt
 	*dest[15].(*pgtype.Timestamptz) = item.WbDeletedAt
-	*dest[16].(*pgtype.Timestamptz) = item.CreatedAt
-	*dest[17].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[16].(*pgtype.Bool) = item.CanChangeNms
+	*dest[17].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[18].(*pgtype.Timestamptz) = item.UpdatedAt
 	return nil
 }
 

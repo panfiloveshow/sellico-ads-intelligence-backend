@@ -747,6 +747,58 @@ paths:
       responses:
         "200": { description: Bid list, content: { application/json: { schema: { type: object } } } }
 
+  /api/v1/campaigns/{id}/products:
+    patch:
+      tags: [Campaigns]
+      summary: Add or delete product cards in a WB campaign
+      description: >-
+        Applies PATCH /adv/v0/auction/nms only when the latest real WB campaign
+        restriction explicitly has can_change_nms=true. Unknown capability,
+        stale/missing product links, unsupported campaign status, and active WB
+        rate-limit cooldowns fail closed. A successful response requires a
+        subsequent campaign sync before local product links are treated as current.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                add:
+                  type: array
+                  items: { type: integer, format: int64, minimum: 1 }
+                delete:
+                  type: array
+                  items: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: WB-confirmed product-card changes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [advert_id, added, deleted, sync_required]
+                    properties:
+                      advert_id: { type: integer, format: int64 }
+                      added: { type: array, items: { type: integer, format: int64 } }
+                      deleted: { type: array, items: { type: integer, format: int64 } }
+                      sync_required: { type: boolean, enum: [true] }
+                  errors:
+                    type: array
+                    items: { $ref: "#/components/schemas/Error" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "429": { $ref: "#/components/responses/ErrorResponse" }
+        "502": { $ref: "#/components/responses/ErrorResponse" }
+
   /api/v1/campaigns/{id}/bids/min:
     get:
       tags: [Campaigns]
@@ -2666,6 +2718,27 @@ paths:
                 $ref: "#/components/schemas/StrategyBinding"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/strategies/{id}/shadow-decisions:
+    get:
+      tags: [Strategies]
+      summary: List non-applied shadow bid decisions
+      description: >-
+        Returns counterfactual decisions calculated for automation levels 1 and 2.
+        These rows are observations only and never indicate that WB was changed.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Shadow decision page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidDecisionObservationListEnvelope"
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/strategies/{id}/bindings/{bindingId}:
     delete:
       tags: [Strategies]
@@ -3631,6 +3704,10 @@ components:
           type: integer
           format: int64
           nullable: true
+        can_change_nms:
+          type: boolean
+          nullable: true
+          description: Real WB restrictions.can_change_nms value. Null means WB did not report the restriction.
         created_at:
           type: string
           format: date-time
@@ -3973,6 +4050,42 @@ components:
         source_metrics:
           type: object
           additionalProperties: true
+        analysis_window:
+          type: object
+          description: Current real-data period used to calculate this recommendation.
+          required: [date_from, date_to]
+          properties:
+            date_from: { type: string, format: date }
+            date_to: { type: string, format: date }
+        previous_window:
+          type: object
+          description: Equal preceding period used for comparison.
+          required: [date_from, date_to]
+          properties:
+            date_from: { type: string, format: date }
+            date_to: { type: string, format: date }
+        confidence_factors:
+          type: array
+          description: Auditable factors used to calculate confidence; values are not model-generated.
+          items:
+            type: object
+            required: [code, impact, reason]
+            properties:
+              code: { type: string }
+              impact: { type: number, format: double }
+              reason: { type: string }
+        action:
+          type: object
+          description: Executability metadata. Missing means that a legacy recommendation has not been classified yet.
+          required: [kind, can_apply, requires_confirmation]
+          properties:
+            kind: { type: string }
+            can_apply: { type: boolean }
+            requires_confirmation: { type: boolean }
+            block_reason: { type: string, nullable: true }
+        decision_basis:
+          type: string
+          description: Human-readable statement of the real metrics used for the decision.
         next_action:
           type: string
           nullable: true
@@ -4926,6 +5039,38 @@ components:
         campaign_id: { type: string, format: uuid, nullable: true }
         product_id: { type: string, format: uuid, nullable: true }
         created_at: { type: string, format: date-time }
+
+    BidDecisionObservation:
+      type: object
+      description: Counterfactual bid decision that was not sent to WB.
+      required: [id, workspace_id, seller_cabinet_id, strategy_id, strategy_binding_id, campaign_id, wb_campaign_id, wb_product_id, placement, old_bid, proposed_bid, reason, metrics, automation_level, bid_observed_at, first_seen_at, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        strategy_id: { type: string, format: uuid }
+        strategy_binding_id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid }
+        product_id: { type: string, format: uuid, nullable: true }
+        wb_campaign_id: { type: integer, format: int64 }
+        wb_product_id: { type: integer, format: int64 }
+        placement: { type: string }
+        old_bid: { type: integer }
+        proposed_bid: { type: integer }
+        reason: { type: string }
+        metrics: { type: object, additionalProperties: true }
+        automation_level: { type: integer, enum: [1, 2] }
+        bid_observed_at: { type: string, format: date-time }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+
+    BidDecisionObservationListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BidDecisionObservation" }
+        meta: { $ref: "#/components/schemas/Meta" }
 
     StrategyListEnvelope:
       type: object

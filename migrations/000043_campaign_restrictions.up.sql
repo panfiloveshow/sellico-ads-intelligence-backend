@@ -1,0 +1,2 @@
+ALTER TABLE campaigns
+    ADD COLUMN IF NOT EXISTS can_change_nms BOOLEAN NULL;
