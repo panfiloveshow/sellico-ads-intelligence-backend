@@ -3,6 +3,7 @@ package wb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failingRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f failingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestListCampaigns_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +192,39 @@ func TestUpdateCampaignBid_RejectsUnknownPlacementBeforeHTTP(t *testing.T) {
 	err := client.UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "recommendation", 250)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported WB bid placement")
+}
+
+func TestUpdateCampaignBid_Classifies5xxAsOutcomeUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporary WB failure", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	err := newTestClient(server.URL).UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "search", 250)
+	require.Error(t, err)
+	assert.True(t, CampaignBidUpdateOutcomeUnknown(err))
+}
+
+func TestUpdateCampaignBid_Classifies4xxAsDefiniteFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "invalid bid", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	err := newTestClient(server.URL).UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "search", 250)
+	require.Error(t, err)
+	assert.False(t, CampaignBidUpdateOutcomeUnknown(err))
+}
+
+func TestUpdateCampaignBid_ClassifiesTransportFailureAsOutcomeUnknown(t *testing.T) {
+	client := newTestClient("https://example.invalid")
+	client.httpClient.Transport = failingRoundTripper(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection reset after write")
+	})
+
+	err := client.UpdateCampaignBid(context.Background(), "token", 12345, 9, 13335157, "search", 250)
+	require.Error(t, err)
+	assert.True(t, CampaignBidUpdateOutcomeUnknown(err))
 }
 
 func TestGetCommissionTariffs_Success(t *testing.T) {

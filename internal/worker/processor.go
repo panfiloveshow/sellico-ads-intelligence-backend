@@ -83,6 +83,7 @@ type integrationRefresher interface {
 // bidAutomationRunner executes bid strategies for a workspace.
 type bidAutomationRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	ReconcileStaleBidActions(ctx context.Context, now time.Time, limit int32) (service.AutomationBidReconciliationSummary, error)
 }
 
 type repricerRunner interface {
@@ -243,6 +244,28 @@ func (p *Processor) HandleBidAutomation(ctx context.Context, task *asynq.Task) e
 			Msg("bid automation completed")
 		return map[string]any{"changes_applied": changesApplied}, nil
 	})
+}
+
+// HandleReconcileBidActions resolves pending/unknown WB writes from fresh
+// synced bids. The runner never repeats an external bid mutation.
+func (p *Processor) HandleReconcileBidActions(ctx context.Context, _ *asynq.Task) error {
+	if p.bidRunner == nil {
+		p.logger.Debug().Msg("bid runner not configured, skipping reconciliation")
+		return nil
+	}
+	summary, err := p.bidRunner.ReconcileStaleBidActions(ctx, time.Now().UTC(), 500)
+	if err != nil {
+		p.logger.Error().Err(err).Int("examined", summary.Examined).Msg("bid action reconciliation completed with errors")
+		return err
+	}
+	p.logger.Info().
+		Int("examined", summary.Examined).
+		Int("applied", summary.Applied).
+		Int("not_applied", summary.NotApplied).
+		Int("superseded", summary.Superseded).
+		Int("deferred", summary.Deferred).
+		Msg("bid action reconciliation completed")
+	return nil
 }
 
 // HandleCollectDelivery collects delivery data for a workspace.

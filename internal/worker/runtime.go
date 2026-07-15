@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -63,6 +64,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepRefreshIntegrations, processor.HandleSweepRefreshIntegrations)
 	mux.HandleFunc(TaskBidAutomation, processor.HandleBidAutomation)
 	mux.HandleFunc(TaskSweepBidAutomation, processor.HandleSweepBidAutomation)
+	mux.HandleFunc(TaskReconcileBidActions, processor.HandleReconcileBidActions)
 	mux.HandleFunc(TaskRepricer, processor.HandleRepricer)
 	mux.HandleFunc(TaskSweepRepricer, processor.HandleSweepRepricer)
 	mux.HandleFunc(TaskPollPriceTasks, processor.HandlePollPriceTasks)
@@ -146,6 +148,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		// Individual sweeps REMOVED — they caused 5x redundant sync (audit CRITICAL #3)
 		{recInterval, TaskSweepRecommendations, QueueRecommendations},
 		{bidInterval, TaskSweepBidAutomation, QueueBidAutomation},
+		{"@every 5m", TaskReconcileBidActions, QueueBidAutomation},
 		{cfg.RepricerInterval, TaskSweepSyncPrices, QueueRepricer},
 		// Strategy engine on the top of the hour so demand-based (peak-hours)
 		// pricing lands the right price at the hour boundary, not a boot-offset.
@@ -277,17 +280,27 @@ func (r *Runtime) collectQueueMetrics() {
 	for _, queue := range r.queues {
 		info, err := r.inspector.GetQueueInfo(queue)
 		if err != nil {
+			if errors.Is(err, asynq.ErrQueueNotFound) {
+				// Asynq removes an empty queue key. That is a healthy zero state,
+				// not an operational warning worth emitting every scrape interval.
+				setQueueMetrics(queue, 0, 0, 0, 0, 0, 0, 0)
+				continue
+			}
 			r.logger.Warn().Err(err).Str("queue", queue).Msg("failed to collect asynq queue metrics")
 			continue
 		}
-		metrics.WorkerQueueLength.WithLabelValues(queue, "pending").Set(float64(info.Pending))
-		metrics.WorkerQueueLength.WithLabelValues(queue, "active").Set(float64(info.Active))
-		metrics.WorkerQueueLength.WithLabelValues(queue, "scheduled").Set(float64(info.Scheduled))
-		metrics.WorkerQueueLength.WithLabelValues(queue, "retry").Set(float64(info.Retry))
-		metrics.WorkerQueueLength.WithLabelValues(queue, "archived").Set(float64(info.Archived))
-		metrics.WorkerQueueLength.WithLabelValues(queue, "completed").Set(float64(info.Completed))
-		metrics.WorkerQueueLength.WithLabelValues(queue, "aggregating").Set(float64(info.Aggregating))
+		setQueueMetrics(queue, info.Pending, info.Active, info.Scheduled, info.Retry, info.Archived, info.Completed, info.Aggregating)
 	}
+}
+
+func setQueueMetrics(queue string, pending, active, scheduled, retry, archived, completed, aggregating int) {
+	metrics.WorkerQueueLength.WithLabelValues(queue, "pending").Set(float64(pending))
+	metrics.WorkerQueueLength.WithLabelValues(queue, "active").Set(float64(active))
+	metrics.WorkerQueueLength.WithLabelValues(queue, "scheduled").Set(float64(scheduled))
+	metrics.WorkerQueueLength.WithLabelValues(queue, "retry").Set(float64(retry))
+	metrics.WorkerQueueLength.WithLabelValues(queue, "archived").Set(float64(archived))
+	metrics.WorkerQueueLength.WithLabelValues(queue, "completed").Set(float64(completed))
+	metrics.WorkerQueueLength.WithLabelValues(queue, "aggregating").Set(float64(aggregating))
 }
 
 func queueNames(weights map[string]int) []string {

@@ -4987,7 +4987,8 @@ components:
         automation_level:
           type: integer
           enum: [1, 2, 3, 4]
-          description: Trust level for strategy execution. Levels 1-2 are analytics/semi-auto and never auto-apply actions; levels 3-4 can auto-apply within guardrails. Defaults to 3.
+          default: 1
+          description: Trust level for strategy execution. Levels 1-2 are analytics/semi-auto and never auto-apply actions; levels 3-4 can auto-apply within guardrails. Defaults to 1.
         max_change_percent:
           type: number
           format: double

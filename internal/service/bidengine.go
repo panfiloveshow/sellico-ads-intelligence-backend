@@ -448,11 +448,10 @@ func applyBidDecisionLimits(oldBid, calculatedBid int, reason string, params dom
 	limitedBid := calculatedBid
 	notes := make([]string, 0, 2)
 
-	// Smooth the per-step change first, then enforce the absolute Min/Max bounds
-	// LAST. The configured floor/ceiling is a hard guarantee and must win even when
-	// honoring it requires a step larger than MaxChangePercent (e.g. raising a bid
-	// that currently sits far below MinBid) — otherwise the change cap could leave
-	// the bid below the configured minimum.
+	// MaxChangePercent is a hard unattended-automation cap. Absolute bounds may
+	// refine a step only when that bound itself is reachable within the cap. If the
+	// current bid is already farther outside the configured range, hold the action
+	// for operator review instead of making an oversized corrective jump.
 	changeLimitedBid := limitChange(oldBid, limitedBid, params.MaxChangePercent)
 	if changeLimitedBid != limitedBid {
 		limitedBid = changeLimitedBid
@@ -460,10 +459,16 @@ func applyBidDecisionLimits(oldBid, calculatedBid int, reason string, params dom
 	}
 
 	if params.MinBid > 0 && limitedBid < params.MinBid {
+		if limitChange(oldBid, params.MinBid, params.MaxChangePercent) != params.MinBid {
+			return oldBid, fmt.Sprintf("%s; action held: min_bid %d requires a step beyond max_change_percent %.1f", reason, params.MinBid, params.MaxChangePercent)
+		}
 		limitedBid = params.MinBid
 		notes = append(notes, fmt.Sprintf("min_bid %d applied", params.MinBid))
 	}
 	if params.MaxBid > 0 && limitedBid > params.MaxBid {
+		if limitChange(oldBid, params.MaxBid, params.MaxChangePercent) != params.MaxBid {
+			return oldBid, fmt.Sprintf("%s; action held: max_bid %d requires a step beyond max_change_percent %.1f", reason, params.MaxBid, params.MaxChangePercent)
+		}
 		limitedBid = params.MaxBid
 		notes = append(notes, fmt.Sprintf("max_bid %d applied", params.MaxBid))
 	}

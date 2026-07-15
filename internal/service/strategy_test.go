@@ -3,6 +3,7 @@ package service
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/stretchr/testify/require"
@@ -72,4 +73,51 @@ func TestValidateStrategyForSaveRejectsInvalidTypeSpecificParams(t *testing.T) {
 	for _, strategy := range tests {
 		require.Error(t, validateStrategyForSave(strategy), strategy.Name)
 	}
+}
+
+func TestStrategyBindingScopesOverlapUsesCampaignWideWildcard(t *testing.T) {
+	campaignID := uuid.New()
+	otherCampaignID := uuid.New()
+	productID := uuid.New()
+	otherProductID := uuid.New()
+
+	campaignWide := strategyBindingScope{CampaignID: campaignID}
+	product := strategyBindingScope{CampaignID: campaignID, ProductID: &productID}
+	sameProduct := strategyBindingScope{CampaignID: campaignID, ProductID: &productID}
+	otherProduct := strategyBindingScope{CampaignID: campaignID, ProductID: &otherProductID}
+	otherCampaign := strategyBindingScope{CampaignID: otherCampaignID, ProductID: &productID}
+
+	require.True(t, strategyBindingScopesOverlap(campaignWide, product))
+	require.True(t, strategyBindingScopesOverlap(product, campaignWide))
+	require.True(t, strategyBindingScopesOverlap(product, sameProduct))
+	require.False(t, strategyBindingScopesOverlap(product, otherProduct))
+	require.False(t, strategyBindingScopesOverlap(product, otherCampaign))
+}
+
+func TestStrategyRequiresLiveOwnershipAllowsShadowOverlap(t *testing.T) {
+	require.False(t, strategyRequiresLiveOwnership(true, 1))
+	require.False(t, strategyRequiresLiveOwnership(true, 2))
+	require.False(t, strategyRequiresLiveOwnership(false, 3))
+	require.True(t, strategyRequiresLiveOwnership(true, 3))
+	require.True(t, strategyRequiresLiveOwnership(true, 4))
+	require.False(t, strategyRequiresLiveOwnership(true, 0), "zero uses safe level-1 default")
+}
+
+func TestStrategyBindingScopeSetDetectsInternalLiveOwnershipOverlap(t *testing.T) {
+	campaignID := uuid.New()
+	productID := uuid.New()
+	otherProductID := uuid.New()
+
+	require.True(t, strategyBindingScopeSetHasOverlap([]strategyBindingScope{
+		{CampaignID: campaignID},
+		{CampaignID: campaignID, ProductID: &productID},
+	}))
+	require.True(t, strategyBindingScopeSetHasOverlap([]strategyBindingScope{
+		{CampaignID: campaignID, ProductID: &productID},
+		{CampaignID: campaignID, ProductID: &productID},
+	}))
+	require.False(t, strategyBindingScopeSetHasOverlap([]strategyBindingScope{
+		{CampaignID: campaignID, ProductID: &productID},
+		{CampaignID: campaignID, ProductID: &otherProductID},
+	}))
 }

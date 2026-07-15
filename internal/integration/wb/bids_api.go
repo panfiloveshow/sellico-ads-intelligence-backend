@@ -24,6 +24,26 @@ type NMBidItem struct {
 	Placement  string `json:"placement"`
 }
 
+// CampaignBidUpdateError distinguishes a definite WB rejection from an
+// uncertain write outcome. Transport failures and 5xx responses can happen
+// after WB has accepted the PATCH, so callers must reconcile them from a fresh
+// campaign sync instead of treating them as safely retryable failures.
+type CampaignBidUpdateError struct {
+	Err            error
+	OutcomeUnknown bool
+}
+
+func (e *CampaignBidUpdateError) Error() string { return e.Err.Error() }
+
+func (e *CampaignBidUpdateError) Unwrap() error { return e.Err }
+
+// CampaignBidUpdateOutcomeUnknown reports whether WB may have applied a bid
+// write even though the client did not receive a definitive success response.
+func CampaignBidUpdateOutcomeUnknown(err error) bool {
+	var updateErr *CampaignBidUpdateError
+	return errors.As(err, &updateErr) && updateErr.OutcomeUnknown
+}
+
 type CreateCampaignRequest struct {
 	Name           string   `json:"name"`
 	NMIDs          []int64  `json:"nms"`
@@ -83,8 +103,14 @@ func (c *Client) UpdateCampaignBid(ctx context.Context, token string, wbCampaign
 		return fmt.Errorf("marshal campaign bid request: %w", err)
 	}
 
-	_, _, err = c.doRequest(ctx, "PATCH", "/api/advert/v1/bids", token, bytes.NewReader(body))
-	return err
+	resp, _, err := c.doRequest(ctx, "PATCH", "/api/advert/v1/bids", token, bytes.NewReader(body))
+	if err == nil {
+		return nil
+	}
+	return &CampaignBidUpdateError{
+		Err:            err,
+		OutcomeUnknown: resp == nil || resp.StatusCode >= 500,
+	}
 }
 
 func (c *Client) resolveCampaignNMIDs(ctx context.Context, token string, wbCampaignID int64, nmID int64) ([]int64, error) {

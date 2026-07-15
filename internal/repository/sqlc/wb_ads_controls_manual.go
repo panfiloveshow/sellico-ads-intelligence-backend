@@ -2,7 +2,9 @@ package sqlcgen
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -80,16 +82,170 @@ type ClaimAutomationBidActionParams struct {
 	OldBid                   int64
 	NewBid                   int64
 	Reason                   string
+	Placement                string
+	BidObservedAt            pgtype.Timestamptz
+	StrategyID               pgtype.UUID
 }
 
-func (q *Queries) ClaimAutomationBidAction(ctx context.Context, arg ClaimAutomationBidActionParams) (bool, error) {
-	command, err := q.db.Exec(ctx, `INSERT INTO wb_bid_actions (
+const claimAutomationBidAction = `WITH scope_lock AS MATERIALIZED (
+	SELECT pg_advisory_xact_lock(hashtextextended($5::text || ':' || $12, 0))
+)
+INSERT INTO wb_bid_actions (
 		automation_key, automation_observation_key, workspace_id, seller_cabinet_id, campaign_id, product_id,
-		wb_campaign_id, wb_product_id, action_type, old_bid, new_bid, reason, status
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'strategy_bid',$9,$10,$11,'pending')
-	ON CONFLICT DO NOTHING`,
+		wb_campaign_id, wb_product_id, action_type, old_bid, new_bid, reason, placement, bid_observed_at, strategy_id, status
+	)
+	SELECT $1,$2,$3,$4,$5,$6,$7,$8,'strategy_bid',$9,$10,$11,$12,$13,$14,'pending'
+	FROM scope_lock
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM wb_bid_actions unresolved
+		WHERE unresolved.campaign_id = $5
+		  AND (unresolved.placement = $12 OR unresolved.placement IS NULL)
+		  AND (unresolved.product_id IS NULL OR $6::uuid IS NULL OR unresolved.product_id = $6)
+		  AND unresolved.action_type = 'strategy_bid'
+		  AND unresolved.status IN ('pending', 'unknown')
+	)
+	ON CONFLICT DO NOTHING
+	RETURNING id`
+
+type HasUnresolvedAutomationBidActionParams struct {
+	CampaignID pgtype.UUID
+	ProductID  pgtype.UUID
+	Placement  string
+}
+
+const hasUnresolvedAutomationBidAction = `SELECT EXISTS (
+	SELECT 1
+	FROM wb_bid_actions
+	WHERE campaign_id = $1
+	  AND (product_id IS NULL OR $2::uuid IS NULL OR product_id = $2)
+	  AND (placement = $3 OR placement IS NULL)
+	  AND action_type = 'strategy_bid'
+	  AND status IN ('pending', 'unknown')
+)`
+
+func (q *Queries) HasUnresolvedAutomationBidAction(ctx context.Context, arg HasUnresolvedAutomationBidActionParams) (bool, error) {
+	var unresolved bool
+	err := q.db.QueryRow(ctx, hasUnresolvedAutomationBidAction, arg.CampaignID, arg.ProductID, arg.Placement).Scan(&unresolved)
+	return unresolved, err
+}
+
+func (q *Queries) ClaimAutomationBidAction(ctx context.Context, arg ClaimAutomationBidActionParams) (pgtype.UUID, bool, error) {
+	var actionID pgtype.UUID
+	err := q.db.QueryRow(ctx, claimAutomationBidAction,
 		arg.AutomationKey, arg.AutomationObservationKey, arg.WorkspaceID, arg.SellerCabinetID, arg.CampaignID, arg.ProductID,
-		arg.WBCampaignID, arg.WBProductID, arg.OldBid, arg.NewBid, arg.Reason)
+		arg.WBCampaignID, arg.WBProductID, arg.OldBid, arg.NewBid, arg.Reason, arg.Placement, arg.BidObservedAt, arg.StrategyID).Scan(&actionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, false, nil
+	}
+	if err != nil {
+		return pgtype.UUID{}, false, err
+	}
+	return actionID, true, nil
+}
+
+type AutomationBidActionForReconciliation struct {
+	ID              pgtype.UUID
+	AutomationKey   string
+	WorkspaceID     pgtype.UUID
+	SellerCabinetID pgtype.UUID
+	CampaignID      pgtype.UUID
+	ProductID       pgtype.UUID
+	WBCampaignID    int64
+	WBProductID     int64
+	OldBid          int64
+	NewBid          int64
+	Placement       pgtype.Text
+	BidObservedAt   pgtype.Timestamptz
+	Status          string
+	CreatedAt       pgtype.Timestamptz
+}
+
+type ListStaleAutomationBidActionsParams struct {
+	OlderThan pgtype.Timestamptz
+	Limit     int32
+}
+
+func (q *Queries) ListStaleAutomationBidActions(ctx context.Context, arg ListStaleAutomationBidActionsParams) ([]AutomationBidActionForReconciliation, error) {
+	rows, err := q.db.Query(ctx, `SELECT id, automation_key, workspace_id, seller_cabinet_id,
+		campaign_id, product_id, wb_campaign_id, wb_product_id, old_bid, new_bid,
+		placement, bid_observed_at, status, created_at
+	FROM wb_bid_actions
+	WHERE action_type = 'strategy_bid'
+	  AND status IN ('pending', 'unknown')
+	  AND created_at <= $1
+	ORDER BY created_at ASC
+	LIMIT $2`, arg.OlderThan, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]AutomationBidActionForReconciliation, 0)
+	for rows.Next() {
+		var item AutomationBidActionForReconciliation
+		if err := rows.Scan(
+			&item.ID, &item.AutomationKey, &item.WorkspaceID, &item.SellerCabinetID,
+			&item.CampaignID, &item.ProductID, &item.WBCampaignID, &item.WBProductID,
+			&item.OldBid, &item.NewBid, &item.Placement, &item.BidObservedAt,
+			&item.Status, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+type ReconcileAutomationBidActionParams struct {
+	ID           pgtype.UUID
+	Status       string
+	WBResponse   []byte
+	ReconciledAt pgtype.Timestamptz
+}
+
+type UpsertReconciledAutomationBidChangeParams struct {
+	AutomationActionID pgtype.UUID
+	Status             string
+	Placement          string
+}
+
+const upsertReconciledAutomationBidChange = `INSERT INTO bid_changes (
+	workspace_id, seller_cabinet_id, campaign_id, product_id, strategy_id,
+	placement, old_bid, new_bid, reason, source, wb_status, automation_action_id
+)
+SELECT action.workspace_id, action.seller_cabinet_id, action.campaign_id,
+	action.product_id, action.strategy_id, COALESCE(NULLIF(action.placement, ''), $3),
+	action.old_bid::int, action.new_bid::int, COALESCE(action.reason, 'Automated bid reconciliation'),
+	'strategy', $2, action.id
+FROM wb_bid_actions action
+WHERE action.id = $1
+  AND action.action_type = 'strategy_bid'
+  AND action.status IN ('pending', 'unknown')
+  AND action.campaign_id IS NOT NULL
+ON CONFLICT (automation_action_id) WHERE automation_action_id IS NOT NULL
+DO UPDATE SET wb_status = EXCLUDED.wb_status`
+
+// UpsertReconciledAutomationBidChange is the canonical user-facing audit
+// bridge. It creates the history row after a crash-before-audit and updates the
+// same row when the initial uncertain attempt was already recorded.
+func (q *Queries) UpsertReconciledAutomationBidChange(ctx context.Context, arg UpsertReconciledAutomationBidChangeParams) (bool, error) {
+	command, err := q.db.Exec(ctx, upsertReconciledAutomationBidChange,
+		arg.AutomationActionID, arg.Status, arg.Placement)
+	if err != nil {
+		return false, err
+	}
+	return command.RowsAffected() == 1, nil
+}
+
+func (q *Queries) ReconcileAutomationBidAction(ctx context.Context, arg ReconcileAutomationBidActionParams) (bool, error) {
+	command, err := q.db.Exec(ctx, `UPDATE wb_bid_actions
+	SET status = $2, wb_response = $3, reconciled_at = $4, updated_at = now()
+	WHERE id = $1 AND status IN ('pending', 'unknown')`,
+		arg.ID, arg.Status, arg.WBResponse, arg.ReconciledAt)
 	if err != nil {
 		return false, err
 	}

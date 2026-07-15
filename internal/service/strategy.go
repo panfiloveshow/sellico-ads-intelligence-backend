@@ -23,6 +23,41 @@ type StrategyService struct {
 	queries *sqlcgen.Queries
 }
 
+const liveStrategyOwnershipConflictMessage = "live strategy ownership conflict: another active live strategy already owns this campaign/product scope"
+
+type strategyBindingScope struct {
+	CampaignID uuid.UUID
+	ProductID  *uuid.UUID
+}
+
+func strategyBindingScopesOverlap(left, right strategyBindingScope) bool {
+	if left.CampaignID == uuid.Nil || right.CampaignID == uuid.Nil || left.CampaignID != right.CampaignID {
+		return false
+	}
+	if left.ProductID == nil || right.ProductID == nil {
+		return true
+	}
+	return *left.ProductID == *right.ProductID
+}
+
+func strategyBindingScopeSetHasOverlap(scopes []strategyBindingScope) bool {
+	for left := range scopes {
+		for right := left + 1; right < len(scopes); right++ {
+			if strategyBindingScopesOverlap(scopes[left], scopes[right]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func strategyRequiresLiveOwnership(isActive bool, automationLevel int) bool {
+	if automationLevel == 0 {
+		automationLevel = domain.DefaultStrategyParams().AutomationLevel
+	}
+	return isActive && automationLevel >= 3
+}
+
 func NewStrategyService(queries *sqlcgen.Queries) *StrategyService {
 	return &StrategyService{queries: queries}
 }
@@ -109,7 +144,33 @@ func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uu
 		return nil, apperror.New(apperror.ErrValidation, "invalid strategy params")
 	}
 
-	row, err := s.queries.UpdateStrategyInWorkspace(ctx, sqlcgen.UpdateStrategyInWorkspaceParams{
+	qtx, tx, err := s.queries.BeginStrategyOwnershipTx(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to start strategy ownership check")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := qtx.GetStrategyByIDAndWorkspace(ctx, sqlcgen.GetStrategyByIDAndWorkspaceParams{
+		ID: uuidToPgtype(strategyID), WorkspaceID: uuidToPgtype(workspaceID),
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.ErrNotFound, "strategy not found")
+		}
+		return nil, apperror.New(apperror.ErrInternal, "failed to load strategy for ownership check")
+	}
+	if strategyRequiresLiveOwnership(input.IsActive, input.Params.AutomationLevel) {
+		conflict, conflictErr := qtx.HasLiveStrategyOwnershipConflictForBindings(ctx, sqlcgen.HasLiveStrategyOwnershipConflictForBindingsParams{
+			WorkspaceID: uuidToPgtype(workspaceID), StrategyID: uuidToPgtype(strategyID),
+		})
+		if conflictErr != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to check live strategy ownership")
+		}
+		if conflict {
+			return nil, apperror.New(apperror.ErrValidation, liveStrategyOwnershipConflictMessage)
+		}
+	}
+
+	row, err := qtx.UpdateStrategyInWorkspace(ctx, sqlcgen.UpdateStrategyInWorkspaceParams{
 		ID:          uuidToPgtype(strategyID),
 		WorkspaceID: uuidToPgtype(workspaceID),
 		Name:        input.Name,
@@ -122,6 +183,9 @@ func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uu
 			return nil, apperror.New(apperror.ErrNotFound, "strategy not found")
 		}
 		return nil, apperror.New(apperror.ErrInternal, "failed to update strategy")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to commit strategy ownership update")
 	}
 
 	result := strategyFromSqlc(row)
@@ -344,7 +408,36 @@ func (s *StrategyService) Delete(ctx context.Context, workspaceID, strategyID uu
 }
 
 func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error) {
-	row, err := s.queries.CreateStrategyBindingInWorkspace(ctx, sqlcgen.CreateStrategyBindingInWorkspaceParams{
+	qtx, tx, err := s.queries.BeginStrategyOwnershipTx(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to start strategy ownership check")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	strategyRow, err := qtx.GetStrategyByIDAndWorkspace(ctx, sqlcgen.GetStrategyByIDAndWorkspaceParams{
+		ID: uuidToPgtype(strategyID), WorkspaceID: uuidToPgtype(workspaceID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrNotFound, "strategy or binding target not found")
+	}
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to load strategy for ownership check")
+	}
+	strategy := strategyFromSqlc(strategyRow)
+	if strategyRequiresLiveOwnership(strategy.IsActive, strategy.Params.AutomationLevel) {
+		conflict, conflictErr := qtx.HasLiveStrategyOwnershipConflictForScope(ctx, sqlcgen.HasLiveStrategyOwnershipConflictForScopeParams{
+			WorkspaceID: uuidToPgtype(workspaceID), StrategyID: uuidToPgtype(strategyID),
+			CampaignID: nullableUUIDToPgtype(campaignID), ProductID: nullableUUIDToPgtype(productID),
+		})
+		if conflictErr != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to check live strategy ownership")
+		}
+		if conflict {
+			return nil, apperror.New(apperror.ErrValidation, liveStrategyOwnershipConflictMessage)
+		}
+	}
+
+	row, err := qtx.CreateStrategyBindingInWorkspace(ctx, sqlcgen.CreateStrategyBindingInWorkspaceParams{
 		WorkspaceID: uuidToPgtype(workspaceID),
 		StrategyID:  uuidToPgtype(strategyID),
 		CampaignID:  nullableUUIDToPgtype(campaignID),
@@ -355,6 +448,9 @@ func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strate
 			return nil, apperror.New(apperror.ErrNotFound, "strategy or binding target not found")
 		}
 		return nil, apperror.New(apperror.ErrInternal, "failed to attach strategy")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to commit strategy binding ownership")
 	}
 
 	result := bindingFromSqlc(row)

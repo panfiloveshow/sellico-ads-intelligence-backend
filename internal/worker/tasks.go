@@ -27,6 +27,7 @@ const (
 	TaskSweepRefreshIntegrations     = "sellico:sweep_refresh_integrations"
 	TaskBidAutomation                = "bid:automation"
 	TaskSweepBidAutomation           = "bid:sweep_automation"
+	TaskReconcileBidActions          = "bid:reconcile_actions"
 	TaskCollectKeywords              = "semantics:collect_keywords"
 	TaskSweepCollectKeywords         = "semantics:sweep_collect_keywords"
 	TaskExtractCompetitors           = "competitor:extract"

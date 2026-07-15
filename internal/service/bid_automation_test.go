@@ -55,6 +55,35 @@ func TestWorkspaceAutomationGuardrailIsFailClosedAndHonorsManualHold(t *testing.
 	require.Equal(t, "operator review", reason)
 }
 
+func TestEvaluateLiveBidWriteGuardrailRechecksOperatorControlsAndStrategyActivity(t *testing.T) {
+	enabled, err := json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{Enabled: true}})
+	require.NoError(t, err)
+
+	reason, err := evaluateLiveBidWriteGuardrail(enabled, true, true)
+	require.NoError(t, err)
+	require.Empty(t, reason)
+
+	reason, err = evaluateLiveBidWriteGuardrail(enabled, true, false)
+	require.NoError(t, err)
+	require.Contains(t, reason, "no longer active")
+
+	reason, err = evaluateLiveBidWriteGuardrail(enabled, false, false)
+	require.NoError(t, err)
+	require.Contains(t, reason, "no longer available")
+
+	held, err := json.Marshal(domain.WorkspaceSettings{Automation: &domain.AutomationSettings{
+		Enabled: true, ManualHold: true, HoldReason: "emergency stop",
+	}})
+	require.NoError(t, err)
+	reason, err = evaluateLiveBidWriteGuardrail(held, true, true)
+	require.NoError(t, err)
+	require.Equal(t, "emergency stop", reason)
+
+	reason, err = evaluateLiveBidWriteGuardrail(nil, true, true)
+	require.NoError(t, err)
+	require.Contains(t, reason, "not explicitly enabled")
+}
+
 func TestSellerCabinetAutomationGuardrailRequiresFreshReadyCoverage(t *testing.T) {
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	require.Contains(t, sellerCabinetAutomationGuardrailReason(sqlcgen.SellerCabinetSyncState{}, false, 36, now), "no completed")
@@ -89,6 +118,12 @@ func TestAutomationBidActionKeySerializesConflictingStrategiesPerCampaign(t *tes
 	require.NotEqual(t, first, otherSKU)
 	require.NotEqual(t, firstObservation, freshObservation)
 	require.NotEqual(t, first, fresh)
+}
+
+func TestAutomationBidReconciliationStatusUsesActualSyncedBid(t *testing.T) {
+	require.Equal(t, "applied", automationBidReconciliationStatus(100, 120, 120))
+	require.Equal(t, "not_applied", automationBidReconciliationStatus(100, 120, 100))
+	require.Equal(t, "superseded", automationBidReconciliationStatus(100, 120, 110))
 }
 
 func TestCampaignDailyLimitIncreaseGuardrailFailsClosed(t *testing.T) {

@@ -142,7 +142,11 @@ func importedPricePresentation(row sellico.WBUnitEconomics) (pgtype.Float8, pgty
 func buildEconomicsInputs(rows []sellico.WBUnitEconomics) []domain.ProductEconomicsInput {
 	inputs := make([]domain.ProductEconomicsInput, 0, len(rows))
 	for _, r := range rows {
-		if r.NmID <= 0 || r.CostPrice <= 0 {
+		// The products backend may truthfully export partial rows so callers can
+		// explain missing evidence. Those rows are useful for presentation fields,
+		// but must not become trusted repricer economics until every source check
+		// has passed.
+		if !r.Ready || r.NmID <= 0 || r.CostPrice <= 0 {
 			continue
 		}
 		cost := int64(math.Round(r.CostPrice))

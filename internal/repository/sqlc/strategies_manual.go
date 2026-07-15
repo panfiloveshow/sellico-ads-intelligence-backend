@@ -358,31 +358,32 @@ func (q *Queries) DeleteStrategyBindingInWorkspace(ctx context.Context, arg Dele
 // --- Bid Changes ---
 
 type CreateBidChangeParams struct {
-	WorkspaceID      pgtype.UUID
-	SellerCabinetID  pgtype.UUID
-	CampaignID       pgtype.UUID
-	ProductID        pgtype.UUID
-	PhraseID         pgtype.UUID
-	StrategyID       pgtype.UUID
-	RecommendationID pgtype.UUID
-	Placement        string
-	OldBid           int32
-	NewBid           int32
-	Reason           string
-	Source           string
-	Acos             pgtype.Float8
-	Roas             pgtype.Float8
-	WbStatus         string
+	WorkspaceID        pgtype.UUID
+	SellerCabinetID    pgtype.UUID
+	CampaignID         pgtype.UUID
+	ProductID          pgtype.UUID
+	PhraseID           pgtype.UUID
+	StrategyID         pgtype.UUID
+	RecommendationID   pgtype.UUID
+	Placement          string
+	OldBid             int32
+	NewBid             int32
+	Reason             string
+	Source             string
+	Acos               pgtype.Float8
+	Roas               pgtype.Float8
+	WbStatus           string
+	AutomationActionID pgtype.UUID
 }
 
 func (q *Queries) CreateBidChange(ctx context.Context, arg CreateBidChangeParams) (BidChange, error) {
 	row := q.db.QueryRow(ctx,
-		`INSERT INTO bid_changes (workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id, recommendation_id, placement, old_bid, new_bid, reason, source, acos, roas, wb_status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		`INSERT INTO bid_changes (workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id, recommendation_id, placement, old_bid, new_bid, reason, source, acos, roas, wb_status, automation_action_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		RETURNING id, workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id, strategy_id, recommendation_id, placement, old_bid, new_bid, reason, source, acos, roas, wb_status, created_at`,
 		arg.WorkspaceID, arg.SellerCabinetID, arg.CampaignID, arg.ProductID, arg.PhraseID,
 		arg.StrategyID, arg.RecommendationID, arg.Placement, arg.OldBid, arg.NewBid,
-		arg.Reason, arg.Source, arg.Acos, arg.Roas, arg.WbStatus)
+		arg.Reason, arg.Source, arg.Acos, arg.Roas, arg.WbStatus, arg.AutomationActionID)
 	var i BidChange
 	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.CampaignID, &i.ProductID, &i.PhraseID, &i.StrategyID, &i.RecommendationID, &i.Placement, &i.OldBid, &i.NewBid, &i.Reason, &i.Source, &i.Acos, &i.Roas, &i.WbStatus, &i.CreatedAt)
 	return i, err

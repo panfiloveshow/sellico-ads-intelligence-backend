@@ -362,9 +362,9 @@ func TestBidEngine_ExplainsMinBidLimitInDecisionReason(t *testing.T) {
 	require.Contains(t, decision.Reason, "min_bid 90 applied")
 }
 
-func TestBidEngine_MinBidFloorWinsOverMaxChangePercent(t *testing.T) {
-	// CurrentBid sits far below MinBid. The change cap alone would leave the bid at
-	// 115 (100 + 15%), below the configured floor; MinBid must win and lift it to 200.
+func TestBidEngine_HoldsWhenMinBidRequiresExceedingMaxChangePercent(t *testing.T) {
+	// CurrentBid sits far below MinBid. Jumping directly to the floor would violate
+	// the unattended per-action cap, so the engine must hold instead of writing WB.
 	engine := NewBidEngine(zerolog.Nop())
 
 	decision := engine.CalculateBid(domain.Strategy{
@@ -386,9 +386,29 @@ func TestBidEngine_MinBidFloorWinsOverMaxChangePercent(t *testing.T) {
 		},
 	})
 
-	require.NotNil(t, decision)
-	require.Equal(t, 200, decision.NewBid)
-	require.Contains(t, decision.Reason, "min_bid 200 applied")
+	require.Nil(t, decision)
+}
+
+func TestBidEngine_HoldsWhenMaxBidRequiresExceedingMaxChangePercent(t *testing.T) {
+	engine := NewBidEngine(zerolog.Nop())
+
+	decision := engine.CalculateBid(domain.Strategy{
+		Type: domain.StrategyTypeROAS,
+		Params: domain.StrategyParams{
+			TargetROAS:       4,
+			MinClicks:        10,
+			MaxBid:           100,
+			MaxChangePercent: 15,
+		},
+	}, BidContext{
+		CurrentBid: 200,
+		Clicks:     40,
+		Spend:      1000,
+		Revenue:    1000,
+		Placement:  "search",
+	})
+
+	require.Nil(t, decision)
 }
 
 func TestDefaultStrategyParams_AutopilotGuardrails(t *testing.T) {

@@ -42,8 +42,8 @@ DELETE FROM strategy_bindings WHERE id = $1;
 INSERT INTO bid_changes (
     workspace_id, seller_cabinet_id, campaign_id, product_id, phrase_id,
     strategy_id, recommendation_id, placement, old_bid, new_bid,
-    reason, source, acos, roas, wb_status
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    reason, source, acos, roas, wb_status, automation_action_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING *;
 
 -- name: ListBidChangesByCampaign :many

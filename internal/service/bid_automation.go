@@ -21,6 +21,19 @@ import (
 
 const minTodayClicksForBidIncrease = int64(20)
 
+const automationBidReconciliationDelay = 5 * time.Minute
+
+// AutomationBidReconciliationSummary reports only evidence-backed outcomes.
+// Deferred actions remain unknown until a campaign sync newer than the write
+// attempt is available.
+type AutomationBidReconciliationSummary struct {
+	Examined   int
+	Applied    int
+	NotApplied int
+	Superseded int
+	Deferred   int
+}
+
 // BidAutomationService runs the bid engine for all active strategies in a workspace.
 type BidAutomationService struct {
 	queries       *sqlcgen.Queries
@@ -199,6 +212,42 @@ func workspaceAutomationGuardrailReason(raw []byte) (string, error) {
 		return reason, nil
 	}
 	return "", nil
+}
+
+func evaluateLiveBidWriteGuardrail(settingsRaw []byte, strategyFound, strategyActive bool) (string, error) {
+	reason, err := workspaceAutomationGuardrailReason(settingsRaw)
+	if err != nil || reason != "" {
+		return reason, err
+	}
+	if !strategyFound {
+		return "strategy is no longer available", nil
+	}
+	if !strategyActive {
+		return "strategy is no longer active", nil
+	}
+	return "", nil
+}
+
+// liveBidWriteGuardrail reloads mutable operator controls immediately before a
+// live WB write. RunForWorkspace intentionally takes a strategy snapshot for the
+// calculation phase, but that snapshot must not outlive a manual hold, workspace
+// kill switch, or strategy deactivation made while the worker is running.
+func (s *BidAutomationService) liveBidWriteGuardrail(ctx context.Context, workspaceID, strategyID uuid.UUID) (string, error) {
+	settingsRaw, err := s.queries.GetWorkspaceSettings(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return "", fmt.Errorf("reload workspace automation settings: %w", err)
+	}
+	strategy, err := s.queries.GetStrategyByIDAndWorkspace(ctx, sqlcgen.GetStrategyByIDAndWorkspaceParams{
+		ID:          uuidToPgtype(strategyID),
+		WorkspaceID: uuidToPgtype(workspaceID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return evaluateLiveBidWriteGuardrail(settingsRaw, false, false)
+	}
+	if err != nil {
+		return "", fmt.Errorf("reload strategy activity: %w", err)
+	}
+	return evaluateLiveBidWriteGuardrail(settingsRaw, true, strategy.IsActive)
 }
 
 func strategyAutomationSkipReason(strategy domain.Strategy) string {
@@ -487,11 +536,29 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		}
 
 		automationKey, observationKey := automationBidActionKeys(campaign, targetNMID, decision, observedAt)
-		claimed, claimErr := s.queries.ClaimAutomationBidAction(ctx, sqlcgen.ClaimAutomationBidActionParams{
+		unresolved, unresolvedErr := s.queries.HasUnresolvedAutomationBidAction(ctx, sqlcgen.HasUnresolvedAutomationBidActionParams{
+			CampaignID: campaign.ID,
+			ProductID:  uuidToPgtypePtr(binding.ProductID),
+			Placement:  decision.Placement,
+		})
+		if unresolvedErr != nil {
+			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s unresolved action guard: %w", binding.ID, unresolvedErr))
+			continue
+		}
+		if unresolved {
+			s.logger.Warn().
+				Str("campaign_id", binding.CampaignID.String()).
+				Str("placement", decision.Placement).
+				Msg("skipping live bid write while an earlier action outcome is unresolved")
+			continue
+		}
+		automationActionID, claimed, claimErr := s.queries.ClaimAutomationBidAction(ctx, sqlcgen.ClaimAutomationBidActionParams{
 			AutomationKey: automationKey, AutomationObservationKey: observationKey,
 			WorkspaceID: uuidToPgtype(workspaceID), SellerCabinetID: campaign.SellerCabinetID,
 			CampaignID: campaign.ID, ProductID: uuidToPgtypePtr(binding.ProductID), WBCampaignID: campaign.WbCampaignID,
 			WBProductID: targetNMID, OldBid: int64(decision.OldBid), NewBid: int64(decision.NewBid), Reason: decision.Reason,
+			Placement: decision.Placement, BidObservedAt: pgtype.Timestamptz{Time: observedAt, Valid: !observedAt.IsZero()},
+			StrategyID: uuidToPgtype(strategy.ID),
 		})
 		if claimErr != nil {
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s action claim: %w", binding.ID, claimErr))
@@ -502,12 +569,40 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			continue
 		}
 
+		// Re-check mutable operator controls after the durable claim and immediately
+		// before the external side effect. A blocked claim is terminal for this stale
+		// observation, so it cannot remain pending or be applied after the hold lifts.
+		blockReason, preWriteErr := s.liveBidWriteGuardrail(ctx, workspaceID, strategy.ID)
+		if preWriteErr != nil {
+			blockReason = "live automation guardrail could not be reloaded"
+		}
+		if blockReason != "" {
+			wbResponse, _ := json.Marshal(map[string]string{"block_reason": blockReason})
+			if completeErr := s.queries.CompleteAutomationBidAction(ctx, sqlcgen.CompleteAutomationBidActionParams{
+				AutomationKey: automationKey, Status: "blocked", WBResponse: wbResponse,
+			}); completeErr != nil {
+				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s finalize blocked action claim: %w", binding.ID, completeErr))
+			}
+			if preWriteErr != nil {
+				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s pre-write automation guard: %w", binding.ID, preWriteErr))
+			}
+			s.logger.Warn().
+				Str("strategy_id", strategy.ID.String()).
+				Str("campaign_id", binding.CampaignID.String()).
+				Str("reason", blockReason).
+				Msg("blocked live bid write after action claim")
+			continue
+		}
+
 		// Apply to WB API. A product binding is always sent as its concrete real NMID.
 		wbErr := s.wbClient.UpdateCampaignBid(ctx, token, campaign.WbCampaignID, int(campaign.CampaignType), targetNMID, decision.Placement, decision.NewBid)
 		wbStatus := "applied"
 		var wbResponse []byte
 		if wbErr != nil {
 			wbStatus = "failed"
+			if wb.CampaignBidUpdateOutcomeUnknown(wbErr) {
+				wbStatus = "unknown"
+			}
 			wbResponse, _ = json.Marshal(map[string]string{"error": wbErr.Error()})
 			s.recordWBActionRateLimitFromError(ctx, strategy.SellerCabinetID, wbErr)
 			s.logger.Warn().
@@ -517,12 +612,6 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Msg("failed to apply bid to WB")
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s WB bid update: %w", binding.ID, wbErr))
 		}
-		if completeErr := s.queries.CompleteAutomationBidAction(ctx, sqlcgen.CompleteAutomationBidActionParams{
-			AutomationKey: automationKey, Status: wbStatus, WBResponse: wbResponse,
-		}); completeErr != nil {
-			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s complete action claim: %w", binding.ID, completeErr))
-		}
-
 		// Record in bid_changes
 		var acosVal, roasVal pgtype.Float8
 		if decision.ACoS != nil {
@@ -533,22 +622,27 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		}
 
 		_, recordErr := s.queries.CreateBidChange(ctx, sqlcgen.CreateBidChangeParams{
-			WorkspaceID:     uuidToPgtype(workspaceID),
-			SellerCabinetID: uuidToPgtype(strategy.SellerCabinetID),
-			CampaignID:      uuidToPgtype(*binding.CampaignID),
-			ProductID:       uuidToPgtypePtr(binding.ProductID),
-			StrategyID:      uuidToPgtype(strategy.ID),
-			Placement:       decision.Placement,
-			OldBid:          oldBid32,
-			NewBid:          newBid32,
-			Reason:          decision.Reason,
-			Source:          domain.BidSourceStrategy,
-			Acos:            acosVal,
-			Roas:            roasVal,
-			WbStatus:        wbStatus,
+			WorkspaceID:        uuidToPgtype(workspaceID),
+			SellerCabinetID:    uuidToPgtype(strategy.SellerCabinetID),
+			CampaignID:         uuidToPgtype(*binding.CampaignID),
+			ProductID:          uuidToPgtypePtr(binding.ProductID),
+			StrategyID:         uuidToPgtype(strategy.ID),
+			Placement:          decision.Placement,
+			OldBid:             oldBid32,
+			NewBid:             newBid32,
+			Reason:             decision.Reason,
+			Source:             domain.BidSourceStrategy,
+			Acos:               acosVal,
+			Roas:               roasVal,
+			WbStatus:           wbStatus,
+			AutomationActionID: automationActionID,
 		})
 		if recordErr != nil {
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s record bid change: %w", binding.ID, recordErr))
+		} else if completeErr := s.queries.CompleteAutomationBidAction(ctx, sqlcgen.CompleteAutomationBidActionParams{
+			AutomationKey: automationKey, Status: wbStatus, WBResponse: wbResponse,
+		}); completeErr != nil {
+			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s complete action claim: %w", binding.ID, completeErr))
 		}
 
 		if wbStatus == "applied" {
@@ -579,6 +673,134 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 	}
 
 	return changes, errors.Join(bindingErrors...)
+}
+
+// ReconcileStaleBidActions resolves uncertain automated writes exclusively
+// from bid observations produced by a later authoritative sync. It never calls
+// WB and never retries a write with an unknown outcome.
+func (s *BidAutomationService) ReconcileStaleBidActions(ctx context.Context, now time.Time, limit int32) (AutomationBidReconciliationSummary, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	actions, err := s.queries.ListStaleAutomationBidActions(ctx, sqlcgen.ListStaleAutomationBidActionsParams{
+		OlderThan: pgtype.Timestamptz{Time: now.UTC().Add(-automationBidReconciliationDelay), Valid: true},
+		Limit:     limit,
+	})
+	if err != nil {
+		return AutomationBidReconciliationSummary{}, fmt.Errorf("list stale automation bid actions: %w", err)
+	}
+
+	summary := AutomationBidReconciliationSummary{Examined: len(actions)}
+	var reconcileErrors []error
+	for _, action := range actions {
+		if !action.CampaignID.Valid || !action.CreatedAt.Valid {
+			summary.Deferred++
+			continue
+		}
+		campaign, campaignErr := s.queries.GetCampaignByID(ctx, action.CampaignID)
+		if campaignErr != nil {
+			if !errors.Is(campaignErr, pgx.ErrNoRows) {
+				reconcileErrors = append(reconcileErrors, fmt.Errorf("load campaign for bid action %s: %w", action.AutomationKey, campaignErr))
+			}
+			summary.Deferred++
+			continue
+		}
+		if campaign.WorkspaceID != action.WorkspaceID || campaign.SellerCabinetID != action.SellerCabinetID || campaign.WbCampaignID != action.WBCampaignID {
+			summary.Deferred++
+			continue
+		}
+
+		placement := strings.TrimSpace(action.Placement.String)
+		if placement == "" {
+			placement, err = automationBidPlacement(campaign)
+			if err != nil {
+				summary.Deferred++
+				continue
+			}
+		}
+		var productID *uuid.UUID
+		if action.ProductID.Valid {
+			id := uuidFromPgtype(action.ProductID)
+			productID = &id
+		} else if action.WBProductID > 0 {
+			// The local product FK may have been cleared after a SKU-scoped
+			// write. Never reinterpret that action as campaign-wide.
+			summary.Deferred++
+			continue
+		}
+		actualBid, syncedAt, found, observationErr := currentBidObservation(ctx, s.queries, uuidFromPgtype(action.CampaignID), productID, placement)
+		if observationErr != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("load synced bid for action %s: %w", action.AutomationKey, observationErr))
+			summary.Deferred++
+			continue
+		}
+		freshAfter := action.CreatedAt.Time.UTC()
+		if action.BidObservedAt.Valid && action.BidObservedAt.Time.UTC().After(freshAfter) {
+			freshAfter = action.BidObservedAt.Time.UTC()
+		}
+		if !found || !syncedAt.UTC().After(freshAfter) {
+			summary.Deferred++
+			continue
+		}
+
+		status := automationBidReconciliationStatus(action.OldBid, action.NewBid, int64(actualBid))
+		response, marshalErr := json.Marshal(map[string]any{
+			"reconciled_from_sync": true,
+			"previous_status":      action.Status,
+			"actual_bid":           actualBid,
+			"synced_at":            syncedAt.UTC().Format(time.RFC3339Nano),
+		})
+		if marshalErr != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("marshal reconciliation for action %s: %w", action.AutomationKey, marshalErr))
+			summary.Deferred++
+			continue
+		}
+		auditUpdated, auditErr := s.queries.UpsertReconciledAutomationBidChange(ctx, sqlcgen.UpsertReconciledAutomationBidChangeParams{
+			AutomationActionID: action.ID,
+			Status:             status,
+			Placement:          placement,
+		})
+		if auditErr != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile bid change audit %s: %w", action.AutomationKey, auditErr))
+			summary.Deferred++
+			continue
+		}
+		if !auditUpdated {
+			continue
+		}
+		updated, updateErr := s.queries.ReconcileAutomationBidAction(ctx, sqlcgen.ReconcileAutomationBidActionParams{
+			ID: action.ID, Status: status, WBResponse: response,
+			ReconciledAt: pgtype.Timestamptz{Time: now.UTC(), Valid: true},
+		})
+		if updateErr != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile bid action %s: %w", action.AutomationKey, updateErr))
+			summary.Deferred++
+			continue
+		}
+		if !updated {
+			continue
+		}
+		switch status {
+		case "applied":
+			summary.Applied++
+		case "not_applied":
+			summary.NotApplied++
+		case "superseded":
+			summary.Superseded++
+		}
+	}
+	return summary, errors.Join(reconcileErrors...)
+}
+
+func automationBidReconciliationStatus(oldBid, newBid, actualBid int64) string {
+	switch actualBid {
+	case newBid:
+		return "applied"
+	case oldBid:
+		return "not_applied"
+	default:
+		return "superseded"
+	}
 }
 
 func automationCampaignSkipReason(campaign sqlcgen.Campaign) string {

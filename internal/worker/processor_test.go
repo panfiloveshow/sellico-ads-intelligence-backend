@@ -39,14 +39,22 @@ func (f *fakeSyncRunner) SyncWorkspace(ctx context.Context, workspaceID uuid.UUI
 }
 
 type fakeBidAutomationRunner struct {
-	changes int
-	err     error
-	called  bool
+	changes          int
+	err              error
+	called           bool
+	reconcileSummary service.AutomationBidReconciliationSummary
+	reconcileErr     error
+	reconcileCalled  bool
 }
 
 func (f *fakeBidAutomationRunner) RunForWorkspace(_ context.Context, _ uuid.UUID) (int, error) {
 	f.called = true
 	return f.changes, f.err
+}
+
+func (f *fakeBidAutomationRunner) ReconcileStaleBidActions(_ context.Context, _ time.Time, _ int32) (service.AutomationBidReconciliationSummary, error) {
+	f.reconcileCalled = true
+	return f.reconcileSummary, f.reconcileErr
 }
 
 func (f *fakeSyncRunner) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error) {
@@ -336,6 +344,24 @@ func TestHandleBidAutomationFailureMarksJobRun(t *testing.T) {
 		assert.Equal(t, "failed", jobRun.Status)
 		assert.Equal(t, "wb action failed", jobRun.ErrorMessage.String)
 	}
+}
+
+func TestHandleReconcileBidActionsRunsEvidenceOnlyReconciler(t *testing.T) {
+	runner := &fakeBidAutomationRunner{reconcileSummary: service.AutomationBidReconciliationSummary{
+		Examined: 3, Applied: 1, NotApplied: 1, Deferred: 1,
+	}}
+	processor := NewProcessor(nil, nil, nil, nil, nil, zerolog.Nop()).WithBidRunner(runner)
+
+	require.NoError(t, processor.HandleReconcileBidActions(context.Background(), NewSweepTask(TaskReconcileBidActions)))
+	require.True(t, runner.reconcileCalled)
+}
+
+func TestHandleReconcileBidActionsReturnsRunnerError(t *testing.T) {
+	runner := &fakeBidAutomationRunner{reconcileErr: errors.New("database unavailable")}
+	processor := NewProcessor(nil, nil, nil, nil, nil, zerolog.Nop()).WithBidRunner(runner)
+
+	err := processor.HandleReconcileBidActions(context.Background(), NewSweepTask(TaskReconcileBidActions))
+	require.ErrorContains(t, err, "database unavailable")
 }
 
 func TestHandleSyncProducts_DuplicateRecommendationTaskDoesNotFail(t *testing.T) {
