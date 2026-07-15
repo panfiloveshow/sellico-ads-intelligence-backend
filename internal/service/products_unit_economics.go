@@ -21,6 +21,8 @@ type productsCabinetReader interface {
 	GetSellerCabinetByID(ctx context.Context, id pgtype.UUID) (sqlcgen.SellerCabinet, error)
 }
 
+const productsReadinessMaxWBProductIDs = 100
+
 // ProductsUnitEconomicsReadinessProvider checks the products backend with the
 // same service token used by the economics export. It validates cabinet tenant,
 // integration echo, exact product coverage and freshness before returning ready.
@@ -68,62 +70,110 @@ func (p *ProductsUnitEconomicsReadinessProvider) CheckBidIncreaseReadiness(ctx c
 		return nil, fmt.Errorf("seller cabinet has no products integration ID")
 	}
 
-	response, err := p.client.CheckUnitEconomicsReadiness(ctx, p.token, p.path, sellico.UnitEconomicsReadinessRequest{
-		IntegrationID:   integrationID,
-		WorkspaceID:     input.WorkspaceID.String(),
-		SellerCabinetID: input.SellerCabinetID.String(),
-		ProductIDs:      uuidStrings(input.ProductIDs),
-		WBProductIDs:    requested,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !response.Complete {
-		return nil, fmt.Errorf("products unit economics readiness response is incomplete")
-	}
-	if response.IntegrationID != integrationID {
-		return nil, fmt.Errorf("products unit economics readiness integration mismatch")
-	}
-	if !sameExactIDs(requested, response.CheckedProductIDs) {
-		return nil, fmt.Errorf("products unit economics readiness product coverage mismatch")
-	}
+	var source string
+	var checkedAt time.Time
+	checkedProductIDs := make([]int64, 0, len(requested))
+	missingIDs := make(map[int64]struct{})
+	unprofitableIDs := make(map[int64]struct{})
+	staleIDs := make(map[int64]struct{})
 	blockedIDs := make(map[int64]struct{})
-	for _, id := range append(append(append([]int64{}, response.MissingEconomicsProductIDs...), response.UnprofitableProductIDs...), response.StaleProductIDs...) {
-		blockedIDs[id] = struct{}{}
-	}
 	minMaxAllowedDRR := 101.0
-	for _, nmID := range requested {
-		if _, blocked := blockedIDs[nmID]; blocked {
-			continue
+	now := p.now().UTC()
+	productIDs := uuidStrings(input.ProductIDs)
+	for chunkStart := 0; chunkStart < len(requested); chunkStart += productsReadinessMaxWBProductIDs {
+		chunkEnd := chunkStart + productsReadinessMaxWBProductIDs
+		if chunkEnd > len(requested) {
+			chunkEnd = len(requested)
 		}
-		ceiling, ok := response.MaxAllowedDRRByProduct[nmID]
-		if !ok || ceiling <= 0 || ceiling > 100 {
-			return nil, fmt.Errorf("products unit economics readiness DRR ceiling is missing for WB product %d", nmID)
+		chunk := requested[chunkStart:chunkEnd]
+		response, err := p.client.CheckUnitEconomicsReadiness(ctx, p.token, p.path, sellico.UnitEconomicsReadinessRequest{
+			IntegrationID:   integrationID,
+			WorkspaceID:     input.WorkspaceID.String(),
+			SellerCabinetID: input.SellerCabinetID.String(),
+			ProductIDs:      productIDs,
+			WBProductIDs:    chunk,
+		})
+		chunkNumber := chunkStart/productsReadinessMaxWBProductIDs + 1
+		if err != nil {
+			return nil, fmt.Errorf("products unit economics readiness chunk %d: %w", chunkNumber, err)
 		}
-		if ceiling < minMaxAllowedDRR {
-			minMaxAllowedDRR = ceiling
+		if response == nil {
+			return nil, fmt.Errorf("products unit economics readiness chunk %d returned no response", chunkNumber)
+		}
+		if !response.Complete {
+			return nil, fmt.Errorf("products unit economics readiness response is incomplete for chunk %d", chunkNumber)
+		}
+		if response.IntegrationID != integrationID {
+			return nil, fmt.Errorf("products unit economics readiness integration mismatch for chunk %d", chunkNumber)
+		}
+		if !sameExactIDs(chunk, response.CheckedProductIDs) {
+			return nil, fmt.Errorf("products unit economics readiness product coverage mismatch for chunk %d", chunkNumber)
+		}
+		chunkSource := strings.TrimSpace(response.Source)
+		if chunkSource == "" {
+			return nil, fmt.Errorf("products unit economics readiness source is missing for chunk %d", chunkNumber)
+		}
+		if source == "" {
+			source = chunkSource
+		} else if chunkSource != source {
+			return nil, fmt.Errorf("products unit economics readiness source mismatch for chunk %d", chunkNumber)
+		}
+		chunkCheckedAt := response.CheckedAt.UTC()
+		if chunkCheckedAt.IsZero() || chunkCheckedAt.Before(now.Add(-p.maxAge)) || chunkCheckedAt.After(now.Add(5*time.Minute)) {
+			return nil, fmt.Errorf("products unit economics readiness timestamp is stale or invalid for chunk %d", chunkNumber)
+		}
+		if checkedAt.IsZero() || chunkCheckedAt.Before(checkedAt) {
+			checkedAt = chunkCheckedAt
+		}
+
+		checkedProductIDs = append(checkedProductIDs, chunk...)
+		mergeReadinessIDs(missingIDs, blockedIDs, response.MissingEconomicsProductIDs)
+		mergeReadinessIDs(unprofitableIDs, blockedIDs, response.UnprofitableProductIDs)
+		mergeReadinessIDs(staleIDs, blockedIDs, response.StaleProductIDs)
+		for _, nmID := range chunk {
+			if _, blocked := blockedIDs[nmID]; blocked {
+				continue
+			}
+			ceiling, ok := response.MaxAllowedDRRByProduct[nmID]
+			if !ok || ceiling <= 0 || ceiling > 100 {
+				return nil, fmt.Errorf("products unit economics readiness DRR ceiling is missing for WB product %d", nmID)
+			}
+			if ceiling < minMaxAllowedDRR {
+				minMaxAllowedDRR = ceiling
+			}
 		}
 	}
 	if len(blockedIDs) > 0 {
 		minMaxAllowedDRR = 0
 	}
-	now := p.now().UTC()
-	checkedAt := response.CheckedAt.UTC()
-	if checkedAt.IsZero() || checkedAt.Before(now.Add(-p.maxAge)) || checkedAt.After(now.Add(5*time.Minute)) {
-		return nil, fmt.Errorf("products unit economics readiness timestamp is stale or invalid")
-	}
 
 	return &UnitEconomicsReadiness{
-		IntegrationID:              response.IntegrationID,
-		Source:                     response.Source,
-		CheckedAt:                  response.CheckedAt,
-		Complete:                   response.Complete,
-		CheckedProductIDs:          response.CheckedProductIDs,
-		MissingEconomicsProductIDs: response.MissingEconomicsProductIDs,
-		UnprofitableProductIDs:     response.UnprofitableProductIDs,
-		StaleProductIDs:            response.StaleProductIDs,
+		IntegrationID:              integrationID,
+		Source:                     source,
+		CheckedAt:                  checkedAt,
+		Complete:                   true,
+		CheckedProductIDs:          checkedProductIDs,
+		MissingEconomicsProductIDs: sortedReadinessIDs(missingIDs),
+		UnprofitableProductIDs:     sortedReadinessIDs(unprofitableIDs),
+		StaleProductIDs:            sortedReadinessIDs(staleIDs),
 		MaxAllowedDRRPercent:       minMaxAllowedDRR,
 	}, nil
+}
+
+func mergeReadinessIDs(target, blocked map[int64]struct{}, ids []int64) {
+	for _, id := range ids {
+		target[id] = struct{}{}
+		blocked[id] = struct{}{}
+	}
+}
+
+func sortedReadinessIDs(ids map[int64]struct{}) []int64 {
+	result := make([]int64, 0, len(ids))
+	for id := range ids {
+		result = append(result, id)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 func normalizedPositiveIDs(ids []int64) []int64 {
