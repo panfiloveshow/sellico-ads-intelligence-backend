@@ -224,6 +224,7 @@ func (h *StrategyHandler) ListEvaluationRuns(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	pg := pagination.Parse(r)
+	// #nosec G115 -- pagination.Parse bounds both values to math.MaxInt32.
 	items, err := h.svc.ListEvaluationRuns(r.Context(), workspaceID, strategyID, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
