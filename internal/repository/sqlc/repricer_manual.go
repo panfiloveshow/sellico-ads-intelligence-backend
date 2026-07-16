@@ -194,8 +194,20 @@ WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3`,
 // ---------------------------------------------------------------------------
 
 const setProductStock = `
-UPDATE products SET stock_total = $4, updated_at = now()
-WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3
+WITH updated AS (
+    UPDATE products
+    SET stock_total = $4, updated_at = now()
+    WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3
+    RETURNING id, title, brand, category, price, rating, reviews_count,
+              stock_total, image_url, content_hash
+)
+INSERT INTO product_snapshots (
+    product_id, title, brand, category, price, rating, reviews_count,
+    stock_total, image_url, content_hash
+)
+SELECT id, title, brand, category, price, rating, reviews_count,
+       stock_total, image_url, content_hash
+FROM updated
 `
 
 func (q *Queries) SetProductStock(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64, stock int32) error {

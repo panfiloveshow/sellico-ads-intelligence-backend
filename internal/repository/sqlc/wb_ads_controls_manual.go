@@ -498,6 +498,30 @@ func (q *Queries) GetCampaignDailyLimit(ctx context.Context, campaignID pgtype.U
 	return item, err
 }
 
+type UpsertCampaignDailyLimitParams struct {
+	WorkspaceID pgtype.UUID
+	CampaignID  pgtype.UUID
+	DailyLimit  int64
+	Enabled     bool
+}
+
+// UpsertCampaignDailyLimit scopes the campaign through its workspace and uses
+// the campaign's real seller cabinet rather than trusting an API payload.
+func (q *Queries) UpsertCampaignDailyLimit(ctx context.Context, arg UpsertCampaignDailyLimitParams) (CampaignDailyLimit, error) {
+	row := q.db.QueryRow(ctx, `INSERT INTO campaign_daily_limits
+(workspace_id,seller_cabinet_id,campaign_id,daily_limit,enabled,pause_when_reached,resume_next_day)
+SELECT c.workspace_id,c.seller_cabinet_id,c.id,$3,$4,true,true
+FROM campaigns c WHERE c.id=$2 AND c.workspace_id=$1
+ON CONFLICT (campaign_id) DO UPDATE SET daily_limit=EXCLUDED.daily_limit, enabled=EXCLUDED.enabled, updated_at=now()
+RETURNING id,workspace_id,seller_cabinet_id,campaign_id,daily_limit,enabled,pause_when_reached,resume_next_day,
+last_checked_at,last_action_at,created_at,updated_at`, arg.WorkspaceID, arg.CampaignID, arg.DailyLimit, arg.Enabled)
+	var item CampaignDailyLimit
+	err := row.Scan(&item.ID, &item.WorkspaceID, &item.SellerCabinetID, &item.CampaignID, &item.DailyLimit,
+		&item.Enabled, &item.PauseWhenReached, &item.ResumeNextDay, &item.LastCheckedAt, &item.LastActionAt,
+		&item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
 type UpsertWBAdFinanceDocumentParams struct {
 	SellerCabinetID pgtype.UUID
 	ExternalID      string

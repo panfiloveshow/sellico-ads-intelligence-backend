@@ -35,6 +35,7 @@ const (
 var workspaceSyncLocks sync.Map
 
 type syncRunner interface {
+	ListWorkspaceCabinetIDs(ctx context.Context, workspaceID uuid.UUID) ([]uuid.UUID, error)
 	SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
 	SyncCampaignStats(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
@@ -595,7 +596,16 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 	if err != nil {
 		return err
 	}
-	unlock, locked := tryWorkspaceSyncLock(workspaceID)
+	metadata := workspaceTaskMetadata(payload)
+	cabinetID, phase, err := workspaceSyncTaskScope(metadata)
+	if err != nil {
+		return err
+	}
+	lockKey := workspaceID.String() + ":fanout"
+	if cabinetID != nil {
+		lockKey = workspaceID.String() + ":" + cabinetID.String()
+	}
+	unlock, locked := tryWorkspaceSyncLock(lockKey)
 	if !locked {
 		p.logger.Warn().Str("workspace_id", workspaceID.String()).Msg("workspace sync already running, skipping duplicate task")
 		p.markDuplicateWorkspaceSyncSkipped(ctx, payload, workspaceID)
@@ -609,109 +619,51 @@ func (p *Processor) HandleSyncWorkspace(ctx context.Context, task *asynq.Task) e
 
 		p.logger.Info().Str("workspace_id", workspaceID.String()).Msg("sync workspace started")
 
-		// If metadata contains seller_cabinet_id, sync only that cabinet
-		if payload.Metadata != nil {
-			if meta, ok := payload.Metadata.(map[string]any); ok {
-				if cabIDStr, ok := meta["seller_cabinet_id"].(string); ok && cabIDStr != "" {
-					cabinetID, parseErr := uuid.Parse(cabIDStr)
-					if parseErr == nil {
-						phase := stringFromMetadata(meta, "sync_phase")
-						var summary service.SyncSummary
-						var syncErr error
-						if phase != "" {
-							p.logger.Info().Str("cabinet_id", cabIDStr).Str("sync_phase", phase).Msg("starting single cabinet sync phase")
-							summary, syncErr = p.syncService.SyncSingleCabinetPhase(ctx, workspaceID, cabinetID, phase)
-						} else {
-							p.logger.Info().Str("cabinet_id", cabIDStr).Msg("starting single cabinet sync")
-							summary, syncErr = p.syncService.SyncSingleCabinet(ctx, workspaceID, cabinetID)
-						}
-						result := singleCabinetSyncResult(summary, cabIDStr, phase)
-						if retryResult := p.enqueueRateLimitedSingleCabinetRetries(workspaceID, cabinetID, meta, summary); len(retryResult) > 0 {
-							result["phase_retries_queued"] = retryResult
-						}
-						mergeIntoMetadata(result, syncSummaryMetadata(summary))
-						if syncErr != nil {
-							p.notifySyncResult(ctx, workspaceID, "partial", nil)
-							return result, syncErr
-						}
-						p.notifySyncResult(ctx, workspaceID, "ok", nil)
-
-						recommendationTaskStatus, enqueueErr := p.enqueueRecommendationGeneration(workspaceID)
-						if enqueueErr == nil {
-							result["recommendation_generation"] = recommendationTaskStatus
-						}
-						return result, nil
-					}
-				}
+		// Cabinet tasks have independent asynq deadlines and readiness state.
+		if cabinetID != nil {
+			cabIDStr := cabinetID.String()
+			var summary service.SyncSummary
+			var syncErr error
+			if phase != "" {
+				p.logger.Info().Str("cabinet_id", cabIDStr).Str("sync_phase", phase).Msg("starting single cabinet sync phase")
+				summary, syncErr = p.syncService.SyncSingleCabinetPhase(ctx, workspaceID, *cabinetID, phase)
+			} else {
+				p.logger.Info().Str("cabinet_id", cabIDStr).Msg("starting single cabinet sync")
+				summary, syncErr = p.syncService.SyncSingleCabinet(ctx, workspaceID, *cabinetID)
 			}
+			result := singleCabinetSyncResult(summary, cabIDStr, phase)
+			if retryResult := p.enqueueRateLimitedSingleCabinetRetries(workspaceID, *cabinetID, metadata, summary); len(retryResult) > 0 {
+				result["phase_retries_queued"] = retryResult
+			}
+			mergeIntoMetadata(result, syncSummaryMetadata(summary))
+			if syncErr != nil {
+				p.notifySyncResult(ctx, workspaceID, "partial", nil)
+				return result, syncErr
+			}
+			p.notifySyncResult(ctx, workspaceID, "ok", nil)
+
+			recommendationTaskStatus, enqueueErr := p.enqueueRecommendationGeneration(workspaceID)
+			if enqueueErr == nil {
+				result["recommendation_generation"] = recommendationTaskStatus
+			}
+			return result, nil
 		}
 
-		// Default: run the same complete nine-phase pipeline used by an
-		// explicit cabinet sync for every cabinet in the workspace.
-		summary, syncErr := p.syncService.SyncWorkspace(ctx, workspaceID)
-		syncIssueStrings := collectSyncIssues(summary)
-		result := map[string]any{
-			"cabinets":             summary.Cabinets,
-			"campaigns":            summary.Campaigns,
-			"campaign_stats":       summary.CampaignStats,
-			"campaigns_total":      summary.Campaigns,
-			"campaigns_with_stats": summary.CampaignStats,
-			"campaign_budgets":     summary.CampaignBudgets,
-			"ad_balances":          summary.AdBalances,
-			"finance_docs":         summary.FinanceDocs,
-			"sales_funnel":         summary.SalesFunnel,
-			"commission_tariffs":   summary.CommissionTariffs,
-			"phrases":              summary.Phrases,
-			"phrase_stats":         summary.PhraseStats,
-			"phrases_with_stats":   summary.PhraseStats,
-			"products":             summary.Products,
-			"product_stats":        summary.ProductStats,
-			"products_with_stats":  summary.ProductStats,
-			"business_orders":      summary.BusinessOrders,
-			"business_sales":       summary.BusinessSales,
-			"skipped":              summary.SkippedCampaign,
-			"sync_issues":          syncIssueStrings,
-			"wb_errors":            summary.WBErrors,
-			"rate_limited":         summary.RateLimited > 0,
-			"rate_limit_count":     summary.RateLimited,
-			"partial_reasons":      partialReasons(summary.Issues),
-			"rate_limit_endpoint":  summary.RateLimitEndpoint,
-			"retry_after_seconds":  summary.RetryAfterSeconds,
-			"date_from":            summary.DateFrom,
-			"date_to":              summary.DateTo,
-			"campaign_requests": map[string]any{
-				"campaigns":        summary.Campaigns,
-				"campaign_stats":   summary.CampaignStats,
-				"campaign_budgets": summary.CampaignBudgets,
-				"phrases":          summary.Phrases,
-				"phrase_stats":     summary.PhraseStats,
-				"products":         summary.Products,
-				"skipped_campaign": summary.SkippedCampaign,
-			},
+		// Scheduled workspace sync is a fan-out only. Running every cabinet in one
+		// 60-minute context let the first large cabinet starve all later cabinets.
+		cabinetIDs, listErr := p.syncService.ListWorkspaceCabinetIDs(ctx, workspaceID)
+		if listErr != nil {
+			return nil, listErr
 		}
-		if summary.NextAllowedAt != nil {
-			result["next_allowed_at"] = summary.NextAllowedAt.Format(time.RFC3339)
-		}
-
-		if syncErr != nil {
-			p.notifySyncResult(ctx, workspaceID, "partial", syncIssueStrings)
-			return result, syncErr
-		}
-
-		recommendationTaskStatus, enqueueErr := p.enqueueRecommendationGeneration(workspaceID)
+		result, enqueueErr := p.enqueueCabinetSyncFanout(workspaceID, cabinetIDs)
 		if enqueueErr != nil {
-			return nil, enqueueErr
+			return result, enqueueErr
 		}
-		result["recommendation_generation"] = recommendationTaskStatus
-
-		p.notifySyncResult(ctx, workspaceID, "ok", syncIssueStrings)
-
 		return result, nil
 	})
 }
 
-func tryWorkspaceSyncLock(workspaceID uuid.UUID) (func(), bool) {
-	key := workspaceID.String()
+func tryWorkspaceSyncLock(key string) (func(), bool) {
 	value, _ := workspaceSyncLocks.LoadOrStore(key, &sync.Mutex{})
 	lock := value.(*sync.Mutex)
 	if !lock.TryLock() {
@@ -721,6 +673,61 @@ func tryWorkspaceSyncLock(workspaceID uuid.UUID) (func(), bool) {
 		lock.Unlock()
 		workspaceSyncLocks.Delete(key)
 	}, true
+}
+
+func workspaceSyncTaskScope(metadata map[string]any) (*uuid.UUID, string, error) {
+	raw := stringFromMetadata(metadata, "seller_cabinet_id")
+	if raw == "" {
+		return nil, "", nil
+	}
+	cabinetID, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse seller_cabinet_id: %w", err)
+	}
+	return &cabinetID, stringFromMetadata(metadata, "sync_phase"), nil
+}
+
+func (p *Processor) enqueueCabinetSyncFanout(workspaceID uuid.UUID, cabinetIDs []uuid.UUID) (map[string]any, error) {
+	result := map[string]any{
+		"mode":                   "cabinet_fanout",
+		"cabinets":               len(cabinetIDs),
+		"cabinet_tasks_enqueued": 0,
+	}
+	if p.client == nil {
+		return result, fmt.Errorf("task enqueuer is not configured")
+	}
+
+	enqueued := 0
+	duplicates := 0
+	var enqueueErrors []error
+	for _, cabinetID := range cabinetIDs {
+		task, err := NewWorkspaceTaskWithMetadata(TaskSyncWorkspace, workspaceID, nil, map[string]any{
+			"seller_cabinet_id": cabinetID.String(),
+			"trigger":           "scheduled_workspace_fanout",
+		})
+		if err != nil {
+			enqueueErrors = append(enqueueErrors, fmt.Errorf("cabinet %s task: %w", cabinetID, err))
+			continue
+		}
+		_, err = p.client.Enqueue(task,
+			asynq.Queue(QueueWBSync),
+			asynq.MaxRetry(0),
+			asynq.Timeout(workspaceSyncTaskTimeout),
+			asynq.Unique(55*time.Minute),
+		)
+		if errors.Is(err, asynq.ErrDuplicateTask) {
+			duplicates++
+			continue
+		}
+		if err != nil {
+			enqueueErrors = append(enqueueErrors, fmt.Errorf("cabinet %s enqueue: %w", cabinetID, err))
+			continue
+		}
+		enqueued++
+	}
+	result["cabinet_tasks_enqueued"] = enqueued
+	result["cabinet_tasks_duplicate"] = duplicates
+	return result, errors.Join(enqueueErrors...)
 }
 
 func (p *Processor) markDuplicateWorkspaceSyncSkipped(ctx context.Context, payload WorkspaceTaskPayload, workspaceID uuid.UUID) {

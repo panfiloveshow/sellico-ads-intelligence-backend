@@ -39,6 +39,56 @@ type campaignActionServicer interface {
 	UpdateCampaignProducts(ctx context.Context, workspaceID, campaignID, actorID uuid.UUID, input service.CampaignProductChangeInput) (wb.CampaignProductUpdateResult, error)
 	ListBidHistory(ctx context.Context, workspaceID, campaignID uuid.UUID, limit, offset int32) ([]domain.BidChange, error)
 	ApplyRecommendation(ctx context.Context, workspaceID, recommendationID, actorID uuid.UUID) (*domain.Recommendation, error)
+	GetDailyLimit(ctx context.Context, workspaceID, campaignID uuid.UUID) (*service.CampaignDailyLimitView, error)
+	UpdateDailyLimit(ctx context.Context, workspaceID, campaignID uuid.UUID, dailyLimit int64, enabled bool) (*service.CampaignDailyLimitView, error)
+}
+
+type campaignDailyLimitRequest struct {
+	DailyLimit int64 `json:"daily_limit"`
+	Enabled    bool  `json:"enabled"`
+}
+
+func (h *CampaignActionHandler) GetDailyLimit(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	campaignID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid campaign id")
+		return
+	}
+	result, err := h.actions.GetDailyLimit(r.Context(), workspaceID, campaignID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *CampaignActionHandler) UpdateDailyLimit(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	campaignID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid campaign id")
+		return
+	}
+	var input campaignDailyLimitRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	result, err := h.actions.UpdateDailyLimit(r.Context(), workspaceID, campaignID, input.DailyLimit, input.Enabled)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, result)
 }
 
 type campaignPhraseServicer interface {

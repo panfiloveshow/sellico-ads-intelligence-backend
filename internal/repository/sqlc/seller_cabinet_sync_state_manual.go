@@ -48,6 +48,7 @@ ON CONFLICT (seller_cabinet_id) DO UPDATE SET
 
 type CompleteSellerCabinetSyncParams struct {
 	SellerCabinetID   pgtype.UUID
+	WorkspaceID       pgtype.UUID
 	Status            string
 	CompletedAt       pgtype.Timestamptz
 	DataThroughDate   pgtype.Date
@@ -60,17 +61,24 @@ type CompleteSellerCabinetSyncParams struct {
 
 func (q *Queries) CompleteSellerCabinetSync(ctx context.Context, arg CompleteSellerCabinetSyncParams) error {
 	_, err := q.db.Exec(ctx, `
-UPDATE seller_cabinet_sync_states SET
-  status = $2,
-  completed_at = $3,
-  data_through_date = $4,
-  issue_count = $5,
-  wb_error_count = $6,
-  rate_limited = $7,
-  retry_after_seconds = $8,
-  last_error = $9,
+INSERT INTO seller_cabinet_sync_states (
+  seller_cabinet_id, workspace_id, status, started_at, completed_at,
+  data_through_date, issue_count, wb_error_count, rate_limited,
+  retry_after_seconds, last_error
+)
+VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (seller_cabinet_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  status = EXCLUDED.status,
+  completed_at = EXCLUDED.completed_at,
+  data_through_date = EXCLUDED.data_through_date,
+  issue_count = EXCLUDED.issue_count,
+  wb_error_count = EXCLUDED.wb_error_count,
+  rate_limited = EXCLUDED.rate_limited,
+  retry_after_seconds = EXCLUDED.retry_after_seconds,
+  last_error = EXCLUDED.last_error,
   updated_at = NOW()
-WHERE seller_cabinet_id = $1`, arg.SellerCabinetID, arg.Status, arg.CompletedAt,
+	`, arg.SellerCabinetID, arg.WorkspaceID, arg.Status, arg.CompletedAt,
 		arg.DataThroughDate, arg.IssueCount, arg.WBErrorCount, arg.RateLimited,
 		arg.RetryAfterSeconds, arg.LastError)
 	return err

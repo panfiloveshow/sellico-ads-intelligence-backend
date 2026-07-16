@@ -13,6 +13,7 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/envelope"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/pagination"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/dto"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/middleware"
 )
@@ -26,10 +27,21 @@ type strategyServicer interface {
 	Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error
 	AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error)
 	DetachBinding(ctx context.Context, workspaceID, bindingID uuid.UUID) error
+	Activity(ctx context.Context, workspaceID, strategyID uuid.UUID) (*domain.StrategyActivity, error)
+	ListEvaluationRuns(ctx context.Context, workspaceID, strategyID uuid.UUID, limit, offset int32) ([]domain.StrategyEvaluationRun, error)
+	GetEvaluationRun(ctx context.Context, workspaceID, strategyID, runID uuid.UUID) (*domain.StrategyEvaluationRun, error)
+	UpdateBindingRollout(ctx context.Context, workspaceID, strategyID, bindingID, actorID uuid.UUID, input service.StrategyRolloutUpdate) (*domain.StrategyBindingRollout, error)
+	UpdateStrategyRollout(ctx context.Context, workspaceID, strategyID, actorID uuid.UUID, input service.StrategyRolloutUpdate) ([]domain.StrategyBindingRollout, error)
 }
 
 type StrategyHandler struct {
-	svc strategyServicer
+	svc        strategyServicer
+	runTrigger func(context.Context, uuid.UUID) error
+}
+
+func (h *StrategyHandler) WithRunTrigger(trigger func(context.Context, uuid.UUID) error) *StrategyHandler {
+	h.runTrigger = trigger
+	return h
 }
 
 func NewStrategyHandler(svc strategyServicer) *StrategyHandler {
@@ -179,6 +191,170 @@ func (h *StrategyHandler) ListShadowDecisions(w http.ResponseWriter, r *http.Req
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{
 		Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items)),
 	})
+}
+
+func (h *StrategyHandler) Activity(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	activity, err := h.svc.Activity(r.Context(), workspaceID, strategyID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, activity)
+}
+
+func (h *StrategyHandler) ListEvaluationRuns(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	pg := pagination.Parse(r)
+	items, err := h.svc.ListEvaluationRuns(r.Context(), workspaceID, strategyID, int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: int64(len(items))})
+}
+
+func (h *StrategyHandler) GetEvaluationRun(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	runID, err := uuid.Parse(chi.URLParam(r, "runId"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid run id")
+		return
+	}
+	run, err := h.svc.GetEvaluationRun(r.Context(), workspaceID, strategyID, runID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, run)
+}
+
+func (h *StrategyHandler) TriggerRun(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	if _, err := h.svc.Get(r.Context(), workspaceID, strategyID); err != nil {
+		writeAppError(w, err)
+		return
+	}
+	if h.runTrigger == nil {
+		writeAppError(w, apperror.New(apperror.ErrInternal, "strategy run trigger is unavailable"))
+		return
+	}
+	if err := h.runTrigger(r.Context(), workspaceID); err != nil {
+		writeAppError(w, apperror.New(apperror.ErrInternal, "failed to enqueue strategy run"))
+		return
+	}
+	dto.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "enqueued", "strategy_id": strategyID})
+}
+
+func decodeStrategyRollout(w http.ResponseWriter, r *http.Request) (service.StrategyRolloutUpdate, bool) {
+	var input service.StrategyRolloutUpdate
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return input, false
+	}
+	return input, true
+}
+
+func requestActorID(r *http.Request) (uuid.UUID, bool) {
+	actorID, ok := r.Context().Value(middleware.UserIDKey).(uuid.UUID)
+	return actorID, ok && actorID != uuid.Nil
+}
+
+func (h *StrategyHandler) UpdateRollout(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	actorID, ok := requestActorID(r)
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "missing user"))
+		return
+	}
+	input, ok := decodeStrategyRollout(w, r)
+	if !ok {
+		return
+	}
+	rollouts, err := h.svc.UpdateStrategyRollout(r.Context(), workspaceID, strategyID, actorID, input)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, rollouts)
+}
+
+func (h *StrategyHandler) UpdateBindingRollout(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrValidation, "missing workspace id"))
+		return
+	}
+	strategyID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid strategy id")
+		return
+	}
+	bindingID, err := uuid.Parse(chi.URLParam(r, "bindingId"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid binding id")
+		return
+	}
+	actorID, ok := requestActorID(r)
+	if !ok {
+		writeAppError(w, apperror.New(apperror.ErrUnauthorized, "missing user"))
+		return
+	}
+	input, ok := decodeStrategyRollout(w, r)
+	if !ok {
+		return
+	}
+	rollout, err := h.svc.UpdateBindingRollout(r.Context(), workspaceID, strategyID, bindingID, actorID, input)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, rollout)
 }
 
 func (h *StrategyHandler) List(w http.ResponseWriter, r *http.Request) {

@@ -609,6 +609,64 @@ func TestGetSearchClusterStatsWithNMIDs_ChunksNormQueryStatsItems(t *testing.T) 
 	assert.Equal(t, int64(1100), batches[1].Items[0].NMID)
 }
 
+func TestGetSearchClusterStatsWithNMIDs_ReturnsPartialRowsWhenBidFetchFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/adv/v1/normquery/stats":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"items":[{"advertId":42,"nmId":111,"dailyStats":[{"date":"2025-05-06","stat":{"normQuery":"shoes","views":200,"clicks":20,"orders":3,"spend":30}}]}]}`))
+		case "/adv/v0/normquery/get-bids":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"temporary"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	rows, err := newTestClient(server.URL).GetSearchClusterStatsWithNMIDs(context.Background(), "token", 42, []int64{111})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normquery bids unavailable")
+	require.Len(t, rows, 1)
+	assert.Equal(t, "shoes", rows[0].NormQuery)
+	assert.Nil(t, rows[0].CurrentBid)
+}
+
+func TestGetSearchClusterStatsWithNMIDs_MarksMissingBidSubsetIncomplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/adv/v1/normquery/stats":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"items":[{"advertId":42,"nmId":111,"dailyStats":[{"date":"2025-05-06","appTypeStats":[{"stats":[{"normQuery":"shoes","views":20},{"normQuery":"boots","views":10}]}]}]}]}`))
+		case "/adv/v0/normquery/get-bids":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"bids":[{"advert_id":42,"nm_id":111,"bid":150,"norm_query":"shoes"}]}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	rows, err := newTestClient(server.URL).GetSearchClusterStatsWithNMIDs(context.Background(), "token", 42, []int64{111})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normquery bids incomplete: missing 1 of 2")
+	require.Len(t, rows, 2)
+	withBid := 0
+	withoutBid := 0
+	for _, row := range rows {
+		if row.CurrentBid == nil {
+			withoutBid++
+		} else {
+			withBid++
+			assert.Equal(t, int64(150), *row.CurrentBid)
+		}
+	}
+	assert.Equal(t, 1, withBid)
+	assert.Equal(t, 1, withoutBid)
+}
+
 func TestGetRecommendedBids_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/advert/v0/bids/recommendations", r.URL.Path)

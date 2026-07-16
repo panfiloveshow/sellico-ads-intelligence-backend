@@ -22,13 +22,21 @@ import (
 )
 
 type fakeSyncRunner struct {
-	syncWorkspaceFn     func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncCampaignsFn     func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncCampaignStatsFn func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncPhrasesFn       func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncProductsFn      func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
-	syncSingleCabinetFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (service.SyncSummary, error)
-	syncCabinetPhaseFn  func(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (service.SyncSummary, error)
+	listWorkspaceCabinetIDsFn func(ctx context.Context, workspaceID uuid.UUID) ([]uuid.UUID, error)
+	syncWorkspaceFn           func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncCampaignsFn           func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncCampaignStatsFn       func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncPhrasesFn             func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncProductsFn            func(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error)
+	syncSingleCabinetFn       func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (service.SyncSummary, error)
+	syncCabinetPhaseFn        func(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (service.SyncSummary, error)
+}
+
+func (f *fakeSyncRunner) ListWorkspaceCabinetIDs(ctx context.Context, workspaceID uuid.UUID) ([]uuid.UUID, error) {
+	if f.listWorkspaceCabinetIDsFn == nil {
+		return nil, errors.New("unexpected ListWorkspaceCabinetIDs call")
+	}
+	return f.listWorkspaceCabinetIDsFn(ctx, workspaceID)
 }
 
 func (f *fakeSyncRunner) SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (service.SyncSummary, error) {
@@ -419,20 +427,16 @@ func TestHandleSyncProducts_FailedSyncMarksJobRunFailedWithoutEnqueue(t *testing
 	}
 }
 
-func TestHandleSyncWorkspace_EnqueuesRecommendationAfterFullRun(t *testing.T) {
+func TestHandleSyncWorkspace_FansOutPerCabinet(t *testing.T) {
 	workspaceID := uuid.New()
+	cabinetIDs := []uuid.UUID{uuid.New(), uuid.New()}
 	db := newFakeJobRunDB()
 	queries := sqlcgen.New(db)
 	enqueuer := &fakeTaskEnqueuer{}
 	processor := NewProcessor(&fakeSyncRunner{
-		syncWorkspaceFn: func(_ context.Context, actualWorkspaceID uuid.UUID) (service.SyncSummary, error) {
+		listWorkspaceCabinetIDsFn: func(_ context.Context, actualWorkspaceID uuid.UUID) ([]uuid.UUID, error) {
 			assert.Equal(t, workspaceID, actualWorkspaceID)
-			return service.SyncSummary{
-				Cabinets: 2, Campaigns: 7, CampaignStats: 9,
-				Phrases: 11, PhraseStats: 12, Products: 5,
-				SkippedCampaign: 3, AdBalances: 2, FinanceDocs: 4,
-				SalesFunnel: 6, CommissionTariffs: 8,
-			}, nil
+			return cabinetIDs, nil
 		},
 	}, queries, nil, nil, enqueuer, zerolog.Nop())
 
@@ -442,8 +446,20 @@ func TestHandleSyncWorkspace_EnqueuesRecommendationAfterFullRun(t *testing.T) {
 	err = processor.HandleSyncWorkspace(context.Background(), task)
 
 	require.NoError(t, err)
-	require.Len(t, enqueuer.tasks, 1)
-	assert.Equal(t, TaskGenerateRecommendations, enqueuer.tasks[0].taskType)
+	require.Len(t, enqueuer.tasks, 2)
+	seen := map[string]bool{}
+	for _, enqueued := range enqueuer.tasks {
+		assert.Equal(t, TaskSyncWorkspace, enqueued.taskType)
+		var child WorkspaceTaskPayload
+		require.NoError(t, json.Unmarshal(enqueued.payload, &child))
+		meta, ok := child.Metadata.(map[string]any)
+		require.True(t, ok)
+		seen[meta["seller_cabinet_id"].(string)] = true
+		assert.Equal(t, "scheduled_workspace_fanout", meta["trigger"])
+	}
+	for _, cabinetID := range cabinetIDs {
+		assert.True(t, seen[cabinetID.String()])
+	}
 	require.Len(t, db.jobRuns, 1)
 	for _, jobRun := range db.jobRuns {
 		assert.Equal(t, TaskSyncWorkspace, jobRun.TaskType)
@@ -453,17 +469,9 @@ func TestHandleSyncWorkspace_EnqueuesRecommendationAfterFullRun(t *testing.T) {
 		payload, ok := metadata["payload"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, workspaceID.String(), payload["workspace_id"])
-		assert.Equal(t, float64(7), metadata["campaigns"])
-		assert.Equal(t, float64(9), metadata["campaign_stats"])
-		assert.Equal(t, float64(11), metadata["phrases"])
-		assert.Equal(t, float64(12), metadata["phrase_stats"])
-		assert.Equal(t, float64(5), metadata["products"])
-		assert.Equal(t, float64(3), metadata["skipped"])
-		assert.Equal(t, float64(2), metadata["ad_balances"])
-		assert.Equal(t, float64(4), metadata["finance_docs"])
-		assert.Equal(t, float64(6), metadata["sales_funnel"])
-		assert.Equal(t, float64(8), metadata["commission_tariffs"])
-		assert.Equal(t, "enqueued", metadata["recommendation_generation"])
+		assert.Equal(t, "cabinet_fanout", metadata["mode"])
+		assert.Equal(t, float64(2), metadata["cabinets"])
+		assert.Equal(t, float64(2), metadata["cabinet_tasks_enqueued"])
 	}
 }
 

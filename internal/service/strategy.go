@@ -458,6 +458,9 @@ func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strate
 		}
 		return nil, apperror.New(apperror.ErrInternal, "failed to attach strategy")
 	}
+	if _, err := qtx.EnsureStrategyBindingRollout(ctx, uuidToPgtype(workspaceID), uuidToPgtype(strategyID), row.ID); err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to initialize strategy rollout")
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to commit strategy binding ownership")
 	}

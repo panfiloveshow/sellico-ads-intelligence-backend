@@ -835,6 +835,26 @@ paths:
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
 
+  /api/v1/campaigns/{id}/daily-limit:
+    get:
+      tags: [Campaigns]
+      summary: Get the campaign autopilot daily spend limit
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }, { $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Daily limit, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignDailyLimitEnvelope" } } } }
+    put:
+      tags: [Campaigns]
+      summary: Set the campaign autopilot daily spend limit
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }, { $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CampaignDailyLimitInput" } } }
+      responses:
+        "200": { description: Updated daily limit, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignDailyLimitEnvelope" } } } }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+
   /api/v1/campaigns/{id}/cluster-bids:
     post:
       tags: [Campaigns]
@@ -2718,6 +2738,50 @@ paths:
                 $ref: "#/components/schemas/StrategyBinding"
         "400":
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/strategies/{id}/activity:
+    get:
+      tags: [Strategies]
+      summary: Explain current per-binding autopilot activity
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }, { $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Strategy activity, content: { application/json: { schema: { $ref: "#/components/schemas/StrategyActivityEnvelope" } } } }
+  /api/v1/strategies/{id}/run:
+    post:
+      tags: [Strategies]
+      summary: Enqueue an immediate workspace autobid evaluation
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }, { $ref: "#/components/parameters/Id" }]
+      responses:
+        "202": { description: Enqueued, content: { application/json: { schema: { type: object } } } }
+  /api/v1/strategies/{id}/runs:
+    get:
+      tags: [Strategies]
+      summary: List durable strategy evaluation runs
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }, { $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/PerPage" }]
+      responses:
+        "200": { description: Evaluation runs, content: { application/json: { schema: { type: object } } } }
+  /api/v1/strategies/{id}/runs/{runId}:
+    get:
+      tags: [Strategies]
+      summary: Get an evaluation run with facts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - { name: runId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Evaluation run, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/StrategyEvaluationRun" } } } } } }
+  /api/v1/strategies/{id}/rollout:
+    put:
+      tags: [Strategies]
+      summary: Update rollout intent for all strategy bindings
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }, { $ref: "#/components/parameters/Id" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/StrategyRolloutInput" } } } }
+      responses:
+        "200": { description: Updated rollouts, content: { application/json: { schema: { type: object } } } }
   /api/v1/strategies/{id}/shadow-decisions:
     get:
       tags: [Strategies]
@@ -2759,6 +2823,18 @@ paths:
           description: Binding removed
         "404":
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/strategies/{id}/bindings/{bindingId}/rollout:
+    put:
+      tags: [Strategies]
+      summary: Update one binding rollout intent
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Id"
+        - { name: bindingId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/StrategyRolloutInput" } } } }
+      responses:
+        "200": { description: Updated rollout, content: { application/json: { schema: { type: object } } } }
 
   # --- Semantics: Keywords + Clusters ---
   /api/v1/keywords:
@@ -4938,6 +5014,8 @@ components:
           $ref: "#/components/schemas/RecommendationThresholds"
         notifications:
           $ref: "#/components/schemas/NotificationSettings"
+        automation:
+          $ref: "#/components/schemas/AutomationSettings"
 
     WorkspaceSettingsInput:
       type: object
@@ -4947,6 +5025,109 @@ components:
           $ref: "#/components/schemas/RecommendationThresholds"
         notifications:
           $ref: "#/components/schemas/NotificationSettings"
+        automation:
+          $ref: "#/components/schemas/AutomationSettings"
+
+    AutomationSettings:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        manual_hold: { type: boolean }
+        hold_reason: { type: string }
+        max_bid_changes_per_day: { type: integer, minimum: 0 }
+
+    StrategyRolloutInput:
+      type: object
+      required: [desired_mode]
+      properties:
+        desired_mode: { type: string, enum: [live, shadow] }
+        manual_hold: { type: boolean }
+        hold_reason: { type: string }
+
+    StrategyBindingRollout:
+      type: object
+      properties:
+        binding_id: { type: string, format: uuid }
+        strategy_id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        desired_mode: { type: string, enum: [live, shadow] }
+        state: { type: string, enum: [shadow_validating, live, blocked, manual_hold] }
+        manual_hold: { type: boolean }
+        hold_reason: { type: string }
+        last_block_code: { type: string }
+        last_block_detail: { type: string }
+        validation_started_at: { type: string, format: date-time }
+        live_enabled_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time }
+
+    StrategyEvaluationFact:
+      type: object
+      required: [id, run_id, code, status, outcome, source, value, observed_at]
+      properties:
+        id: { type: string, format: uuid }
+        run_id: { type: string, format: uuid }
+        code: { type: string }
+        status: { type: string, enum: [observed, passed, blocked, error] }
+        outcome: { type: string, enum: [blocked, ready_no_change, would_apply, claimed, applied, failed, unknown] }
+        source: { type: string }
+        value: { type: object, additionalProperties: true }
+        observed_at: { type: string, format: date-time }
+
+    StrategyEvaluationRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        strategy_id: { type: string, format: uuid }
+        strategy_binding_id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid, nullable: true }
+        product_id: { type: string, format: uuid, nullable: true }
+        automation_level: { type: integer, minimum: 1, maximum: 4 }
+        rollout_state: { type: string, enum: [shadow_validating, live, blocked, manual_hold] }
+        apply_requested: { type: boolean }
+        outcome: { type: string, enum: [evaluating, no_decision, blocked, shadow_decision, claimed, applied, failed, unknown] }
+        reason_code: { type: string }
+        reason_detail: { type: string }
+        proposed_actions: { type: integer }
+        applied_actions: { type: integer }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+        facts: { type: array, items: { $ref: "#/components/schemas/StrategyEvaluationFact" } }
+
+    StrategyActivityEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            strategy_id: { type: string, format: uuid }
+            status: { type: string, enum: [shadow_validating, live, blocked, manual_hold, idle] }
+            next_check_at: { type: string, format: date-time, nullable: true }
+            campaigns: { type: array, items: { type: object } }
+            latest_run: { $ref: "#/components/schemas/StrategyEvaluationRun" }
+            facts: { type: array, items: { $ref: "#/components/schemas/StrategyEvaluationFact" } }
+            blockers: { type: array, items: { type: object } }
+            data_freshness: { type: object }
+
+    CampaignDailyLimitInput:
+      type: object
+      required: [daily_limit, enabled]
+      properties:
+        daily_limit: { type: integer, format: int64, minimum: 0 }
+        enabled: { type: boolean }
+
+    CampaignDailyLimitEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            campaign_id: { type: string, format: uuid }
+            daily_limit: { type: integer, format: int64 }
+            enabled: { type: boolean }
+            pause_when_reached: { type: boolean }
+            resume_next_day: { type: boolean }
+            updated_at: { type: string, format: date-time }
 
     WorkspaceSettingsEnvelope:
       type: object
@@ -5021,7 +5202,7 @@ components:
         name: { type: string }
         type:
           type: string
-          enum: [acos, roas, anti_sliv, dayparting, recommendation]
+          enum: [acos, roas, anti_sliv, dayparting, search_playbook]
         params:
           $ref: "#/components/schemas/StrategyParams"
         is_active: { type: boolean }
@@ -5060,7 +5241,7 @@ components:
         proposed_bid: { type: integer }
         reason: { type: string }
         metrics: { type: object, additionalProperties: true }
-        automation_level: { type: integer, enum: [1, 2] }
+        automation_level: { type: integer, enum: [1, 2, 3, 4] }
         bid_observed_at: { type: string, format: date-time }
         first_seen_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time }

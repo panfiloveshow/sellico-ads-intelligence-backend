@@ -115,6 +115,7 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 				Str("strategy_type", strategy.Type).
 				Str("reason", reason).
 				Msg("skipping bid automation because strategy is not allowed to auto-apply actions")
+			s.recordStrategyBlocked(ctx, strategy, "strategy_not_executable", reason)
 			continue
 		}
 		shadowMode := strategy.Params.Merged().AutomationLevel < 3
@@ -124,6 +125,7 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 				Str("strategy_id", strategy.ID.String()).
 				Str("reason", workspaceAutoApplyBlockReason).
 				Msg("skipping live bid automation because workspace auto-apply is disabled")
+			s.recordStrategyBlocked(ctx, strategy, "workspace_automation_blocked", workspaceAutoApplyBlockReason)
 			continue
 		}
 		state, stateErr := s.queries.GetSellerCabinetSyncState(ctx, uuidToPgtype(strategy.SellerCabinetID))
@@ -134,6 +136,7 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 		if reason := sellerCabinetAutomationGuardrailReason(state, stateErr == nil, strategy.Params.Merged().MaxDataAgeHours, time.Now()); reason != "" {
 			s.logger.Warn().Str("workspace_id", workspaceID.String()).Str("seller_cabinet_id", strategy.SellerCabinetID.String()).
 				Str("reason", reason).Msg("skipping bid automation because cabinet sync state is not ready")
+			s.recordStrategyBlocked(ctx, strategy, "cabinet_sync_not_ready", reason)
 			continue
 		}
 		if reason, guardErr := s.wbActionRateLimitGuardrail(ctx, strategy.SellerCabinetID); !shadowMode && guardErr != nil {
@@ -149,6 +152,7 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 				Str("seller_cabinet_id", strategy.SellerCabinetID.String()).
 				Str("reason", reason).
 				Msg("skipping bid automation because WB campaign actions are cooling down")
+			s.recordStrategyBlocked(ctx, strategy, "wb_rate_limit_cooldown", reason)
 			continue
 		}
 
@@ -381,6 +385,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 	// Get WB API token for this cabinet
 	token, err := s.decryptCabinetToken(ctx, strategy.SellerCabinetID)
 	if err != nil {
+		s.recordStrategyBlocked(ctx, strategy, "cabinet_token_unavailable", err.Error())
 		return 0, err
 	}
 
@@ -393,10 +398,12 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 	decisionDateTo := lastClosedCampaignStatDate(now)
 
 	for _, binding := range strategy.Bindings {
+		evaluation, bindingApplyToWB := s.beginBindingEvaluation(ctx, strategy, binding, applyToWB)
 		if binding.CampaignID == nil {
+			evaluation.block(ctx, "campaign_binding_missing", "strategy binding has no campaign", true)
 			continue
 		}
-		if applyToWB {
+		if bindingApplyToWB {
 			if reason, guardErr := s.wbActionRateLimitGuardrail(ctx, strategy.SellerCabinetID); guardErr != nil {
 				s.logger.Warn().
 					Err(guardErr).
@@ -417,32 +424,46 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 
 		campaign, err := s.queries.GetCampaignByID(ctx, uuidToPgtype(*binding.CampaignID))
 		if err != nil {
+			evaluation.block(ctx, "campaign_unavailable", err.Error(), true)
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s campaign: %w", binding.ID, err))
 			continue
 		}
 		if reason := automationCampaignSkipReason(campaign); reason != "" {
 			s.logger.Info().Str("campaign_id", binding.CampaignID.String()).Str("reason", reason).
 				Msg("skipping campaign that is not safe for automatic product bid updates")
+			evaluation.block(ctx, "campaign_not_active", reason, true)
 			continue
 		}
 		if isManualCPMCampaign(campaign) {
 			clusterChanges, clusterErr := s.executeManualCPMClusters(
-				ctx, workspaceID, strategy, binding, campaign, token, applyToWB,
+				ctx, workspaceID, strategy, binding, campaign, token, bindingApplyToWB, evaluation,
 				now, dateFrom, decisionDateTo,
 			)
 			changes += clusterChanges
 			if clusterErr != nil {
+				evaluation.finish(ctx, domain.EvaluationFailed, "cluster_evaluation_failed", clusterErr.Error(), 0, clusterChanges, domain.FactFailed)
 				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s cluster automation: %w", binding.ID, clusterErr))
+			} else if clusterEvaluationCompletion(evaluation, clusterChanges) == "applied" {
+				evaluation.finish(ctx, domain.EvaluationApplied, "cluster_bid_applied", "WB cluster bid action applied", clusterChanges, clusterChanges, domain.FactApplied)
+			} else if clusterEvaluationCompletion(evaluation, clusterChanges) == "blocked" {
+				evaluation.block(ctx, "no_fully_evaluated_targets", "all normquery targets were blocked before a complete evaluation", true)
+			} else if clusterEvaluationCompletion(evaluation, clusterChanges) == "shadow_decision" {
+				evaluation.finish(ctx, domain.EvaluationShadowDecision, "cluster_would_apply", "validated cluster bid decisions were recorded without a WB write", evaluation.proposedTargets, 0, domain.FactWouldApply)
+				evaluation.promoteAfterValidation(ctx)
+			} else if evaluation != nil && !evaluation.closed {
+				evaluation.readyNoChange(ctx, "cluster_ready_no_change", "eligible clusters produced no bid change")
 			}
 			continue
 		}
 		targetNMID, targetErr := s.bidTargetNMID(ctx, strategy, campaign, binding)
 		if targetErr != nil {
+			evaluation.block(ctx, "binding_target_invalid", targetErr.Error(), true)
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s target: %w", binding.ID, targetErr))
 			continue
 		}
 		placement, placementErr := automationBidPlacement(campaign)
 		if placementErr != nil {
+			evaluation.block(ctx, "campaign_placement_unavailable", placementErr.Error(), true)
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s placement: %w", binding.ID, placementErr))
 			continue
 		}
@@ -458,6 +479,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			Offset:     0,
 		})
 		if err != nil {
+			evaluation.block(ctx, "campaign_stats_unavailable", err.Error(), true)
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s stats: %w", binding.ID, err))
 			continue
 		}
@@ -476,6 +498,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			stats = campaignStatsFromProductStats(productStats)
 		}
 		if len(stats) == 0 {
+			evaluation.block(ctx, "campaign_stats_missing", "no campaign statistics in lookback window", true)
 			continue
 		}
 
@@ -488,6 +511,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			s.logger.Info().
 				Str("campaign_id", binding.CampaignID.String()).
 				Msg("skipping bid automation because no completed-day campaign stats are available")
+			evaluation.block(ctx, "completed_stats_missing", "no completed-day campaign stats are available", true)
 			continue
 		}
 		if stale, age := campaignStatsAreStale(decisionStats, params.MaxDataAgeHours, now); stale {
@@ -496,6 +520,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Dur("age", age).
 				Int("max_data_age_hours", params.MaxDataAgeHours).
 				Msg("skipping bid automation because completed-day campaign stats are stale")
+			evaluation.block(ctx, "campaign_stats_stale", fmt.Sprintf("completed-day campaign stats age %s", age), true)
 			continue
 		}
 
@@ -509,12 +534,14 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Msg("skipping bid automation because current bid could not be loaded")
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s current bid: %w", binding.ID, bidErr))
+			evaluation.block(ctx, "current_bid_unavailable", bidErr.Error(), true)
 			continue
 		}
 		if !ok {
 			s.logger.Warn().
 				Str("campaign_id", binding.CampaignID.String()).
 				Msg("skipping bid automation because real current bid is unavailable or ambiguous")
+			evaluation.block(ctx, "current_bid_ambiguous", "real current bid is unavailable or ambiguous", true)
 			continue
 		}
 
@@ -546,6 +573,11 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		decision := s.engine.CalculateBid(strategy, bidCtx)
 
 		if decision == nil {
+			if bidCtx.IncreaseGuardrail != nil && !bidCtx.IncreaseGuardrail.Allowed {
+				evaluation.block(ctx, "bid_increase_readiness_blocked", bidCtx.IncreaseGuardrail.Reason, true)
+				continue
+			}
+			evaluation.readyNoChange(ctx, "engine_ready_no_change", "all required inputs were evaluated; no bid change is needed")
 			continue
 		}
 		if reason := recentClicksIncreaseGuardrailReason(stats, decision, time.Now()); reason != "" {
@@ -554,6 +586,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Str("reason", reason).
 				Msg("skipping bid automation because recent click guardrail blocked the increase")
+			evaluation.block(ctx, "recent_clicks_guardrail", reason, false)
 			continue
 		}
 		if reason := dailyBudgetIncreaseGuardrailReason(campaign, campaignStats, decision, time.Now()); reason != "" {
@@ -562,6 +595,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Str("reason", reason).
 				Msg("skipping bid automation because daily budget guardrail blocked the increase")
+			evaluation.block(ctx, "daily_budget_guardrail", reason, false)
 			continue
 		}
 		if reason, financialErr := s.financialIncreaseGuardrail(ctx, campaign, campaignStats, decision, now); financialErr != nil {
@@ -570,6 +604,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		} else if reason != "" {
 			s.logger.Info().Str("strategy_id", strategy.ID.String()).Str("campaign_id", binding.CampaignID.String()).
 				Str("reason", reason).Msg("skipping bid automation because financial guardrail blocked the increase")
+			evaluation.block(ctx, "financial_guardrail", reason, false)
 			continue
 		}
 		if reason, err := s.bidActionGuardrail(ctx, strategy, binding, *binding.CampaignID, decision); err != nil {
@@ -586,6 +621,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Str("reason", reason).
 				Msg("skipping bid automation because action guardrail blocked the change")
+			evaluation.block(ctx, "action_guardrail", reason, false)
 			continue
 		}
 
@@ -596,6 +632,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		} else if reason != "" {
 			s.logger.Info().Str("campaign_id", binding.CampaignID.String()).Str("reason", reason).
 				Msg("skipping bid decrease because dynamic WB minimum bid blocked it")
+			evaluation.block(ctx, "wb_minimum_bid_guardrail", reason, false)
 			continue
 		}
 		oldBid32, oldBidErr := checkedInt32(decision.OldBid)
@@ -608,11 +645,13 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 			bindingErrors = append(bindingErrors, fmt.Errorf("binding %s new bid: %w", binding.ID, newBidErr))
 			continue
 		}
-		if !applyToWB {
+		if !bindingApplyToWB {
 			if shadowErr := s.recordShadowBidDecision(ctx, workspaceID, strategy, binding, campaign, targetNMID, decision, bidCtx, observedAt, dateFrom, decisionDateTo, oldBid32, newBid32); shadowErr != nil {
+				evaluation.finish(ctx, domain.EvaluationFailed, "shadow_decision_persist_failed", shadowErr.Error(), 1, 0, domain.FactFailed)
 				bindingErrors = append(bindingErrors, fmt.Errorf("binding %s record shadow decision: %w", binding.ID, shadowErr))
 				continue
 			}
+			evaluation.shadowDecision(ctx, "would_apply_bid_change", decision.Reason)
 			s.logger.Info().
 				Str("strategy_id", strategy.ID.String()).
 				Str("campaign_id", binding.CampaignID.String()).
@@ -637,6 +676,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Str("placement", decision.Placement).
 				Msg("skipping live bid write while an earlier action outcome is unresolved")
+			evaluation.block(ctx, "unresolved_prior_action", "an earlier action outcome is unresolved", false)
 			continue
 		}
 		maxWorkspaceChangesPerDay, capBlockReason, capErr := s.currentWorkspaceAutomationCap(ctx, workspaceID)
@@ -647,6 +687,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		if capBlockReason != "" {
 			s.logger.Warn().Str("strategy_id", strategy.ID.String()).Str("campaign_id", binding.CampaignID.String()).
 				Str("reason", capBlockReason).Msg("blocked live bid claim because current workspace automation settings are not ready")
+			evaluation.block(ctx, "workspace_daily_cap_blocked", capBlockReason, false)
 			continue
 		}
 		dayStart, dayEnd := automationBidDayWindow(time.Now())
@@ -666,6 +707,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 		}
 		if !claimed {
 			s.logger.Info().Str("automation_key", automationKey).Msg("skipping duplicate automation action")
+			evaluation.block(ctx, "duplicate_action", "same observed bid transition was already claimed", false)
 			continue
 		}
 		if automationClaim.Status == "blocked" {
@@ -674,9 +716,11 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Int("max_bid_changes_per_day", maxWorkspaceChangesPerDay).
 				Msg("blocked live bid write because the workspace daily action limit was reached")
+			evaluation.block(ctx, "workspace_daily_cap_reached", "workspace daily action limit was reached", false)
 			break
 		}
 		automationActionID := automationClaim.ID
+		evaluation.fact(ctx, "action_claimed", "passed", domain.FactClaimed, "wb_bid_actions", map[string]any{"automation_action_id": uuidFromPgtype(automationActionID)})
 
 		// Re-check mutable operator controls after the durable claim and immediately
 		// before the external side effect. A blocked claim is terminal for this stale
@@ -702,6 +746,7 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 				Str("campaign_id", binding.CampaignID.String()).
 				Str("reason", blockReason).
 				Msg("blocked live bid write after action claim")
+			evaluation.block(ctx, "prewrite_guardrail", blockReason, false)
 			continue
 		}
 
@@ -763,11 +808,17 @@ func (s *BidAutomationService) executeStrategy(ctx context.Context, workspaceID 
 
 		if wbStatus == "applied" {
 			changes++
+			evaluation.finish(ctx, domain.EvaluationApplied, "bid_applied", decision.Reason, 1, 1, domain.FactApplied)
 			if strategy.Type == domain.StrategyTypeDayparting {
 				if stateErr := s.saveDaypartingRunState(ctx, strategy, binding, *binding.CampaignID, decision, dayparting); stateErr != nil {
 					bindingErrors = append(bindingErrors, fmt.Errorf("binding %s save dayparting state: %w", binding.ID, stateErr))
 				}
 			}
+		}
+		if wbStatus == "failed" {
+			evaluation.finish(ctx, domain.EvaluationFailed, "wb_write_failed", string(wbResponse), 1, 0, domain.FactFailed)
+		} else if wbStatus == "unknown" {
+			evaluation.finish(ctx, domain.EvaluationUnknown, "wb_write_unknown", string(wbResponse), 1, 0, domain.FactUnknown)
 		}
 
 		s.logger.Info().

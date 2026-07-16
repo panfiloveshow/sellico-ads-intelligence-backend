@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
@@ -130,32 +132,32 @@ type aggregatedNormQueryDay struct {
 // ListSearchClusters fetches search clusters for a campaign from the current normquery API.
 func (c *Client) ListSearchClusters(ctx context.Context, token string, campaignID int) ([]WBSearchClusterDTO, error) {
 	aggregated, dateTo, err := c.loadNormQueryAggregates(ctx, token, campaignID)
-	if err != nil {
+	if err != nil && aggregated == nil {
 		return nil, err
 	}
 
 	_ = dateTo
-	return aggregatedToClusters(campaignID, aggregated), nil
+	return aggregatedToClusters(campaignID, aggregated), err
 }
 
 // GetSearchClusterStats fetches phrase statistics for a campaign from the current normquery API.
 func (c *Client) GetSearchClusterStats(ctx context.Context, token string, campaignID int) ([]WBSearchClusterStatDTO, error) {
 	aggregated, dateTo, err := c.loadNormQueryAggregates(ctx, token, campaignID)
-	if err != nil {
+	if err != nil && aggregated == nil {
 		return nil, err
 	}
 
-	return aggregatedToClusterStats(campaignID, dateTo, aggregated), nil
+	return aggregatedToClusterStats(campaignID, dateTo, aggregated), err
 }
 
 // ListSearchClustersWithNMIDs fetches search clusters without calling ListCampaigns internally.
 // Caller provides nmIDs directly (from DB or pre-fetched campaign data).
 func (c *Client) ListSearchClustersWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]WBSearchClusterDTO, error) {
 	aggregated, _, err := c.loadNormQueryAggregatesWithNMIDs(ctx, token, campaignID, nmIDs)
-	if err != nil {
+	if err != nil && aggregated == nil {
 		return nil, err
 	}
-	return aggregatedToClusters(campaignID, aggregated), nil
+	return aggregatedToClusters(campaignID, aggregated), err
 }
 
 // ListLegacyNormQueryClusters fetches WB cluster inventory for active/excluded state.
@@ -205,10 +207,10 @@ func (c *Client) ListLegacyNormQueryClusters(ctx context.Context, token string, 
 // GetSearchClusterStatsWithNMIDs fetches phrase stats without calling ListCampaigns internally.
 func (c *Client) GetSearchClusterStatsWithNMIDs(ctx context.Context, token string, campaignID int, nmIDs []int64) ([]WBSearchClusterStatDTO, error) {
 	aggregated, dateTo, err := c.loadNormQueryAggregatesWithNMIDs(ctx, token, campaignID, nmIDs)
-	if err != nil {
+	if err != nil && aggregated == nil {
 		return nil, err
 	}
-	return aggregatedToClusterStats(campaignID, dateTo, aggregated), nil
+	return aggregatedToClusterStats(campaignID, dateTo, aggregated), err
 }
 
 func (c *Client) DebugNormQueryStats(ctx context.Context, token string, campaignID int, nmIDs []int64, dateFrom, dateTo string) (WBNormQueryStatsDebug, error) {
@@ -273,9 +275,9 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 		Interface("first_pairs", sampleNormQueryPairs(campaignID, nmIDs, 10)).
 		Msg("[NQ] pairs count")
 
-	statsResponse, err := c.fetchNormQueryStats(ctx, token, campaignID, nmIDs, dateFrom, dateTo)
-	if err != nil && len(statsResponse.Items) == 0 {
-		return nil, "", err
+	statsResponse, statsErr := c.fetchNormQueryStats(ctx, token, campaignID, nmIDs, dateFrom, dateTo)
+	if statsErr != nil && len(statsResponse.Items) == 0 {
+		return nil, "", statsErr
 	}
 
 	// Debug: log response structure to diagnose empty phrases
@@ -309,12 +311,13 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 		return nil, "", apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("marshal normquery bids request: %v", err))
 	}
 
-	_, bidsRaw, err := c.doRequest(ctx, "POST", "/adv/v0/normquery/get-bids", token, bytes.NewReader(bidsBody))
-	if err != nil {
-		c.logger.Warn().Err(err).Int("campaign_id", campaignID).Msg("normquery get-bids failed, falling back without explicit bids")
+	_, bidsRaw, bidsErr := c.doRequest(ctx, "POST", "/adv/v0/normquery/get-bids", token, bytes.NewReader(bidsBody))
+	if bidsErr != nil {
+		c.logger.Warn().Err(bidsErr).Int("campaign_id", campaignID).Msg("normquery get-bids failed; cluster snapshot is incomplete")
 	}
 
 	bidsByQuery := make(map[string]int64)
+	var bidsParseErr error
 	if len(bidsRaw) > 0 {
 		var bidsResponse normQueryBidsResponse
 		if err := json.Unmarshal(bidsRaw, &bidsResponse); err == nil {
@@ -327,6 +330,8 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 					bidsByQuery[key] = bid.Bid
 				}
 			}
+		} else {
+			bidsParseErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("unmarshal normquery bids: %v", err))
 		}
 	}
 
@@ -340,6 +345,25 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 		}
 	}
 
+	missingBids := make([]string, 0)
+	for key, row := range aggregated {
+		if row.bid <= 0 {
+			missingBids = append(missingBids, key)
+		}
+	}
+	sort.Strings(missingBids)
+	var incompleteErr error
+	if len(missingBids) > 0 {
+		sample := missingBids
+		if len(sample) > 5 {
+			sample = sample[:5]
+		}
+		incompleteErr = apperror.New(apperror.ErrWBAPIError, fmt.Sprintf(
+			"normquery bids incomplete: missing %d of %d product/query bids (%s)",
+			len(missingBids), len(aggregated), strings.Join(sample, ", "),
+		))
+	}
+
 	parsedRows := aggregatedToClusterStats(campaignID, dateTo, aggregated)
 	c.logger.Info().
 		Int("campaign_id", campaignID).
@@ -350,7 +374,20 @@ func (c *Client) loadNormQueryAggregatesWithNMIDs(ctx context.Context, token str
 		Interface("sample", sampleParsedNormQueryRows(parsedRows, 5)).
 		Msg("[NQ] parsed rows")
 
-	return aggregated, dateTo, nil
+	var partialErrors []error
+	if statsErr != nil {
+		partialErrors = append(partialErrors, fmt.Errorf("normquery stats incomplete: %w", statsErr))
+	}
+	if bidsErr != nil {
+		partialErrors = append(partialErrors, fmt.Errorf("normquery bids unavailable: %w", bidsErr))
+	}
+	if bidsParseErr != nil {
+		partialErrors = append(partialErrors, bidsParseErr)
+	}
+	if incompleteErr != nil {
+		partialErrors = append(partialErrors, incompleteErr)
+	}
+	return aggregated, dateTo, errors.Join(partialErrors...)
 }
 
 func (c *Client) fetchNormQueryStats(ctx context.Context, token string, campaignID int, nmIDs []int64, dateFrom, dateTo string) (normQueryStatsResponse, error) {

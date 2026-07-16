@@ -32,6 +32,7 @@ func (s *BidAutomationService) executeManualCPMClusters(
 	campaign sqlcgen.Campaign,
 	token string,
 	applyToWB bool,
+	evaluation *bindingEvaluationRecorder,
 	now, dateFrom, dateTo time.Time,
 ) (int, error) {
 	if !isManualCPMCampaign(campaign) {
@@ -43,6 +44,7 @@ func (s *BidAutomationService) executeManualCPMClusters(
 	if reason := manualCPMStrategySkipReason(strategy.Type); reason != "" {
 		s.logger.Info().Str("strategy_id", strategy.ID.String()).Str("campaign_id", uuidFromPgtype(campaign.ID).String()).
 			Str("reason", reason).Msg("skipping manual CPM strategy because exact cluster evidence is unavailable")
+		evaluation.block(ctx, "cluster_strategy_unsupported", reason, true)
 		return 0, nil
 	}
 
@@ -59,7 +61,12 @@ func (s *BidAutomationService) executeManualCPMClusters(
 		return 0, fmt.Errorf("load real normquery targets: %w", err)
 	}
 	if len(snapshots) > maxClusterAutomationTargets {
+		evaluation.block(ctx, "cluster_target_limit_exceeded", fmt.Sprintf("more than %d normquery targets", maxClusterAutomationTargets), true)
 		return 0, fmt.Errorf("campaign has more than %d normquery targets; refusing partial automation", maxClusterAutomationTargets)
+	}
+	if len(snapshots) == 0 {
+		evaluation.block(ctx, "cluster_targets_missing", "no exact normquery targets are available", true)
+		return 0, nil
 	}
 
 	campaignStats, err := s.queries.GetCampaignStatsByDateRange(ctx, sqlcgen.GetCampaignStatsByDateRangeParams{
@@ -77,9 +84,13 @@ func (s *BidAutomationService) executeManualCPMClusters(
 	var actionErrors []error
 	params := strategy.Params.Merged()
 	for _, snapshot := range snapshots {
+		evaluation.fact(ctx, "cluster_target_observed", "observed", domain.FactReadyNoChange, "phrases+phrase_stats", map[string]any{
+			"phrase_id": uuidFromPgtype(snapshot.PhraseID), "wb_product_id": snapshot.WBProductID, "norm_query": snapshot.NormQuery,
+		})
 		if reason := clusterSnapshotGuardrailReason(snapshot, params.MaxDataAgeHours, now, strategy.Type); reason != "" {
 			s.logger.Info().Str("strategy_id", strategy.ID.String()).Str("norm_query", snapshot.NormQuery).
 				Str("reason", reason).Msg("skipping normquery target")
+			evaluation.fact(ctx, "cluster_evidence_blocked", "blocked", domain.FactBlocked, "phrases+phrase_stats", map[string]any{"reason": reason, "norm_query": snapshot.NormQuery})
 			continue
 		}
 
@@ -117,6 +128,12 @@ func (s *BidAutomationService) executeManualCPMClusters(
 		}
 		decision := s.engine.CalculateBid(strategy, bidCtx)
 		if decision == nil {
+			if increaseGuardrail != nil && !increaseGuardrail.Allowed {
+				evaluation.fact(ctx, "bid_increase_readiness_blocked", "blocked", domain.FactBlocked, "stock+unit_economics", map[string]any{"reason": increaseGuardrail.Reason, "norm_query": snapshot.NormQuery})
+				continue
+			}
+			evaluation.evaluatedTarget()
+			evaluation.fact(ctx, "cluster_ready_no_change", "passed", domain.FactReadyNoChange, "bid_engine", map[string]any{"norm_query": snapshot.NormQuery})
 			continue
 		}
 		decision.CampaignID = uuidFromPgtype(campaign.ID)
@@ -124,21 +141,25 @@ func (s *BidAutomationService) executeManualCPMClusters(
 		decision.PhraseID = &phraseID
 
 		if reason := recentClicksIncreaseGuardrailReason(campaignStats, decision, now); reason != "" {
+			evaluation.fact(ctx, "recent_clicks_guardrail", "blocked", domain.FactBlocked, "campaign_stats", map[string]any{"reason": reason, "norm_query": snapshot.NormQuery})
 			continue
 		}
 		if reason := dailyBudgetIncreaseGuardrailReason(campaign, campaignStats, decision, now); reason != "" {
+			evaluation.fact(ctx, "daily_budget_guardrail", "blocked", domain.FactBlocked, "campaign_stats", map[string]any{"reason": reason, "norm_query": snapshot.NormQuery})
 			continue
 		}
 		if reason, guardErr := s.financialIncreaseGuardrail(ctx, campaign, campaignStats, decision, now); guardErr != nil {
 			actionErrors = append(actionErrors, fmt.Errorf("phrase %s financial guard: %w", phraseID, guardErr))
 			continue
 		} else if reason != "" {
+			evaluation.fact(ctx, "financial_guardrail", "blocked", domain.FactBlocked, "campaign_finance", map[string]any{"reason": reason, "norm_query": snapshot.NormQuery})
 			continue
 		}
 		if reason, guardErr := s.clusterBidActionGuardrail(ctx, strategy, phraseID, uuidFromPgtype(campaign.ID), decision); guardErr != nil {
 			actionErrors = append(actionErrors, fmt.Errorf("phrase %s action guard: %w", phraseID, guardErr))
 			continue
 		} else if reason != "" {
+			evaluation.fact(ctx, "action_guardrail", "blocked", domain.FactBlocked, "bid_changes", map[string]any{"reason": reason, "norm_query": snapshot.NormQuery})
 			continue
 		}
 		if reason, minimumErr := s.minimumBidDecreaseGuardrail(ctx, token, campaign, snapshot.WBProductID, decision); minimumErr != nil {
@@ -146,6 +167,7 @@ func (s *BidAutomationService) executeManualCPMClusters(
 			actionErrors = append(actionErrors, fmt.Errorf("phrase %s minimum bid guard: %w", phraseID, minimumErr))
 			continue
 		} else if reason != "" {
+			evaluation.fact(ctx, "wb_minimum_bid_guardrail", "blocked", domain.FactBlocked, "wb_minimum_bids", map[string]any{"reason": reason, "norm_query": snapshot.NormQuery})
 			continue
 		}
 
@@ -155,10 +177,13 @@ func (s *BidAutomationService) executeManualCPMClusters(
 			actionErrors = append(actionErrors, fmt.Errorf("phrase %s bid outside supported range", phraseID))
 			continue
 		}
+		evaluation.evaluatedTarget()
 		if !applyToWB {
 			if shadowErr := s.recordShadowClusterBidDecision(ctx, workspaceID, strategy, binding, campaign, snapshot, decision, bidCtx, dateFrom, dateTo, oldBid32, newBid32); shadowErr != nil {
 				actionErrors = append(actionErrors, fmt.Errorf("phrase %s shadow decision: %w", phraseID, shadowErr))
 			}
+			evaluation.fact(ctx, "cluster_would_apply", "passed", domain.FactWouldApply, "bid_engine", map[string]any{"reason": decision.Reason, "norm_query": snapshot.NormQuery, "old_bid": decision.OldBid, "new_bid": decision.NewBid})
+			evaluation.proposedTarget()
 			continue
 		}
 
@@ -180,6 +205,7 @@ func (s *BidAutomationService) executeManualCPMClusters(
 			continue
 		}
 		if unresolved {
+			evaluation.fact(ctx, "unresolved_prior_action", "blocked", domain.FactBlocked, "wb_bid_actions", map[string]any{"norm_query": snapshot.NormQuery})
 			continue
 		}
 		maxWorkspaceChangesPerDay, capBlockReason, capErr := s.currentWorkspaceAutomationCap(ctx, workspaceID)
@@ -210,11 +236,14 @@ func (s *BidAutomationService) executeManualCPMClusters(
 			continue
 		}
 		if !claimed {
+			evaluation.fact(ctx, "duplicate_action", "blocked", domain.FactBlocked, "wb_bid_actions", map[string]any{"norm_query": snapshot.NormQuery})
 			continue
 		}
 		if claim.Status == "blocked" {
+			evaluation.fact(ctx, "workspace_daily_cap_reached", "blocked", domain.FactBlocked, "wb_bid_actions", map[string]any{"norm_query": snapshot.NormQuery})
 			break
 		}
+		evaluation.fact(ctx, "action_claimed", "passed", domain.FactClaimed, "wb_bid_actions", map[string]any{"automation_action_id": uuidFromPgtype(claim.ID), "norm_query": snapshot.NormQuery})
 
 		writeLease, blockReason, preWriteErr := s.liveBidPreWriteGuardrail(
 			ctx, workspaceID, strategy.ID, uuidFromPgtype(claim.ID), dayStart, dayEnd,
@@ -271,6 +300,11 @@ func (s *BidAutomationService) executeManualCPMClusters(
 		}
 		if wbStatus == "applied" {
 			changes++
+			evaluation.fact(ctx, "cluster_bid_applied", "passed", domain.FactApplied, "wb_campaign_actions", map[string]any{"norm_query": snapshot.NormQuery, "new_bid": decision.NewBid})
+		} else if wbStatus == "unknown" {
+			evaluation.fact(ctx, "cluster_bid_unknown", "error", domain.FactUnknown, "wb_campaign_actions", map[string]any{"norm_query": snapshot.NormQuery})
+		} else {
+			evaluation.fact(ctx, "cluster_bid_failed", "error", domain.FactFailed, "wb_campaign_actions", map[string]any{"norm_query": snapshot.NormQuery})
 		}
 		if isRateLimitIssueFromError(wbErr) {
 			break

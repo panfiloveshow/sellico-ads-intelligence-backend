@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/rs/zerolog"
 
@@ -30,7 +31,8 @@ const (
 	// slow WB budget endpoint on large accounts (hundreds of campaigns) can't eat
 	// the entire 60-minute sync window and starve the primary data (stats/phrases/
 	// products). Whatever isn't fetched this run refreshes on the next sync.
-	campaignBudgetPhaseTimeout = 4 * time.Minute
+	campaignBudgetPhaseTimeout   = 4 * time.Minute
+	cabinetReadinessWriteTimeout = 5 * time.Second
 )
 
 const (
@@ -295,7 +297,44 @@ func (s *SyncService) SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) 
 	return summary, summary.Error()
 }
 
+// ListWorkspaceCabinetIDs returns the active cabinet scopes for worker fan-out.
+// It intentionally does not decrypt tokens: each isolated cabinet task owns its
+// token/readiness failure and cannot consume another cabinet's execution window.
+func (s *SyncService) ListWorkspaceCabinetIDs(ctx context.Context, workspaceID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.queries.ListActiveSellerCabinetsByWorkspace(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return nil, fmt.Errorf("list workspace cabinets: %w", err)
+	}
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, uuidFromPgtype(row.ID))
+	}
+	return ids, nil
+}
+
 func (s *SyncService) SyncSingleCabinetPhase(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (SyncSummary, error) {
+	startedAt := time.Now().UTC()
+	beginErr := s.beginSellerCabinetReadiness(ctx, workspaceID, cabinetID, startedAt)
+	summary, runErr := s.syncSingleCabinetPhase(ctx, workspaceID, cabinetID, phase)
+	if runErr != nil && len(summary.Issues) == 0 {
+		summary.addIssue("seller_cabinet.sync", cabinetID.String(), "phase %s failed: %v", phase, runErr)
+	}
+	if beginErr != nil {
+		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to mark phase %s running: %v", phase, beginErr)
+	}
+	// A successful isolated phase is still only partial cabinet evidence. Only
+	// the complete multi-phase pipeline may publish a ready state.
+	status := "partial"
+	if runErr != nil && syncSummaryEvidenceCount(summary) == 0 {
+		status = "failed"
+	}
+	if completeErr := s.completeSellerCabinetReadiness(ctx, workspaceID, cabinetID, status, summary, runErr); completeErr != nil {
+		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to persist phase %s readiness: %v", phase, completeErr)
+	}
+	return summary, summary.Error()
+}
+
+func (s *SyncService) syncSingleCabinetPhase(ctx context.Context, workspaceID, cabinetID uuid.UUID, phase string) (SyncSummary, error) {
 	cabinets, err := s.listSingleCabinet(ctx, cabinetID)
 	if err != nil {
 		return SyncSummary{}, err
@@ -350,11 +389,7 @@ func (s *SyncService) SyncSingleCabinetPhase(ctx context.Context, workspaceID, c
 // partial/stale cabinets instead of trusting a workspace-wide timestamp.
 func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (SyncSummary, error) {
 	startedAt := time.Now().UTC()
-	beginErr := s.queries.BeginSellerCabinetSync(ctx, sqlcgen.BeginSellerCabinetSyncParams{
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		WorkspaceID:     uuidToPgtype(workspaceID),
-		StartedAt:       pgtype.Timestamptz{Time: startedAt, Valid: true},
-	})
+	beginErr := s.beginSellerCabinetReadiness(ctx, workspaceID, cabinetID, startedAt)
 
 	summary, runErr := s.syncSingleCabinet(ctx, workspaceID, cabinetID)
 	if runErr != nil && len(summary.Issues) == 0 {
@@ -367,18 +402,41 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to mark sync running: %v", beginErr)
 	}
 	status := cabinetSyncReadinessStatus(summary, runErr)
-	lastError := ""
-	if runErr != nil {
-		lastError = runErr.Error()
+	completeErr := s.completeSellerCabinetReadiness(ctx, workspaceID, cabinetID, status, summary, runErr)
+	if completeErr != nil {
+		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to persist sync readiness: %v", completeErr)
 	}
+	return summary, summary.Error()
+}
+
+func (s *SyncService) beginSellerCabinetReadiness(ctx context.Context, workspaceID, cabinetID uuid.UUID, startedAt time.Time) error {
+	writeCtx, cancel := cabinetReadinessWriteContext(ctx)
+	defer cancel()
+	return s.queries.BeginSellerCabinetSync(writeCtx, sqlcgen.BeginSellerCabinetSyncParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		WorkspaceID:     uuidToPgtype(workspaceID),
+		StartedAt:       pgtype.Timestamptz{Time: startedAt, Valid: true},
+	})
+}
+
+func (s *SyncService) completeSellerCabinetReadiness(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, summary SyncSummary, runErr error) error {
 	dataThrough := pgtype.Date{}
 	if summary.DateTo != "" {
 		if parsed, parseErr := time.Parse(exportDateLayout, summary.DateTo); parseErr == nil {
 			dataThrough = pgtype.Date{Time: parsed, Valid: true}
 		}
 	}
-	completeErr := s.queries.CompleteSellerCabinetSync(ctx, sqlcgen.CompleteSellerCabinetSyncParams{
+	lastError := ""
+	if runErr != nil {
+		lastError = runErr.Error()
+	} else if summaryErr := summary.Error(); summaryErr != nil {
+		lastError = summaryErr.Error()
+	}
+	writeCtx, cancel := cabinetReadinessWriteContext(ctx)
+	defer cancel()
+	return s.queries.CompleteSellerCabinetSync(writeCtx, sqlcgen.CompleteSellerCabinetSyncParams{
 		SellerCabinetID:   uuidToPgtype(cabinetID),
+		WorkspaceID:       uuidToPgtype(workspaceID),
 		Status:            status,
 		CompletedAt:       pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 		DataThroughDate:   dataThrough,
@@ -388,20 +446,24 @@ func (s *SyncService) SyncSingleCabinet(ctx context.Context, workspaceID, cabine
 		RetryAfterSeconds: pgtype.Int4{Int32: boundedInt32(summary.RetryAfterSeconds), Valid: summary.RetryAfterSeconds > 0},
 		LastError:         pgtype.Text{String: lastError, Valid: lastError != ""},
 	})
-	if completeErr != nil {
-		summary.addIssue("seller_cabinet.readiness", cabinetID.String(), "failed to persist sync readiness: %v", completeErr)
-	}
-	return summary, summary.Error()
+}
+
+func cabinetReadinessWriteContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), cabinetReadinessWriteTimeout)
+}
+
+func syncSummaryEvidenceCount(summary SyncSummary) int {
+	return summary.Campaigns + summary.CampaignStats + summary.Phrases + summary.PhraseStats +
+		summary.Products + summary.ProductStats + summary.CampaignBudgets + summary.AdBalances +
+		summary.FinanceDocs + summary.SalesFunnel + summary.BusinessOrders + summary.BusinessSales +
+		summary.CommissionTariffs
 }
 
 func cabinetSyncReadinessStatus(summary SyncSummary, runErr error) string {
 	if runErr == nil && len(summary.Issues) == 0 {
 		return "ready"
 	}
-	if summary.Campaigns+summary.CampaignStats+summary.Phrases+summary.PhraseStats+
-		summary.Products+summary.ProductStats+summary.CampaignBudgets+summary.AdBalances+
-		summary.FinanceDocs+summary.SalesFunnel+summary.BusinessOrders+summary.BusinessSales+
-		summary.CommissionTariffs > 0 {
+	if syncSummaryEvidenceCount(summary) > 0 {
 		return "partial"
 	}
 	return "failed"
@@ -1770,7 +1832,7 @@ func (s *SyncService) listCabinets(ctx context.Context, workspaceID uuid.UUID, c
 func (s *SyncService) listSingleCabinet(ctx context.Context, cabinetID uuid.UUID) ([]decryptedCabinet, error) {
 	row, err := s.queries.GetSellerCabinetByID(ctx, uuidToPgtype(cabinetID))
 	if err != nil {
-		return nil, apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+		return nil, classifySellerCabinetLookupError(err)
 	}
 	cabinet := sellerCabinetFromSqlc(row)
 	token, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
@@ -1778,6 +1840,13 @@ func (s *SyncService) listSingleCabinet(ctx context.Context, cabinetID uuid.UUID
 		return nil, apperror.New(apperror.ErrInternal, "failed to decrypt cabinet token")
 	}
 	return []decryptedCabinet{{cabinet: cabinet, token: token}}, nil
+}
+
+func classifySellerCabinetLookupError(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+	}
+	return fmt.Errorf("load seller cabinet: %w", err)
 }
 
 func (s *SyncService) listWorkspaceCabinets(ctx context.Context, workspaceID uuid.UUID) ([]decryptedCabinet, error) {
@@ -2057,6 +2126,7 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 		// it is management state (active/excluded), not advertising analytics, and it
 		// can consume the same tight WB advertising limits before stats are collected.
 		clusterStats, statsErr := s.wbClient.GetSearchClusterStatsWithNMIDs(ctx, token, wbCampaignID, nmIDs)
+		stopAfterCampaign := false
 		if statsErr != nil {
 			s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointNormQueryStats, statsErr)
 			s.markSummaryRateLimitFromError(&summary, wbEndpointNormQueryStats, statsErr)
@@ -2066,9 +2136,14 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 					Err(statsErr).
 					Int("advertId", wbCampaignID).
 					Msg("[NQ] stopping phrase sync after WB rate limit")
-				break
+				stopAfterCampaign = true
 			}
-			continue
+			if len(clusterStats) == 0 {
+				if stopAfterCampaign {
+					break
+				}
+				continue
+			}
 		}
 		phraseIDsByNormQuery := make(map[string]uuid.UUID, len(clusterStats))
 		savedRowsCount := 0
@@ -2108,6 +2183,9 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 			Int("advertId", wbCampaignID).
 			Int("savedRowsCount", savedRowsCount).
 			Msg("[NQ] saved rows")
+		if stopAfterCampaign {
+			break
+		}
 	}
 
 	s.logger.Info().Int("phrases", summary.Phrases).Int("phrase_stats", summary.PhraseStats).Msg("[sync] phrases+stats done for cabinet")

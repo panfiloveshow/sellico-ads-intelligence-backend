@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/middleware"
 )
 
@@ -55,6 +56,26 @@ func (m *mockStrategyService) AttachBinding(context.Context, uuid.UUID, uuid.UUI
 
 func (m *mockStrategyService) DetachBinding(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
+}
+
+func (m *mockStrategyService) Activity(context.Context, uuid.UUID, uuid.UUID) (*domain.StrategyActivity, error) {
+	return &domain.StrategyActivity{}, nil
+}
+
+func (m *mockStrategyService) ListEvaluationRuns(context.Context, uuid.UUID, uuid.UUID, int32, int32) ([]domain.StrategyEvaluationRun, error) {
+	return nil, nil
+}
+
+func (m *mockStrategyService) GetEvaluationRun(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*domain.StrategyEvaluationRun, error) {
+	return &domain.StrategyEvaluationRun{}, nil
+}
+
+func (m *mockStrategyService) UpdateBindingRollout(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, service.StrategyRolloutUpdate) (*domain.StrategyBindingRollout, error) {
+	return &domain.StrategyBindingRollout{}, nil
+}
+
+func (m *mockStrategyService) UpdateStrategyRollout(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, service.StrategyRolloutUpdate) ([]domain.StrategyBindingRollout, error) {
+	return nil, nil
 }
 
 func TestStrategyList_WithSellerCabinetFilter(t *testing.T) {

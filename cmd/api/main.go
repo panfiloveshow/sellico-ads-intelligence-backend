@@ -242,14 +242,24 @@ func main() {
 		JobRunHandler:            handler.NewJobRunHandler(jobRunService),
 		EventsHandler:            handler.NewEventsHandler(eventBroker),
 		WorkspaceSettingsHandler: handler.NewWorkspaceSettingsHandler(workspaceSettingsService),
-		StrategyHandler:          handler.NewStrategyHandler(strategyService),
-		CampaignActionHandler:    handler.NewCampaignActionHandler(campaignActionService, campaignPhraseService),
-		SemanticsHandler:         handler.NewSemanticsHandler(semanticsService),
-		CompetitorHandler:        handler.NewCompetitorHandler(competitorService),
-		DeliveryHandler:          handler.NewDeliveryHandler(deliveryService),
-		SEOHandler:               handler.NewSEOHandler(seoAnalyzerService),
-		ProductEventHandler:      handler.NewProductEventHandler(productEventService),
-		ProductEconomicsHandler:  handler.NewProductEconomicsHandler(productEconomicsService),
+		StrategyHandler: handler.NewStrategyHandler(strategyService).WithRunTrigger(func(_ context.Context, workspaceID uuid.UUID) error {
+			task, taskErr := worker.NewWorkspaceTask(worker.TaskBidAutomation, workspaceID)
+			if taskErr != nil {
+				return taskErr
+			}
+			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueBidAutomation), asynq.MaxRetry(10), asynq.Timeout(15*time.Minute), asynq.Unique(10*time.Minute))
+			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+				return nil
+			}
+			return taskErr
+		}),
+		CampaignActionHandler:   handler.NewCampaignActionHandler(campaignActionService, campaignPhraseService),
+		SemanticsHandler:        handler.NewSemanticsHandler(semanticsService),
+		CompetitorHandler:       handler.NewCompetitorHandler(competitorService),
+		DeliveryHandler:         handler.NewDeliveryHandler(deliveryService),
+		SEOHandler:              handler.NewSEOHandler(seoAnalyzerService),
+		ProductEventHandler:     handler.NewProductEventHandler(productEventService),
+		ProductEconomicsHandler: handler.NewProductEconomicsHandler(productEconomicsService),
 		PriceHandler: handler.NewPriceHandler(repricerService,
 			func(workspaceID uuid.UUID) error {
 				task, taskErr := worker.NewWorkspaceTask(worker.TaskRepricer, workspaceID)
