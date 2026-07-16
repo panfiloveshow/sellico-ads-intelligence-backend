@@ -131,6 +131,13 @@ func (s *StrategyService) List(ctx context.Context, workspaceID uuid.UUID, selle
 	result := make([]domain.Strategy, len(rows))
 	for i, row := range rows {
 		result[i] = strategyFromSqlc(row)
+		bindings, bindingsErr := s.queries.ListStrategyBindings(ctx, row.ID)
+		if bindingsErr != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to list strategy bindings")
+		}
+		for _, binding := range bindings {
+			result[i].Bindings = append(result[i].Bindings, bindingFromSqlc(binding))
+		}
 	}
 	return result, nil
 }
