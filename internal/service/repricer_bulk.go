@@ -18,8 +18,9 @@ const (
 )
 
 // ApplyManualBulk changes prices for an explicit item list or for a whole scope
-// (all products / one cabinet) via an adjustment. Every new effective price is
-// clamped to the product's margin floor unless force is set. Uploads to WB in
+// (all products / one cabinet) via an adjustment. A change is kept from crossing
+// the product's margin floor unless force is set (see clampToMarginFloor).
+// Uploads to WB in
 // ≤1000-item chunks and returns accepted/skipped counts + upload task IDs.
 func (s *RepricerService) ApplyManualBulk(ctx context.Context, actorID, workspaceID uuid.UUID, req domain.ManualPriceBulkRequest) (*domain.PriceBulkResult, error) {
 	if err := validateManualPriceBulkRequest(req); err != nil {
@@ -56,10 +57,12 @@ func (s *RepricerService) ApplyManualBulk(ctx context.Context, actorID, workspac
 		}
 		floor := floorByNm[cur.WBProductID]
 		if !req.Force && floor > 0 {
-			effective := effectiveOf(newBase, newDiscount)
-			if effective < floor {
-				newBase = basePriceForTarget(floor, newDiscount)
+			clamped, ok := clampToMarginFloor(cur, newBase, newDiscount, floor)
+			if !ok {
+				skipped++
+				return
 			}
+			newBase = clamped
 		}
 		if newBase == cur.PriceRub && newDiscount == cur.DiscountPercent {
 			skipped++
@@ -265,6 +268,25 @@ func (s *RepricerService) marginFloors(ctx context.Context, workspaceID uuid.UUI
 		}
 	}
 	return floors
+}
+
+// clampToMarginFloor keeps a manual price change from crossing the product's
+// margin floor. It returns the base price to use and false when the change must
+// be skipped. A product already priced below its floor is never lifted up to the
+// floor: with a large discount that turns a +5% request into a several-fold jump,
+// so upward moves pass through unchanged and downward moves are refused.
+func clampToMarginFloor(cur domain.ProductPrice, newBase int64, newDiscount int, floor int64) (int64, bool) {
+	newEffective := effectiveOf(newBase, newDiscount)
+	if newEffective >= floor {
+		return newBase, true
+	}
+	if effectiveOf(cur.PriceRub, cur.DiscountPercent) >= floor {
+		return basePriceForTarget(floor, newDiscount), true
+	}
+	if newEffective > effectiveOf(cur.PriceRub, cur.DiscountPercent) {
+		return newBase, true
+	}
+	return 0, false
 }
 
 func applyAdjustment(base int64, adj domain.ManualPriceAdjustment) int64 {

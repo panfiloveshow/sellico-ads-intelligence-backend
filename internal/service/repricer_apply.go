@@ -53,6 +53,21 @@ type applyIntentsResult struct {
 	TaskIDs   []uuid.UUID
 }
 
+// checkQuarantineRisk rejects a change WB would park in price quarantine: a new
+// discounted price 3x or more below the old one. Quarantine can only be released
+// from the seller cabinet UI — there is no WB API for it — so such a change must
+// never leave the tool; it has to be split into smaller steps instead.
+func checkQuarantineRisk(it priceChangeIntent) error {
+	oldEffective := effectiveOf(it.OldPriceRub, it.OldDiscount)
+	newEffective := effectiveOf(it.NewPriceRub, it.NewDiscount)
+	if newEffective <= 0 || oldEffective < newEffective*3 {
+		return nil
+	}
+	return apperror.New(apperror.ErrValidation, fmt.Sprintf(
+		"nmID %d: %d ₽ → %d ₽ is a 3x or deeper drop — WB would park the product in price quarantine, which only the seller cabinet can release. Lower the price in steps of less than 3x (e.g. via %d ₽ first).",
+		it.NmID, oldEffective, newEffective, oldEffective/2))
+}
+
 func (s *RepricerService) applyIntents(ctx context.Context, workspaceID uuid.UUID, intents []priceChangeIntent) ([]uuid.UUID, error) {
 	result, err := s.enqueueAndApplyIntents(ctx, workspaceID, intents)
 	return result.TaskIDs, err
@@ -66,6 +81,10 @@ func (s *RepricerService) enqueueAndApplyIntents(ctx context.Context, workspaceI
 	seenIDs := make(map[uuid.UUID]struct{}, len(intents))
 	var applyErrs []error
 	for _, it := range intents {
+		if err := checkQuarantineRisk(it); err != nil {
+			applyErrs = append(applyErrs, err)
+			continue
+		}
 		changeID, err := s.enqueuePendingChange(ctx, workspaceID, it)
 		if err != nil {
 			applyErrs = append(applyErrs, fmt.Errorf("enqueue nmID %d: %w", it.NmID, err))
