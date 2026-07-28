@@ -208,48 +208,12 @@ func (s *RepricerService) executeScheduleEntry(ctx context.Context, row sqlcgen.
 		return s.enqueueScheduleIntents(ctx, row, intents)
 	}
 
-	targetNm := map[int64]bool{}
-	if row.ScopeType == domain.PriceScopeList || row.ScopeType == domain.PriceScopeProduct {
-		for _, nm := range row.ProductIds {
-			targetNm[nm] = true
-		}
-	}
-
 	adjustmentValue := row.AdjustmentValue
 	if row.AdjustmentType == domain.PriceAdjustDeltaPercent {
 		adjustmentValue = signedScheduleDelta(row.AdjustmentValue, row.Direction.String)
 	}
 	adj := domain.ManualPriceAdjustment{Type: row.AdjustmentType, Value: adjustmentValue}
-	var intents []priceChangeIntent
-	for _, cur := range priceByNm {
-		if !scheduleIncludesProduct(row.ScopeType, targetNm, cur.WBProductID) {
-			continue
-		}
-		newBase := applyAdjustment(cur.PriceRub, adj)
-		if newBase <= 0 {
-			continue
-		}
-		floor := floors[cur.WBProductID]
-		if floor > 0 && effectiveOf(newBase, cur.DiscountPercent) < floor {
-			newBase = basePriceForTarget(floor, cur.DiscountPercent)
-		}
-		if newBase == cur.PriceRub {
-			continue
-		}
-		eid := entryID
-		intents = append(intents, priceChangeIntent{
-			CabinetID:       cabinetID,
-			NmID:            cur.WBProductID,
-			OldPriceRub:     cur.PriceRub,
-			NewPriceRub:     newBase,
-			OldDiscount:     cur.DiscountPercent,
-			NewDiscount:     cur.DiscountPercent,
-			MinPriceRub:     floor,
-			Reason:          "scheduled price change",
-			Source:          domain.PriceSourceSchedule,
-			ScheduleEntryID: &eid,
-		})
-	}
+	intents := buildScheduleIntents(entryID, cabinetID, row.ScopeType, row.ProductIds, adj, priceByNm, floors)
 	return s.enqueueScheduleIntents(ctx, row, intents)
 }
 
@@ -276,6 +240,55 @@ func (s *RepricerService) enqueueScheduleIntents(ctx context.Context, row sqlcge
 		s.logger.Warn().Err(aggregateErr).Msg("failed to aggregate scheduled price changes")
 	}
 	return false
+}
+
+// buildScheduleIntents computes per-product intents for a scheduled adjustment.
+// The margin floor is applied with clampToMarginFloor, same as the manual path:
+// a product already below its floor keeps the requested relative step and is
+// never lifted to the floor base — with a large seller discount that lift turns
+// a +1% step into a several-fold base jump.
+func buildScheduleIntents(entryID, cabinetID uuid.UUID, scopeType string, productIDs []int64, adj domain.ManualPriceAdjustment, prices map[int64]domain.ProductPrice, floors map[int64]int64) []priceChangeIntent {
+	targetNm := map[int64]bool{}
+	if scopeType == domain.PriceScopeList || scopeType == domain.PriceScopeProduct {
+		for _, nm := range productIDs {
+			targetNm[nm] = true
+		}
+	}
+	var intents []priceChangeIntent
+	for _, cur := range prices {
+		if !scheduleIncludesProduct(scopeType, targetNm, cur.WBProductID) {
+			continue
+		}
+		newBase := applyAdjustment(cur.PriceRub, adj)
+		if newBase <= 0 {
+			continue
+		}
+		floor := floors[cur.WBProductID]
+		if floor > 0 {
+			clamped, ok := clampToMarginFloor(cur, newBase, cur.DiscountPercent, floor)
+			if !ok {
+				continue
+			}
+			newBase = clamped
+		}
+		if newBase == cur.PriceRub {
+			continue
+		}
+		eid := entryID
+		intents = append(intents, priceChangeIntent{
+			CabinetID:       cabinetID,
+			NmID:            cur.WBProductID,
+			OldPriceRub:     cur.PriceRub,
+			NewPriceRub:     newBase,
+			OldDiscount:     cur.DiscountPercent,
+			NewDiscount:     cur.DiscountPercent,
+			MinPriceRub:     floor,
+			Reason:          "scheduled price change",
+			Source:          domain.PriceSourceSchedule,
+			ScheduleEntryID: &eid,
+		})
+	}
+	return intents
 }
 
 func (s *RepricerService) buildExactScheduleRevert(ctx context.Context, row sqlcgen.PriceScheduleEntry, prices map[int64]domain.ProductPrice, latest []sqlcgen.PriceChange, floors map[int64]int64, primaryScheduleID uuid.UUID) ([]priceChangeIntent, string, error) {

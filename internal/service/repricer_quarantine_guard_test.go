@@ -31,3 +31,36 @@ func TestCheckQuarantineRisk(t *testing.T) {
 		t.Fatal("drop via discount should be rejected")
 	}
 }
+
+func TestCheckRaiseAnomaly(t *testing.T) {
+	// the real July case: a floor-lifted +5% shipped 2132 → 16991 (8x) to WB
+	err := checkRaiseAnomaly(priceChangeIntent{NmID: 184010772, Source: "manual", OldPriceRub: 2132, NewPriceRub: 16991})
+	if err == nil {
+		t.Fatal("8x raise should be rejected before reaching WB")
+	}
+
+	// exactly 3x up — rejected, same inclusive threshold as the drop guard
+	if checkRaiseAnomaly(priceChangeIntent{Source: "schedule", OldPriceRub: 1000, NewPriceRub: 3000}) == nil {
+		t.Fatal("3x raise should be rejected")
+	}
+
+	// just under 3x — allowed
+	if err := checkRaiseAnomaly(priceChangeIntent{Source: "schedule", OldPriceRub: 1000, NewPriceRub: 2999}); err != nil {
+		t.Fatalf("sub-3x raise should pass: %v", err)
+	}
+
+	// strategy margin-floor recovery makes large corrective raises on purpose
+	if err := checkRaiseAnomaly(priceChangeIntent{Source: "strategy", OldPriceRub: 2132, NewPriceRub: 16991}); err != nil {
+		t.Fatalf("strategy raise should pass: %v", err)
+	}
+
+	// no baseline — nothing to compare against
+	if err := checkRaiseAnomaly(priceChangeIntent{Source: "manual", OldPriceRub: 0, NewPriceRub: 5000}); err != nil {
+		t.Fatalf("raise without baseline should pass: %v", err)
+	}
+
+	// raise hidden in a discount cut: same base, dropping an 80% discount = 5x for the buyer
+	if checkRaiseAnomaly(priceChangeIntent{Source: "manual", OldPriceRub: 1000, OldDiscount: 80, NewPriceRub: 1000, NewDiscount: 0}) == nil {
+		t.Fatal("raise via discount removal should be rejected")
+	}
+}

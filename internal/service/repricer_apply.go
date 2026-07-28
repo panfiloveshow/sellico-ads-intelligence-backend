@@ -68,6 +68,25 @@ func checkQuarantineRisk(it priceChangeIntent) error {
 		it.NmID, oldEffective, newEffective, oldEffective/2))
 }
 
+// checkRaiseAnomaly rejects a manual/scheduled/rollback raise whose new effective
+// price is 3x or more above the old one. Operator moves are small steps, so a
+// multi-fold raise means corrupted input (a wrong margin floor, a target-price
+// typo) and must not reach WB. Strategy intents are exempt: DecideMarginFloor
+// deliberately makes large corrective raises back to the margin floor.
+func checkRaiseAnomaly(it priceChangeIntent) error {
+	if it.Source == domain.PriceSourceStrategy {
+		return nil
+	}
+	oldEffective := effectiveOf(it.OldPriceRub, it.OldDiscount)
+	newEffective := effectiveOf(it.NewPriceRub, it.NewDiscount)
+	if oldEffective <= 0 || newEffective < oldEffective*3 {
+		return nil
+	}
+	return apperror.New(apperror.ErrValidation, fmt.Sprintf(
+		"nmID %d: %d ₽ → %d ₽ is a 3x or larger raise — this looks like corrupted input, refusing to ship it to WB. Raise the price in steps of less than 3x if it is intentional.",
+		it.NmID, oldEffective, newEffective))
+}
+
 func (s *RepricerService) applyIntents(ctx context.Context, workspaceID uuid.UUID, intents []priceChangeIntent) ([]uuid.UUID, error) {
 	result, err := s.enqueueAndApplyIntents(ctx, workspaceID, intents)
 	return result.TaskIDs, err
@@ -82,6 +101,10 @@ func (s *RepricerService) enqueueAndApplyIntents(ctx context.Context, workspaceI
 	var applyErrs []error
 	for _, it := range intents {
 		if err := checkQuarantineRisk(it); err != nil {
+			applyErrs = append(applyErrs, err)
+			continue
+		}
+		if err := checkRaiseAnomaly(it); err != nil {
 			applyErrs = append(applyErrs, err)
 			continue
 		}

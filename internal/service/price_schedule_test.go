@@ -128,3 +128,42 @@ func TestScheduleRequiresApplicablePriceChanges(t *testing.T) {
 	assert.False(t, hasApplicablePriceChanges(nil))
 	assert.True(t, hasApplicablePriceChanges([]priceChangeIntent{{NmID: 101}}))
 }
+
+func TestBuildScheduleIntents_BelowFloorKeepsRelativeStep(t *testing.T) {
+	entryID, cabinetID := uuid.New(), uuid.New()
+	prices := map[int64]domain.ProductPrice{
+		184010772: {WBProductID: 184010772, PriceRub: 2132, DiscountPercent: 75},
+	}
+	// floor far above the current effective 533 ₽ — the July incident shape
+	floors := map[int64]int64{184010772: 4248}
+	up := domain.ManualPriceAdjustment{Type: domain.PriceAdjustDeltaPercent, Value: 1}
+
+	intents := buildScheduleIntents(entryID, cabinetID, domain.PriceScopeAll, nil, up, prices, floors)
+	require.Len(t, intents, 1)
+	// +1% stays +1% (2132 → 2153); the old floor-lift shipped 16992 here
+	assert.Equal(t, int64(2153), intents[0].NewPriceRub)
+	assert.Equal(t, 75, intents[0].NewDiscount)
+	assert.Equal(t, domain.PriceSourceSchedule, intents[0].Source)
+	require.NotNil(t, intents[0].ScheduleEntryID)
+	assert.Equal(t, entryID, *intents[0].ScheduleEntryID)
+
+	// a downward step while already below the floor is refused entirely
+	down := domain.ManualPriceAdjustment{Type: domain.PriceAdjustDeltaPercent, Value: -1}
+	assert.Empty(t, buildScheduleIntents(entryID, cabinetID, domain.PriceScopeAll, nil, down, prices, floors))
+}
+
+func TestBuildScheduleIntents_FloorClampAndScope(t *testing.T) {
+	entryID, cabinetID := uuid.New(), uuid.New()
+	prices := map[int64]domain.ProductPrice{
+		101: {WBProductID: 101, PriceRub: 3000, DiscountPercent: 0},
+		102: {WBProductID: 102, PriceRub: 3000, DiscountPercent: 0},
+	}
+	floors := map[int64]int64{101: 2549, 102: 2549}
+	target := domain.ManualPriceAdjustment{Type: domain.PriceAdjustTargetRub, Value: 2000}
+
+	// list scope only touches the listed product; crossing the floor clamps to it
+	intents := buildScheduleIntents(entryID, cabinetID, domain.PriceScopeList, []int64{101}, target, prices, floors)
+	require.Len(t, intents, 1)
+	assert.Equal(t, int64(101), intents[0].NmID)
+	assert.Equal(t, int64(2549), intents[0].NewPriceRub)
+}
