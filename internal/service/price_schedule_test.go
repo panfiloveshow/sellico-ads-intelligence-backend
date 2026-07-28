@@ -167,3 +167,22 @@ func TestBuildScheduleIntents_FloorClampAndScope(t *testing.T) {
 	assert.Equal(t, int64(101), intents[0].NmID)
 	assert.Equal(t, int64(2549), intents[0].NewPriceRub)
 }
+
+func TestBuildScheduleIntents_DeepDropIsStepped(t *testing.T) {
+	entryID, cabinetID := uuid.New(), uuid.New()
+	// the live disaster shape: base 89598 at 75% discount (effective 22400),
+	// scheduled straight back to base 9196 (effective 2299) — a 9.7x drop
+	prices := map[int64]domain.ProductPrice{
+		184010773: {WBProductID: 184010773, PriceRub: 89598, DiscountPercent: 75},
+	}
+	target := domain.ManualPriceAdjustment{Type: domain.PriceAdjustTargetRub, Value: 9196}
+
+	intents := buildScheduleIntents(entryID, cabinetID, domain.PriceScopeAll, nil, target, prices, nil)
+	require.Len(t, intents, 1)
+	// shipped step is capped just under 3x: effective 22400 → 7467, base 29868
+	assert.Equal(t, int64(29868), intents[0].NewPriceRub)
+	assert.Contains(t, intents[0].Reason, "quarantine-safe step")
+	// and the shipped step must clear the final quarantine guard
+	require.NoError(t, checkQuarantineRisk(intents[0]))
+	require.NoError(t, checkRaiseAnomaly(intents[0]))
+}

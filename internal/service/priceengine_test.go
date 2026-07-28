@@ -135,6 +135,22 @@ func TestDecideMarginFloor(t *testing.T) {
 		require.True(t, d.ShouldChange)
 		assert.Equal(t, int64(1100), d.TargetEffectiveRub)
 	})
+
+	t.Run("floor 3x above the live price is corrupted economics, not a raise", func(t *testing.T) {
+		// floor 986 vs effective 328 — a 3x corrective raise means the economics
+		// data is wrong; shipping it is how the July incident started
+		in := PriceEngineInputs{Current: price(328, 0, 328), Economics: e}
+		d := DecideMarginFloor(in, domain.StrategyParams{})
+		assert.False(t, d.ShouldChange)
+		assert.Equal(t, "floor_suspicious", d.SkipReason)
+	})
+
+	t.Run("just under 3x still raises to floor", func(t *testing.T) {
+		in := PriceEngineInputs{Current: price(329, 0, 329), Economics: e} // 986 < 329*3
+		d := DecideMarginFloor(in, domain.StrategyParams{})
+		require.True(t, d.ShouldChange)
+		assert.Equal(t, int64(986), d.TargetEffectiveRub)
+	})
 }
 
 func TestDecideInventoryDemand(t *testing.T) {

@@ -161,6 +161,12 @@ func DecideMarginFloor(in PriceEngineInputs, params domain.StrategyParams) Price
 	if current >= floor {
 		return noChange("above_margin_floor", floor)
 	}
+	// A floor 3x or more above the live effective price means corrupted economics
+	// (wrong cost, an inflated target margin), not a price worth shipping — the
+	// July incident started as exactly this corrective raise. Skip for review.
+	if floor >= current*3 {
+		return skip("floor_suspicious")
+	}
 	// Raise to floor. Margin protection bypasses the step cap (selling below cost
 	// is worse than a large corrective raise); raising never triggers quarantine.
 	return PriceDecision{

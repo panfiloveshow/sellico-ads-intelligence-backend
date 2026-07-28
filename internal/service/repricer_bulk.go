@@ -64,6 +64,11 @@ func (s *RepricerService) ApplyManualBulk(ctx context.Context, actorID, workspac
 			}
 			newBase = clamped
 		}
+		newEffective := effectiveOf(newBase, newDiscount)
+		if stepped := quarantineSafeTarget(effectiveOf(cur.PriceRub, cur.DiscountPercent), newEffective); stepped != newEffective {
+			newBase = basePriceForTarget(stepped, newDiscount)
+			reason += " (quarantine-safe step toward target)"
+		}
 		if newBase == cur.PriceRub && newDiscount == cur.DiscountPercent {
 			skipped++
 			return

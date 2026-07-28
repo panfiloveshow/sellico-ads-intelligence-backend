@@ -64,3 +64,40 @@ func TestCheckRaiseAnomaly(t *testing.T) {
 		t.Fatal("raise via discount removal should be rejected")
 	}
 }
+
+func TestQuarantineSafeTarget(t *testing.T) {
+	// drops under 3x and all raises pass through untouched
+	if got := quarantineSafeTarget(2999, 1000); got != 1000 {
+		t.Fatalf("sub-3x drop: got %d, want 1000", got)
+	}
+	if got := quarantineSafeTarget(1000, 5000); got != 5000 {
+		t.Fatalf("raise: got %d, want 5000", got)
+	}
+	if got := quarantineSafeTarget(1000, 0); got != 0 {
+		t.Fatalf("zero target: got %d, want 0", got)
+	}
+
+	// a deep drop is capped at the largest quarantine-safe step
+	if got := quarantineSafeTarget(22399, 2299); got != 7467 {
+		t.Fatalf("deep drop: got %d, want 7467", got)
+	}
+
+	// repairing the live disaster: 22399 ₽ effective down to 2299 ₽ converges in
+	// three runs, and every single step clears the quarantine guard
+	cur, target := int64(22399), int64(2299)
+	steps := 0
+	for cur != target {
+		next := quarantineSafeTarget(cur, target)
+		if err := checkQuarantineRisk(priceChangeIntent{OldPriceRub: cur, NewPriceRub: next}); err != nil {
+			t.Fatalf("step %d → %d must be quarantine-safe: %v", cur, next, err)
+		}
+		if next >= cur {
+			t.Fatalf("descent stalled at %d", cur)
+		}
+		cur = next
+		steps++
+	}
+	if steps != 3 {
+		t.Fatalf("expected convergence in 3 steps, got %d", steps)
+	}
+}

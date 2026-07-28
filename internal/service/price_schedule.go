@@ -271,6 +271,12 @@ func buildScheduleIntents(entryID, cabinetID uuid.UUID, scopeType string, produc
 			}
 			newBase = clamped
 		}
+		reason := "scheduled price change"
+		newEffective := effectiveOf(newBase, cur.DiscountPercent)
+		if stepped := quarantineSafeTarget(effectiveOf(cur.PriceRub, cur.DiscountPercent), newEffective); stepped != newEffective {
+			newBase = basePriceForTarget(stepped, cur.DiscountPercent)
+			reason = "scheduled price change (quarantine-safe step toward target)"
+		}
 		if newBase == cur.PriceRub {
 			continue
 		}
@@ -283,7 +289,7 @@ func buildScheduleIntents(entryID, cabinetID uuid.UUID, scopeType string, produc
 			OldDiscount:     cur.DiscountPercent,
 			NewDiscount:     cur.DiscountPercent,
 			MinPriceRub:     floor,
-			Reason:          "scheduled price change",
+			Reason:          reason,
 			Source:          domain.PriceSourceSchedule,
 			ScheduleEntryID: &eid,
 		})

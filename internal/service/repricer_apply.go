@@ -87,6 +87,17 @@ func checkRaiseAnomaly(it priceChangeIntent) error {
 		it.NmID, oldEffective, newEffective))
 }
 
+// quarantineSafeTarget caps a downward move at just under the WB 3x quarantine
+// threshold. A deeper drop converges over repeated runs: each run ships the
+// largest quarantine-safe step toward the target and the next run continues
+// from the applied price.
+func quarantineSafeTarget(oldEffective, targetEffective int64) int64 {
+	if targetEffective <= 0 || oldEffective < targetEffective*3 {
+		return targetEffective
+	}
+	return oldEffective/3 + 1
+}
+
 func (s *RepricerService) applyIntents(ctx context.Context, workspaceID uuid.UUID, intents []priceChangeIntent) ([]uuid.UUID, error) {
 	result, err := s.enqueueAndApplyIntents(ctx, workspaceID, intents)
 	return result.TaskIDs, err
