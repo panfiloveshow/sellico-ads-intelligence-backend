@@ -91,6 +91,17 @@ type ProductRef struct {
 	OfferID   string `json:"offer_id"`
 }
 
+// ProductInfo is one parsed item of POST /v3/product/info/list: the bridge
+// between the Seller API key space (ProductID) and the Performance API key
+// space (SKU, the sales SKU used by campaigns/CPO), plus display fields.
+type ProductInfo struct {
+	ProductID    int64
+	SKU          int64
+	OfferID      string
+	Name         string
+	PrimaryImage string
+}
+
 // ProductPrice is one parsed row of POST /v5/product/info/prices.
 type ProductPrice struct {
 	ProductID               int64

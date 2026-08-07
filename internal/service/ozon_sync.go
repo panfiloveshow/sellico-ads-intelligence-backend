@@ -90,6 +90,11 @@ func (s *OzonSyncService) SyncCabinet(ctx context.Context, cabinetID uuid.UUID) 
 	} else {
 		notes = append(notes, "performance credentials missing: campaigns/stats sync disabled (prices-only mode)")
 	}
+	// Products before prices: SyncPrices fills ozon_product_prices.name from
+	// the ozon_products mapping this step maintains.
+	if err := s.SyncProducts(ctx, *cabinet); err != nil {
+		issues = append(issues, fmt.Sprintf("products: %v", err))
+	}
 	if err := s.SyncPrices(ctx, *cabinet); err != nil {
 		issues = append(issues, fmt.Sprintf("prices: %v", err))
 	}
@@ -255,6 +260,66 @@ func (s *OzonSyncService) SyncStats(ctx context.Context, cabinet domain.SellerCa
 	return nil
 }
 
+// SyncProducts mirrors the product catalog (product_id ↔ sales SKU +
+// name/offer_id/image from /v3/product/info/list) into ozon_products. This
+// mapping bridges the two Ozon key spaces: prices are keyed by product_id,
+// campaigns/CPO by the sales SKU.
+func (s *OzonSyncService) SyncProducts(ctx context.Context, cabinet domain.SellerCabinet) error {
+	creds, err := s.credentials(cabinet)
+	if err != nil {
+		return err
+	}
+	if !creds.HasSellerAPI() {
+		return fmt.Errorf("seller api credentials missing")
+	}
+
+	clientCreds := ozonClientCreds(creds)
+	products, err := s.sellerClient.ListProducts(ctx, clientCreds)
+	if err != nil {
+		return fmt.Errorf("product/list: %w", err)
+	}
+	productIDs := make([]int64, 0, len(products))
+	for _, product := range products {
+		if product.ProductID != 0 {
+			productIDs = append(productIDs, product.ProductID)
+		}
+	}
+	if len(productIDs) == 0 {
+		return nil
+	}
+
+	infos, err := s.sellerClient.GetProductInfoList(ctx, clientCreds, productIDs)
+	if err != nil {
+		return fmt.Errorf("product/info/list: %w", err)
+	}
+
+	upserted := 0
+	for _, info := range infos {
+		var sku pgtype.Int8
+		if info.SKU != 0 {
+			sku = pgtype.Int8{Int64: info.SKU, Valid: true}
+		}
+		if err := s.queries.UpsertOzonProduct(ctx, sqlcgen.UpsertOzonProductParams{
+			SellerCabinetID: uuidToPgtype(cabinet.ID),
+			ProductID:       info.ProductID,
+			Sku:             sku,
+			OfferID:         textToPgtype(info.OfferID),
+			Name:            textToPgtype(info.Name),
+			PrimaryImage:    textToPgtype(info.PrimaryImage),
+		}); err != nil {
+			return fmt.Errorf("upsert product %d: %w", info.ProductID, err)
+		}
+		upserted++
+	}
+
+	s.logger.Info().
+		Str("cabinet_id", cabinet.ID.String()).
+		Int("products", len(productIDs)).
+		Int("upserted", upserted).
+		Msg("ozon products synced")
+	return nil
+}
+
 // SyncPrices mirrors the product list + v5 price/commission info into
 // ozon_product_prices.
 func (s *OzonSyncService) SyncPrices(ctx context.Context, cabinet domain.SellerCabinet) error {
@@ -279,6 +344,20 @@ func (s *OzonSyncService) SyncPrices(ctx context.Context, cabinet domain.SellerC
 		return fmt.Errorf("product/info/prices: %w", err)
 	}
 
+	// Name fill from the ozon_products mapping (SyncProducts runs first in
+	// SyncCabinet). Best-effort: a missing mapping leaves name NULL and the
+	// upsert's COALESCE keeps any previously stored name.
+	nameByProductID := map[int64]string{}
+	if productRows, mapErr := s.queries.ListOzonProductsByCabinet(ctx, uuidToPgtype(cabinet.ID)); mapErr == nil {
+		for _, row := range productRows {
+			if row.Name.Valid && row.Name.String != "" {
+				nameByProductID[row.ProductID] = row.Name.String
+			}
+		}
+	} else {
+		s.logger.Warn().Err(mapErr).Msg("failed to load ozon product name map")
+	}
+
 	upserted := 0
 	for _, price := range prices {
 		if price.ProductID == 0 {
@@ -288,7 +367,7 @@ func (s *OzonSyncService) SyncPrices(ctx context.Context, cabinet domain.SellerC
 			SellerCabinetID:          uuidToPgtype(cabinet.ID),
 			Sku:                      price.ProductID,
 			OfferID:                  textToPgtype(price.OfferID),
-			Name:                     pgtype.Text{}, // enriched in phase 2 via product/info
+			Name:                     textToPgtype(nameByProductID[price.ProductID]),
 			PriceRub:                 floatToPgNumeric(price.PriceRub),
 			OldPriceRub:              floatToPgNumeric(price.OldPriceRub),
 			MinPriceRub:              floatToPgNumeric(price.MinPriceRub),

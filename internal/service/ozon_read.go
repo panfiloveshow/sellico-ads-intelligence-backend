@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
@@ -82,7 +83,8 @@ func (s *OzonSyncService) ListCampaignsWithStats(ctx context.Context, workspaceI
 }
 
 // GetCampaign returns one campaign with its products/bids after verifying
-// workspace ownership through the cabinet.
+// workspace ownership through the cabinet. Products are enriched with
+// name/offer_id from the ozon_products mapping (one batched lookup).
 func (s *OzonSyncService) GetCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) (*domain.OzonCampaign, []domain.OzonCampaignProduct, error) {
 	campaign, err := s.getOwnedCampaign(ctx, workspaceID, campaignID)
 	if err != nil {
@@ -93,9 +95,20 @@ func (s *OzonSyncService) GetCampaign(ctx context.Context, workspaceID, campaign
 	if err != nil {
 		return nil, nil, apperror.New(apperror.ErrInternal, "failed to list ozon campaign products")
 	}
+	skus := make([]int64, 0, len(productRows))
+	for _, row := range productRows {
+		skus = append(skus, row.Sku)
+	}
+	names := ozonProductInfoBySKU(ctx, s.queries, s.logger, campaign.SellerCabinetID, skus)
+
 	products := make([]domain.OzonCampaignProduct, 0, len(productRows))
 	for _, row := range productRows {
-		products = append(products, ozonCampaignProductFromSqlc(row))
+		product := ozonCampaignProductFromSqlc(row)
+		if info, ok := names[row.Sku]; ok {
+			product.Name = pgTextValue(info.Name)
+			product.OfferID = pgTextValue(info.OfferID)
+		}
+		products = append(products, product)
 	}
 	return campaign, products, nil
 }
@@ -202,6 +215,42 @@ func (s *OzonSyncService) getOwnedCampaign(ctx context.Context, workspaceID, cam
 	}
 	campaign := ozonCampaignFromSqlc(row)
 	return &campaign, nil
+}
+
+// ozonProductInfoBySKU returns a sales-SKU → ozon_products row map for
+// batched name/offer_id enrichment (one query per page, no N+1). Enrichment
+// is best-effort: a lookup failure yields an empty map, never an error.
+func ozonProductInfoBySKU(ctx context.Context, queries *sqlcgen.Queries, logger zerolog.Logger, cabinetID uuid.UUID, skus []int64) map[int64]sqlcgen.ListOzonProductsBySkusRow {
+	result := map[int64]sqlcgen.ListOzonProductsBySkusRow{}
+	unique := make([]int64, 0, len(skus))
+	seen := make(map[int64]struct{}, len(skus))
+	for _, sku := range skus {
+		if sku == 0 {
+			continue
+		}
+		if _, ok := seen[sku]; ok {
+			continue
+		}
+		seen[sku] = struct{}{}
+		unique = append(unique, sku)
+	}
+	if len(unique) == 0 {
+		return result
+	}
+	rows, err := queries.ListOzonProductsBySkus(ctx, sqlcgen.ListOzonProductsBySkusParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Skus:            unique,
+	})
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to load ozon product enrichment map")
+		return result
+	}
+	for _, row := range rows {
+		if row.Sku.Valid {
+			result[row.Sku.Int64] = row
+		}
+	}
+	return result
 }
 
 // --- sqlc → domain mappers ---

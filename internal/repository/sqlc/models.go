@@ -584,6 +584,17 @@ type OzonPriceChange struct {
 	AppliedAt       pgtype.Timestamptz `json:"applied_at"`
 }
 
+type OzonProduct struct {
+	ID              pgtype.UUID        `json:"id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	ProductID       int64              `json:"product_id"`
+	Sku             pgtype.Int8        `json:"sku"`
+	OfferID         pgtype.Text        `json:"offer_id"`
+	Name            pgtype.Text        `json:"name"`
+	PrimaryImage    pgtype.Text        `json:"primary_image"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OzonProductEconomic struct {
 	ID                pgtype.UUID        `json:"id"`
 	SellerCabinetID   pgtype.UUID        `json:"seller_cabinet_id"`

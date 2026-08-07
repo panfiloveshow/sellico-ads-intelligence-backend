@@ -357,9 +357,23 @@ func (s *OzonCampaignActionsService) ListBidChanges(ctx context.Context, workspa
 	if err != nil {
 		return nil, 0, apperror.New(apperror.ErrInternal, "failed to list ozon bid changes")
 	}
+	skus := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if row.Sku.Valid {
+			skus = append(skus, row.Sku.Int64)
+		}
+	}
+	names := ozonProductInfoBySKU(ctx, s.queries, s.logger, cabinetID, skus)
+
 	result := make([]domain.OzonBidChange, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, ozonBidChangeFromSqlc(row))
+		change := ozonBidChangeFromSqlc(row)
+		if row.Sku.Valid {
+			if info, ok := names[row.Sku.Int64]; ok {
+				change.Name = pgTextValue(info.Name)
+			}
+		}
+		result = append(result, change)
 	}
 	return result, total, nil
 }
@@ -432,9 +446,15 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 	if err != nil {
 		return nil, 0, apperror.New(apperror.ErrInternal, "failed to list cpo products")
 	}
+	skus := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		skus = append(skus, row.Sku)
+	}
+	names := ozonProductInfoBySKU(ctx, s.queries, s.logger, cabinetID, skus)
+
 	result := make([]domain.OzonCPOProduct, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, domain.OzonCPOProduct{
+		product := domain.OzonCPOProduct{
 			ID:              uuidFromPgtype(row.ID),
 			SellerCabinetID: uuidFromPgtype(row.SellerCabinetID),
 			SKU:             row.Sku,
@@ -442,7 +462,12 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 			Bid:             pgNumericToFloatPtr(row.Bid),
 			BidKind:         pgTextValue(row.BidKind),
 			UpdatedAt:       row.UpdatedAt.Time,
-		})
+		}
+		if info, ok := names[row.Sku]; ok {
+			product.Name = pgTextValue(info.Name)
+			product.OfferID = pgTextValue(info.OfferID)
+		}
+		result = append(result, product)
 	}
 	return result, total, nil
 }

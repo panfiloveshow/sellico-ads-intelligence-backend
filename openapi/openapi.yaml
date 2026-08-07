@@ -5348,6 +5348,8 @@ components:
         id: { type: string, format: uuid }
         campaign_id: { type: string, format: uuid }
         sku: { type: integer, format: int64 }
+        name: { type: string, description: "Product name from the ozon_products mapping (empty until the products sync has seen the SKU)" }
+        offer_id: { type: string, description: "Seller offer_id (артикул) from the ozon_products mapping" }
         bid_rub: { type: number, nullable: true }
         target_cir: { type: number, nullable: true }
         top_position: { type: integer, nullable: true }
@@ -5444,6 +5446,7 @@ components:
         seller_cabinet_id: { type: string, format: uuid, nullable: true }
         kind: { type: string, enum: [cpc, cpo] }
         sku: { type: integer, format: int64, nullable: true }
+        name: { type: string, description: "Product name from the ozon_products mapping (empty when the SKU is unknown)" }
         old_bid_rub: { type: number, nullable: true }
         new_bid_rub: { type: number, nullable: true }
         reason: { type: string }
@@ -5511,6 +5514,8 @@ components:
         id: { type: string, format: uuid }
         seller_cabinet_id: { type: string, format: uuid }
         sku: { type: integer, format: int64 }
+        name: { type: string, description: "Product name from the ozon_products mapping (empty until the products sync has seen the SKU)" }
+        offer_id: { type: string, description: "Seller offer_id (артикул) from the ozon_products mapping" }
         enabled: { type: boolean }
         bid: { type: number, nullable: true }
         bid_kind: { type: string, enum: [percent, fixed_rub], nullable: true }

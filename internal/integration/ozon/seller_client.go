@@ -88,6 +88,120 @@ func (c *SellerClient) ListProducts(ctx context.Context, creds Credentials) ([]P
 	}
 }
 
+// productInfoChunkSize is the Ozon limit for one product/info/list request.
+const productInfoChunkSize = 1000
+
+// productInfoWireItem is one item of POST /v3/product/info/list, parsed
+// defensively: the sales SKU has moved across doc versions (top-level "sku"
+// vs "sources":[{"sku":...}]) and number fields may arrive as strings.
+type productInfoWireItem struct {
+	ID           flexInt64       `json:"id"`
+	Name         string          `json:"name"`
+	OfferID      string          `json:"offer_id"`
+	SKU          flexInt64       `json:"sku"`
+	PrimaryImage json.RawMessage `json:"primary_image"`
+	Images       []string        `json:"images"`
+	Sources      []struct {
+		SKU flexInt64 `json:"sku"`
+	} `json:"sources"`
+}
+
+// salesSKU returns the sales SKU: top-level first, then the first non-zero
+// sources entry (first non-zero wins).
+func (w productInfoWireItem) salesSKU() int64 {
+	if w.SKU != 0 {
+		return int64(w.SKU)
+	}
+	for _, source := range w.Sources {
+		if source.SKU != 0 {
+			return int64(source.SKU)
+		}
+	}
+	return 0
+}
+
+// primaryImageURL extracts the main image: primary_image has been both a
+// string and an array of strings across API versions; images[0] is the
+// fallback.
+func (w productInfoWireItem) primaryImageURL() string {
+	if len(w.PrimaryImage) > 0 {
+		var single string
+		if err := json.Unmarshal(w.PrimaryImage, &single); err == nil && single != "" {
+			return single
+		}
+		var many []string
+		if err := json.Unmarshal(w.PrimaryImage, &many); err == nil {
+			for _, url := range many {
+				if url != "" {
+					return url
+				}
+			}
+		}
+	}
+	for _, url := range w.Images {
+		if url != "" {
+			return url
+		}
+	}
+	return ""
+}
+
+func (w productInfoWireItem) toProductInfo() ProductInfo {
+	return ProductInfo{
+		ProductID:    int64(w.ID),
+		SKU:          w.salesSKU(),
+		OfferID:      w.OfferID,
+		Name:         w.Name,
+		PrimaryImage: w.primaryImageURL(),
+	}
+}
+
+// GetProductInfoList fetches names, offer_ids, images and sales SKUs for the
+// given product_ids via POST /v3/product/info/list (chunked at 1000 ids per
+// request, the Ozon limit). Items without a product id are dropped.
+func (c *SellerClient) GetProductInfoList(ctx context.Context, creds Credentials, productIDs []int64) ([]ProductInfo, error) {
+	type request struct {
+		ProductID []int64 `json:"product_id"`
+	}
+	// v3 returns {"items":[...]} at the top level; older shapes wrapped the
+	// payload in "result" — accept both.
+	type response struct {
+		Items  []productInfoWireItem `json:"items"`
+		Result struct {
+			Items []productInfoWireItem `json:"items"`
+		} `json:"result"`
+	}
+
+	out := make([]ProductInfo, 0, len(productIDs))
+	for start := 0; start < len(productIDs); start += productInfoChunkSize {
+		end := start + productInfoChunkSize
+		if end > len(productIDs) {
+			end = len(productIDs)
+		}
+
+		body, err := c.do(ctx, creds, "/v3/product/info/list", request{ProductID: productIDs[start:end]})
+		if err != nil {
+			return nil, err
+		}
+		var resp response
+		if err := decodeJSON(body, &resp, "product/info/list"); err != nil {
+			return nil, err
+		}
+		items := resp.Items
+		if len(items) == 0 {
+			items = resp.Result.Items
+		}
+		for _, item := range items {
+			info := item.toProductInfo()
+			if info.ProductID == 0 {
+				continue
+			}
+			out = append(out, info)
+		}
+	}
+	return out, nil
+}
+
 // ListProductPrices pages through POST /v5/product/info/prices (cursor
 // pagination) and returns parsed price + commission rows. The API sends
 // money values as strings — they are parsed to float rubles here.

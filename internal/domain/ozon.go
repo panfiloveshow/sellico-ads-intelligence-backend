@@ -48,10 +48,14 @@ type OzonCampaign struct {
 }
 
 // OzonCampaignProduct is a SKU inside an Ozon campaign with its bid.
+// Name/OfferID are read-time enrichment from the ozon_products mapping
+// (empty until the products sync has seen the SKU).
 type OzonCampaignProduct struct {
 	ID          uuid.UUID `json:"id"`
 	CampaignID  uuid.UUID `json:"campaign_id"`
 	SKU         int64     `json:"sku"`
+	Name        string    `json:"name,omitempty"`
+	OfferID     string    `json:"offer_id,omitempty"`
 	BidRub      *float64  `json:"bid_rub,omitempty"`
 	TargetCIR   *float64  `json:"target_cir,omitempty"`
 	TopPosition *int32    `json:"top_position,omitempty"`
@@ -120,6 +124,9 @@ type OzonBidChange struct {
 	SellerCabinetID *uuid.UUID `json:"seller_cabinet_id,omitempty"`
 	Kind            string     `json:"kind"`
 	SKU             *int64     `json:"sku,omitempty"`
+	// Name is read-time enrichment from the ozon_products mapping (empty when
+	// the SKU is unknown or the products sync has not seen it yet).
+	Name string `json:"name,omitempty"`
 	OldBidRub       *float64   `json:"old_bid_rub,omitempty"`
 	NewBidRub       *float64   `json:"new_bid_rub,omitempty"`
 	Reason          string     `json:"reason,omitempty"`
@@ -165,11 +172,14 @@ type OzonPriceChange struct {
 }
 
 // OzonCPOProduct is the per-SKU CPO (search promo) state mirrored from
-// search_promo/v2/products.
+// search_promo/v2/products. Name/OfferID are read-time enrichment from the
+// ozon_products mapping.
 type OzonCPOProduct struct {
 	ID              uuid.UUID `json:"id"`
 	SellerCabinetID uuid.UUID `json:"seller_cabinet_id"`
 	SKU             int64     `json:"sku"`
+	Name            string    `json:"name,omitempty"`
+	OfferID         string    `json:"offer_id,omitempty"`
 	Enabled         bool      `json:"enabled"`
 	Bid             *float64  `json:"bid,omitempty"`
 	BidKind         string    `json:"bid_kind,omitempty"`
