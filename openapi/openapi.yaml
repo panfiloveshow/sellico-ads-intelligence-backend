@@ -3430,6 +3430,114 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OzonPriceListEnvelope" }
         "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/prices/bulk:
+    post:
+      tags: [Ozon]
+      summary: Manual bulk price update (audited in ozon_price_changes, source=manual; bypasses the strategy cooldown but never Ozon's 10-changes-per-hour budget)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, items]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                items:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [sku, price_rub]
+                    properties:
+                      sku: { type: integer, format: int64 }
+                      price_rub: { type: number }
+                      old_price_rub: { type: number, nullable: true }
+                      min_price_rub: { type: number, nullable: true }
+      responses:
+        "200":
+          description: Per-item audit rows (status applied/failed each)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OzonPriceChange"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/price-changes:
+    get:
+      tags: [Ozon]
+      summary: Ozon price-change audit trail of a cabinet (strategy + manual + AI; shadow rows are dry-run decisions)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: sku
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Price change page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonPriceChangeListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/price-changes/{id}/rollback:
+    post:
+      tags: [Ozon]
+      summary: Roll an applied price change back to its previous price (verifies the mirror price still matches before writing)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The rollback audit row (the original change becomes rolled_back)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OzonPriceChange"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "429": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/repricer/run:
+    post:
+      tags: [Ozon]
+      summary: Enqueue an Ozon repricer run for the cabinet's workspace (evaluates active ozon_price_* strategies)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+      responses:
+        "202": { description: Repricer run enqueued }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/sync:
     post:
       tags: [Ozon]
@@ -5269,6 +5377,22 @@ components:
         commission_fbs_pct: { type: number, nullable: true }
         acquiring_pct: { type: number, nullable: true }
         synced_at: { type: string, format: date-time, nullable: true }
+        ozon_index_min_price_rub:
+          type: number
+          nullable: true
+          description: Minimum competitor price among other Ozon sellers (price_indexes)
+        external_index_min_price_rub:
+          type: number
+          nullable: true
+          description: Minimum competitor price on external marketplaces (price_indexes)
+        self_index_min_price_rub:
+          type: number
+          nullable: true
+          description: Seller's own minimum price on other marketplaces (price_indexes)
+        floor_rub:
+          type: number
+          nullable: true
+          description: "INFORMATIONAL: margin floor computed on read from the row's Ozon economics (net_price + max commission + acquiring, zero target margin). Strategies may use a different margin."
     OzonCampaignListEnvelope:
       type: object
       properties:
@@ -5331,6 +5455,37 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OzonBidChange"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonPriceChange:
+      type: object
+      description: One audited Ozon price write (strategy, manual or AI); status=shadow rows are dry-run decisions
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        sku: { type: integer, format: int64 }
+        offer_id: { type: string }
+        old_price_rub: { type: number, nullable: true }
+        new_price_rub: { type: number }
+        old_old_price_rub: { type: number, nullable: true }
+        new_old_price_rub: { type: number, nullable: true }
+        min_price_rub: { type: number, nullable: true }
+        floor_rub: { type: number, nullable: true }
+        reason: { type: string }
+        source: { type: string, enum: [strategy, manual, ai] }
+        strategy_id: { type: string, format: uuid, nullable: true }
+        status: { type: string, enum: [pending, applied, failed, rolled_back, shadow] }
+        decision_context: { type: object, nullable: true }
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        applied_at: { type: string, format: date-time, nullable: true }
+    OzonPriceChangeListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonPriceChange"
         meta:
           $ref: "#/components/schemas/Meta"
     OzonCompetitiveBid:

@@ -120,9 +120,11 @@ func main() {
 	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonStrategyService := service.NewOzonStrategyService(deps.Queries, ozonPerfClient, service.NewBidEngine(deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
+	ozonRepricerService := service.NewOzonRepricerService(deps.Queries, ozonSellerClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonRuntimeOpts := []worker.RuntimeOption{
 		worker.WithOzonSyncService(ozonSyncService),
 		worker.WithOzonStrategyService(ozonStrategyService),
+		worker.WithOzonRepricer(ozonRepricerService),
 	}
 	// AI autopilot is scheduled only when an LLM key is configured — the
 	// module is otherwise fully absent (no handlers, no cron entries).

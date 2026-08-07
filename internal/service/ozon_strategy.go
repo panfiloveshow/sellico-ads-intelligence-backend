@@ -82,6 +82,11 @@ func (s *OzonStrategyService) RunForWorkspace(ctx context.Context, workspaceID u
 		if strategy.Type == domain.StrategyTypeOzonAIAutopilot {
 			continue
 		}
+		// Repricer strategies are executed exclusively by OzonRepricerService
+		// (ozon:repricer_run); the bid sweep must never touch them.
+		if domain.IsOzonPriceStrategy(strategy.Type) {
+			continue
+		}
 		count, strategyErr := s.runStrategy(ctx, workspaceID, strategy)
 		applied += count
 		if strategyErr != nil {

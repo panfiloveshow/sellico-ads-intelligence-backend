@@ -105,6 +105,32 @@ type ProductPrice struct {
 	CommissionFBOPct        float64
 	CommissionFBSPct        float64
 	AcquiringPct            float64
+	// Competitor minimum prices from price_indexes (0 = no data):
+	// other Ozon sellers, external marketplaces, and the seller's own
+	// listings on other marketplaces.
+	OzonIndexMinPriceRub     float64
+	ExternalIndexMinPriceRub float64
+	SelfIndexMinPriceRub     float64
+}
+
+// PriceUpdate is one item of POST /v1/product/import/prices. Prices are
+// rubles; zero optional fields are omitted on the wire (Ozon treats "0" in
+// old_price as "remove the crossed-out price", so it is never sent
+// implicitly).
+type PriceUpdate struct {
+	ProductID   int64
+	OfferID     string
+	PriceRub    float64
+	OldPriceRub *float64
+	MinPriceRub *float64
+}
+
+// PriceUpdateResult is the per-item outcome of POST /v1/product/import/prices.
+type PriceUpdateResult struct {
+	ProductID int64
+	OfferID   string
+	Updated   bool
+	Errors    []string
 }
 
 // Campaign is one campaign from GET /api/client/campaign, with budgets

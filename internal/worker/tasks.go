@@ -69,6 +69,11 @@ const (
 	TaskOzonAISweep = "ozon:ai_sweep"
 	TaskOzonAIRun   = "ozon:ai_run"
 
+	// Ozon module (phase 4: repricer). Per-workspace runs on the ozon-sync
+	// queue; the service itself paces writes per cabinet.
+	TaskOzonRepricerSweep = "ozon:repricer_sweep"
+	TaskOzonRepricerRun   = "ozon:repricer_run"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"

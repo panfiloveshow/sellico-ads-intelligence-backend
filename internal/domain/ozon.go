@@ -89,6 +89,15 @@ type OzonProductPrice struct {
 	CommissionFBSPct        *float64   `json:"commission_fbs_pct,omitempty"`
 	AcquiringPct            *float64   `json:"acquiring_pct,omitempty"`
 	SyncedAt                *time.Time `json:"synced_at,omitempty"`
+	// Competitor minimum prices from price_indexes (nil = no data).
+	OzonIndexMinPriceRub     *float64 `json:"ozon_index_min_price_rub,omitempty"`
+	ExternalIndexMinPriceRub *float64 `json:"external_index_min_price_rub,omitempty"`
+	SelfIndexMinPriceRub     *float64 `json:"self_index_min_price_rub,omitempty"`
+	// FloorRub is INFORMATIONAL: the margin floor computed on read from the
+	// row's own economics (net_price + max commission + acquiring, zero target
+	// margin — active strategies may use a different margin). Nil when the
+	// economics are insufficient to compute it.
+	FloorRub *float64 `json:"floor_rub,omitempty"`
 }
 
 // Ozon bid-change audit constants (ozon_bid_changes.kind / source / status).
@@ -115,6 +124,39 @@ type OzonBidChange struct {
 	NewBidRub       *float64   `json:"new_bid_rub,omitempty"`
 	Reason          string     `json:"reason,omitempty"`
 	Source          string     `json:"source"`
+	Status          string     `json:"status"`
+	DecisionContext any        `json:"decision_context,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	AppliedAt       *time.Time `json:"applied_at,omitempty"`
+}
+
+// Ozon price-change audit constants (ozon_price_changes.status; sources
+// reuse PriceSourceStrategy/PriceSourceManual plus BidSourceAI).
+const (
+	OzonPriceStatusPending    = "pending"
+	OzonPriceStatusApplied    = "applied"
+	OzonPriceStatusFailed     = "failed"
+	OzonPriceStatusRolledBack = "rolled_back"
+	OzonPriceStatusShadow     = "shadow"
+)
+
+// OzonPriceChange is one audited Ozon price write (strategy, manual or AI).
+// status='shadow' rows are dry-run decisions that never reached Ozon.
+type OzonPriceChange struct {
+	ID              uuid.UUID  `json:"id"`
+	SellerCabinetID uuid.UUID  `json:"seller_cabinet_id"`
+	SKU             int64      `json:"sku"`
+	OfferID         string     `json:"offer_id,omitempty"`
+	OldPriceRub     *float64   `json:"old_price_rub,omitempty"`
+	NewPriceRub     float64    `json:"new_price_rub"`
+	OldOldPriceRub  *float64   `json:"old_old_price_rub,omitempty"`
+	NewOldPriceRub  *float64   `json:"new_old_price_rub,omitempty"`
+	MinPriceRub     *float64   `json:"min_price_rub,omitempty"`
+	FloorRub        *float64   `json:"floor_rub,omitempty"`
+	Reason          string     `json:"reason,omitempty"`
+	Source          string     `json:"source"`
+	StrategyID      *uuid.UUID `json:"strategy_id,omitempty"`
 	Status          string     `json:"status"`
 	DecisionContext any        `json:"decision_context,omitempty"`
 	Error           string     `json:"error,omitempty"`

@@ -48,11 +48,13 @@ type ozonSyncEnqueuer func(cabinetID uuid.UUID) error
 // OzonHandler serves the /api/v1/ozon endpoints (phase 1 reads, phase 2
 // writes, phase 3 AI autopilot — the latter attached via WithAI).
 type OzonHandler struct {
-	svc          ozonServicer
-	actions      ozonActionsServicer
-	enqueueSync  ozonSyncEnqueuer
-	ai           ozonAIServicer
-	enqueueAIRun ozonAIRunEnqueuer
+	svc                ozonServicer
+	actions            ozonActionsServicer
+	enqueueSync        ozonSyncEnqueuer
+	ai                 ozonAIServicer
+	enqueueAIRun       ozonAIRunEnqueuer
+	repricer           ozonRepricerServicer
+	enqueueRepricerRun ozonRepricerRunEnqueuer
 }
 
 // NewOzonHandler creates a new OzonHandler.

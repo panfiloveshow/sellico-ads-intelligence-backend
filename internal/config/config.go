@@ -119,6 +119,7 @@ type Config struct {
 	OzonSyncInterval         string // env: OZON_SYNC_INTERVAL, default: "@every 1h"
 	OzonStrategyInterval     string // env: OZON_STRATEGY_INTERVAL, default: "@every 1h"
 	OzonAIInterval           string // env: OZON_AI_INTERVAL, default: "@every 4h"
+	OzonRepricerInterval     string // env: OZON_REPRICER_INTERVAL, default: "@every 1h"
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -182,6 +183,7 @@ func Load() *Config {
 		OzonSyncInterval:                   getEnvOrDefault("OZON_SYNC_INTERVAL", "@every 1h"),
 		OzonStrategyInterval:               getEnvOrDefault("OZON_STRATEGY_INTERVAL", "@every 1h"),
 		OzonAIInterval:                     getEnvOrDefault("OZON_AI_INTERVAL", "@every 4h"),
+		OzonRepricerInterval:               getEnvOrDefault("OZON_REPRICER_INTERVAL", "@every 1h"),
 		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),

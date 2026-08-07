@@ -36,6 +36,7 @@ type runtimeOptions struct {
 	ozonSync     ozonSyncRunner
 	ozonStrategy ozonStrategyRunner
 	ozonAI       ozonAIRunner
+	ozonRepricer ozonRepricerRunner
 }
 
 // WithOzonSyncService enables the Ozon sync module: a dedicated low-concurrency
@@ -63,6 +64,16 @@ func WithOzonStrategyService(r ozonStrategyRunner) RuntimeOption {
 func WithOzonAIManager(r ozonAIRunner) RuntimeOption {
 	return func(o *runtimeOptions) {
 		o.ozonAI = r
+	}
+}
+
+// WithOzonRepricer enables the Ozon repricer sweep (queue ozon-sync).
+// Requires WithOzonSyncService — the repricer tasks run on the same
+// dedicated server. No startup kick: the first scheduled sweep is soon
+// enough for price strategies, and a boot-time write burst is undesirable.
+func WithOzonRepricer(r ozonRepricerRunner) RuntimeOption {
+	return func(o *runtimeOptions) {
+		o.ozonRepricer = r
 	}
 }
 
@@ -143,6 +154,11 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		processor = processor.WithOzonAIManager(options.ozonAI)
 		mux.HandleFunc(TaskOzonAISweep, processor.HandleOzonAISweep)
 		mux.HandleFunc(TaskOzonAIRun, processor.HandleOzonAIRun)
+	}
+	if options.ozonRepricer != nil && options.ozonSync != nil {
+		processor = processor.WithOzonRepricer(options.ozonRepricer)
+		mux.HandleFunc(TaskOzonRepricerSweep, processor.HandleOzonRepricerSweep)
+		mux.HandleFunc(TaskOzonRepricerRun, processor.HandleOzonRepricerRun)
 	}
 
 	// WB queues are all weight 1 and the server runs with Concurrency 1 so WB
@@ -269,6 +285,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 				taskType string
 				queue    string
 			}{aiInterval, TaskOzonAISweep, QueueOzonSync})
+		}
+		if options.ozonRepricer != nil {
+			repricerInterval := cfg.OzonRepricerInterval
+			if repricerInterval == "" {
+				repricerInterval = "@every 1h"
+			}
+			sweepEntries = append(sweepEntries, struct {
+				cron     string
+				taskType string
+				queue    string
+			}{repricerInterval, TaskOzonRepricerSweep, QueueOzonSync})
 		}
 	}
 	for _, entry := range sweepEntries {

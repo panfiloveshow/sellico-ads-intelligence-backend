@@ -154,6 +154,7 @@ func main() {
 	)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonCampaignActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
+	ozonRepricerService := service.NewOzonRepricerService(deps.Queries, ozonSellerClient, []byte(cfg.EncryptionKey), deps.Logger)
 	// AI manager in the API process serves listings + copilot approvals; the
 	// LLM client is only used by the worker, so it may be disabled here.
 	ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonCampaignActionsService, llm.NewClient(llm.Config{
@@ -314,6 +315,16 @@ func main() {
 				return taskErr
 			}
 			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueOzonSync), asynq.MaxRetry(1), asynq.Timeout(45*time.Minute), asynq.Unique(5*time.Minute))
+			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+				return nil // already queued — treat repeated clicks as success
+			}
+			return taskErr
+		}).WithRepricer(ozonRepricerService, func(workspaceID uuid.UUID) error {
+			task, taskErr := worker.NewWorkspaceTask(worker.TaskOzonRepricerRun, workspaceID)
+			if taskErr != nil {
+				return taskErr
+			}
+			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueOzonSync), asynq.MaxRetry(2), asynq.Timeout(30*time.Minute), asynq.Unique(5*time.Minute))
 			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
 				return nil // already queued — treat repeated clicks as success
 			}

@@ -118,6 +118,11 @@ type ozonAIRunner interface {
 	RunForCabinetID(ctx context.Context, cabinetID uuid.UUID, trigger string) error
 }
 
+// ozonRepricerRunner executes ozon_price_* strategies for a workspace.
+type ozonRepricerRunner interface {
+	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
 type semanticsCollector interface {
 	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
@@ -162,6 +167,7 @@ type Processor struct {
 	ozonSync             ozonSyncRunner
 	ozonStrategy         ozonStrategyRunner
 	ozonAI               ozonAIRunner
+	ozonRepricer         ozonRepricerRunner
 	logger               zerolog.Logger
 }
 
@@ -607,6 +613,47 @@ func (p *Processor) HandleOzonStrategyRun(ctx context.Context, task *asynq.Task)
 			Int("campaigns_applied", applied).
 			Msg("ozon strategy run completed")
 		return map[string]any{"campaigns_applied": applied}, nil
+	})
+}
+
+// WithOzonRepricer sets the Ozon repricer runner.
+func (p *Processor) WithOzonRepricer(r ozonRepricerRunner) *Processor {
+	p.ozonRepricer = r
+	return p
+}
+
+// HandleOzonRepricerSweep fans one ozon:repricer_run task out per workspace
+// (the per-workspace run is a cheap no-op when the workspace has no active
+// ozon_price_* strategies).
+func (p *Processor) HandleOzonRepricerSweep(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonRepricer == nil {
+		p.logger.Debug().Msg("ozon repricer not configured, skipping sweep")
+		return nil
+	}
+	return p.runSweep(ctx, TaskOzonRepricerSweep, TaskOzonRepricerRun, QueueOzonSync)
+}
+
+// HandleOzonRepricerRun executes ozon price strategies for one workspace.
+func (p *Processor) HandleOzonRepricerRun(ctx context.Context, task *asynq.Task) error {
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
+	if err != nil {
+		return err
+	}
+	if p.ozonRepricer == nil {
+		p.logger.Debug().Msg("ozon repricer not configured, skipping")
+		return nil
+	}
+	return p.runWithJobRun(ctx, TaskOzonRepricerRun, &workspaceID, payload, func() (map[string]any, error) {
+		written, runErr := p.ozonRepricer.RunForWorkspace(ctx, workspaceID)
+		if runErr != nil {
+			p.logger.Error().Err(runErr).Str("workspace_id", workspaceID.String()).Msg("ozon repricer run failed")
+			return map[string]any{"decisions": written}, runErr
+		}
+		p.logger.Info().
+			Str("workspace_id", workspaceID.String()).
+			Int("decisions", written).
+			Msg("ozon repricer run completed")
+		return map[string]any{"decisions": written}, nil
 	})
 }
 

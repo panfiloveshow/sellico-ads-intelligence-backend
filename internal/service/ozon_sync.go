@@ -285,19 +285,22 @@ func (s *OzonSyncService) SyncPrices(ctx context.Context, cabinet domain.SellerC
 			continue
 		}
 		if err := s.queries.UpsertOzonProductPrice(ctx, sqlcgen.UpsertOzonProductPriceParams{
-			SellerCabinetID:         uuidToPgtype(cabinet.ID),
-			Sku:                     price.ProductID,
-			OfferID:                 textToPgtype(price.OfferID),
-			Name:                    pgtype.Text{}, // enriched in phase 2 via product/info
-			PriceRub:                floatToPgNumeric(price.PriceRub),
-			OldPriceRub:             floatToPgNumeric(price.OldPriceRub),
-			MinPriceRub:             floatToPgNumeric(price.MinPriceRub),
-			NetPriceRub:             floatToPgNumeric(price.NetPriceRub),
-			MarketingSellerPriceRub: floatToPgNumeric(price.MarketingSellerPriceRub),
-			ColorIndex:              textToPgtype(price.ColorIndex),
-			CommissionFboPct:        floatToPgNumeric(price.CommissionFBOPct),
-			CommissionFbsPct:        floatToPgNumeric(price.CommissionFBSPct),
-			AcquiringPct:            floatToPgNumeric(price.AcquiringPct),
+			SellerCabinetID:          uuidToPgtype(cabinet.ID),
+			Sku:                      price.ProductID,
+			OfferID:                  textToPgtype(price.OfferID),
+			Name:                     pgtype.Text{}, // enriched in phase 2 via product/info
+			PriceRub:                 floatToPgNumeric(price.PriceRub),
+			OldPriceRub:              floatToPgNumeric(price.OldPriceRub),
+			MinPriceRub:              floatToPgNumeric(price.MinPriceRub),
+			NetPriceRub:              floatToPgNumeric(price.NetPriceRub),
+			MarketingSellerPriceRub:  floatToPgNumeric(price.MarketingSellerPriceRub),
+			ColorIndex:               textToPgtype(price.ColorIndex),
+			CommissionFboPct:         floatToPgNumeric(price.CommissionFBOPct),
+			CommissionFbsPct:         floatToPgNumeric(price.CommissionFBSPct),
+			AcquiringPct:             floatToPgNumeric(price.AcquiringPct),
+			OzonIndexMinPriceRub:     floatToPgNumeric(price.OzonIndexMinPriceRub),
+			ExternalIndexMinPriceRub: floatToPgNumeric(price.ExternalIndexMinPriceRub),
+			SelfIndexMinPriceRub:     floatToPgNumeric(price.SelfIndexMinPriceRub),
 		}); err != nil {
 			return fmt.Errorf("upsert price for sku %d: %w", price.ProductID, err)
 		}

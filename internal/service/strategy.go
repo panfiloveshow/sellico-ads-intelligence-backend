@@ -258,7 +258,9 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypePriceInventoryDemand,
 		domain.StrategyTypePriceAdLinked,
 		domain.StrategyTypePricePeakHours,
-		domain.StrategyTypePriceCompetitorFollow:
+		domain.StrategyTypePriceCompetitorFollow,
+		domain.StrategyTypeOzonPriceMarginFloor,
+		domain.StrategyTypeOzonPriceCompetitorFollow:
 		return validatePriceStrategy(input)
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid strategy type")
@@ -419,6 +421,9 @@ func validatePriceStrategy(input domain.Strategy) error {
 	if p.UndercutPercent < 0 || p.UndercutPercent > 95 {
 		return apperror.New(apperror.ErrValidation, "undercut_percent must be between 0 and 95")
 	}
+	if p.TargetMarginPercent < 0 || p.TargetMarginPercent > 90 {
+		return apperror.New(apperror.ErrValidation, "target_margin_percent must be between 0 and 90")
+	}
 	// Upward moves need a ceiling, but the engine already skips them without one
 	// ("max_price_required_for_increase") — a down-only inventory strategy is
 	// valid, so max_price_rub stays optional.
@@ -449,6 +454,11 @@ func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strate
 		return nil, apperror.New(apperror.ErrInternal, "failed to load strategy for ownership check")
 	}
 	strategy := strategyFromSqlc(strategyRow)
+	if domain.IsOzonPriceStrategy(strategy.Type) {
+		// Ozon repricer strategies always cover every priced product of their
+		// cabinet — there is nothing to bind them to.
+		return nil, apperror.New(apperror.ErrValidation, "ozon price strategies apply to all cabinet products; bindings are not supported")
+	}
 	if domain.IsOzonStrategy(strategy.Type) {
 		// Ozon strategies bind to ozon_campaigns via the dedicated FK column;
 		// campaignID carries the ozon campaign UUID here. The WB live-ownership

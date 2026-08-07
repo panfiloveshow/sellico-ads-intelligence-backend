@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -108,6 +109,13 @@ func (c *SellerClient) ListProductPrices(ctx context.Context, creds Credentials)
 		MarketingSellerPrice flexFloat `json:"marketing_seller_price"`
 		VAT                  flexFloat `json:"vat"`
 	}
+	// wireIndexData is one competitor block inside price_indexes. The docs
+	// have renamed the minimum-price key across versions (min_price vs
+	// minimal_price) — parse both defensively and take whichever is set.
+	type wireIndexData struct {
+		MinPrice     flexFloat `json:"min_price"`
+		MinimalPrice flexFloat `json:"minimal_price"`
+	}
 	type wireItem struct {
 		ProductID   flexInt64 `json:"product_id"`
 		OfferID     string    `json:"offer_id"`
@@ -118,8 +126,17 @@ func (c *SellerClient) ListProductPrices(ctx context.Context, creds Credentials)
 		} `json:"commissions"`
 		Acquiring    flexFloat `json:"acquiring"`
 		PriceIndexes struct {
-			ColorIndex string `json:"color_index"`
+			ColorIndex        string        `json:"color_index"`
+			OzonIndexData     wireIndexData `json:"ozon_index_data"`
+			ExternalIndexData wireIndexData `json:"external_index_data"`
+			SelfIndexData     wireIndexData `json:"self_marketplaces_index_data"`
 		} `json:"price_indexes"`
+	}
+	indexMin := func(d wireIndexData) float64 {
+		if v := float64(d.MinPrice); v > 0 {
+			return v
+		}
+		return float64(d.MinimalPrice)
 	}
 	type response struct {
 		Items  []wireItem `json:"items"`
@@ -160,6 +177,9 @@ func (c *SellerClient) ListProductPrices(ctx context.Context, creds Credentials)
 			row.MinPriceRub = float64(item.Price.MinPrice)
 			row.NetPriceRub = float64(item.Price.NetPrice)
 			row.MarketingSellerPriceRub = float64(item.Price.MarketingSellerPrice)
+			row.OzonIndexMinPriceRub = indexMin(item.PriceIndexes.OzonIndexData)
+			row.ExternalIndexMinPriceRub = indexMin(item.PriceIndexes.ExternalIndexData)
+			row.SelfIndexMinPriceRub = indexMin(item.PriceIndexes.SelfIndexData)
 			out = append(out, row)
 		}
 		if len(resp.Items) < sellerPageSize || resp.Cursor == "" {
@@ -167,6 +187,95 @@ func (c *SellerClient) ListProductPrices(ctx context.Context, creds Credentials)
 		}
 		cursor = resp.Cursor
 	}
+}
+
+// updatePricesChunkSize is the Ozon limit for one import/prices request.
+const updatePricesChunkSize = 1000
+
+// UpdatePrices writes product prices via POST /v1/product/import/prices,
+// chunked at 1000 items per request (the Ozon limit). Money is SENT as
+// decimal strings per the docs (responses may be numbers, but the write side
+// keeps strings). The returned slice carries one outcome per submitted item;
+// a transport error aborts the remaining chunks and is returned alongside
+// the outcomes collected so far.
+//
+// NOTE: Ozon rejects more than 10 price changes per product per hour; that
+// budget is enforced by the service layer via ozon_price_changes history,
+// not here.
+func (c *SellerClient) UpdatePrices(ctx context.Context, creds Credentials, items []PriceUpdate) ([]PriceUpdateResult, error) {
+	type wirePrice struct {
+		ProductID    int64  `json:"product_id,omitempty"`
+		OfferID      string `json:"offer_id,omitempty"`
+		Price        string `json:"price"`
+		OldPrice     string `json:"old_price,omitempty"`
+		MinPrice     string `json:"min_price,omitempty"`
+		CurrencyCode string `json:"currency_code"`
+	}
+	type request struct {
+		Prices []wirePrice `json:"prices"`
+	}
+	type wireError struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	type wireResult struct {
+		ProductID flexInt64   `json:"product_id"`
+		OfferID   string      `json:"offer_id"`
+		Updated   bool        `json:"updated"`
+		Errors    []wireError `json:"errors"`
+	}
+	type response struct {
+		Result []wireResult `json:"result"`
+	}
+
+	formatRub := func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
+
+	out := make([]PriceUpdateResult, 0, len(items))
+	for start := 0; start < len(items); start += updatePricesChunkSize {
+		end := start + updatePricesChunkSize
+		if end > len(items) {
+			end = len(items)
+		}
+		chunk := items[start:end]
+
+		req := request{Prices: make([]wirePrice, 0, len(chunk))}
+		for _, item := range chunk {
+			price := wirePrice{
+				ProductID:    item.ProductID,
+				OfferID:      item.OfferID,
+				Price:        formatRub(item.PriceRub),
+				CurrencyCode: "RUB",
+			}
+			if item.OldPriceRub != nil {
+				price.OldPrice = formatRub(*item.OldPriceRub)
+			}
+			if item.MinPriceRub != nil {
+				price.MinPrice = formatRub(*item.MinPriceRub)
+			}
+			req.Prices = append(req.Prices, price)
+		}
+
+		body, err := c.do(ctx, creds, "/v1/product/import/prices", req)
+		if err != nil {
+			return out, err
+		}
+		var resp response
+		if err := decodeJSON(body, &resp, "product/import/prices"); err != nil {
+			return out, err
+		}
+		for _, result := range resp.Result {
+			item := PriceUpdateResult{
+				ProductID: int64(result.ProductID),
+				OfferID:   result.OfferID,
+				Updated:   result.Updated,
+			}
+			for _, wireErr := range result.Errors {
+				item.Errors = append(item.Errors, fmt.Sprintf("%s: %s", wireErr.Code, wireErr.Message))
+			}
+			out = append(out, item)
+		}
+	}
+	return out, nil
 }
 
 // do executes one Seller API POST with rate limiting, retry (429 honors

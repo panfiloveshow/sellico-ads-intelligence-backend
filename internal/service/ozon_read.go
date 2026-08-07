@@ -253,5 +253,24 @@ func ozonProductPriceFromSqlc(row sqlcgen.OzonProductPrice) domain.OzonProductPr
 		value := row.SyncedAt.Time
 		price.SyncedAt = &value
 	}
+	if v := pgNumericToFloat(row.OzonIndexMinPriceRub); v > 0 {
+		price.OzonIndexMinPriceRub = &v
+	}
+	if v := pgNumericToFloat(row.ExternalIndexMinPriceRub); v > 0 {
+		price.ExternalIndexMinPriceRub = &v
+	}
+	if v := pgNumericToFloat(row.SelfIndexMinPriceRub); v > 0 {
+		price.SelfIndexMinPriceRub = &v
+	}
+	// Informational floor: computed from the row's own Ozon economics with a
+	// zero target margin (an active strategy may use its own margin).
+	if floor, reason := computeOzonFloor(ozonFloorInputs{
+		NetPriceRub:      pgNumericToFloat(row.NetPriceRub),
+		CommissionFBOPct: pgNumericToFloat(row.CommissionFboPct),
+		CommissionFBSPct: pgNumericToFloat(row.CommissionFbsPct),
+		AcquiringRub:     pgNumericToFloat(row.AcquiringPct),
+	}); reason == "" {
+		price.FloorRub = &floor
+	}
 	return price
 }

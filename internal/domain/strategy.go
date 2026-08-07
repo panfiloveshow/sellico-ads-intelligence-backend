@@ -62,15 +62,32 @@ const (
 	// deterministic Ozon sweep and the WB automations all skip it. TargetACoS
 	// doubles as the target ДРР; AutomationLevel 1..3 = shadow/copilot/auto.
 	StrategyTypeOzonAIAutopilot = "ozon_ai_autopilot"
+
+	// Ozon repricer strategy types (phase 4). Executed exclusively by
+	// OzonRepricerService — the Ozon bid sweep and the WB repricer both skip
+	// them. Economics come from Ozon itself (/v5/product/info/prices:
+	// net_price, commissions, acquiring, competitor price indexes).
+	StrategyTypeOzonPriceMarginFloor      = "ozon_price_margin_floor"
+	StrategyTypeOzonPriceCompetitorFollow = "ozon_price_competitor_follow"
 )
 
 // IsOzonStrategy reports whether a strategy type belongs to the Ozon module.
 // WB bid automation and the WB repricer must skip these.
 func IsOzonStrategy(strategyType string) bool {
-	return strategyType == StrategyTypeOzonCPCTargetDRR || strategyType == StrategyTypeOzonAIAutopilot
+	return strategyType == StrategyTypeOzonCPCTargetDRR ||
+		strategyType == StrategyTypeOzonAIAutopilot ||
+		IsOzonPriceStrategy(strategyType)
 }
 
-// IsPriceStrategy reports whether a strategy type is a repricer strategy.
+// IsOzonPriceStrategy reports whether a strategy type is an Ozon repricer
+// strategy (executed by OzonRepricerService only).
+func IsOzonPriceStrategy(strategyType string) bool {
+	return strategyType == StrategyTypeOzonPriceMarginFloor || strategyType == StrategyTypeOzonPriceCompetitorFollow
+}
+
+// IsPriceStrategy reports whether a strategy type is a WB repricer strategy.
+// Ozon price strategies (ozon_price_*) deliberately do NOT match: the WB
+// repricer must never pick them up.
 func IsPriceStrategy(strategyType string) bool {
 	switch strategyType {
 	case StrategyTypePriceMarginFloor, StrategyTypePriceInventoryDemand, StrategyTypePriceAdLinked, StrategyTypePricePeakHours, StrategyTypePriceCompetitorFollow:
@@ -161,6 +178,10 @@ type StrategyParams struct {
 	// Relative safety floor when product economics is absent: never sell below
 	// current × (1 − this%). Applies to all price strategies. Default 30.
 	MaxDiscountPercent float64 `json:"max_discount_percent,omitempty"`
+	// ozon_price_* strategies: target margin (% of the sale price) baked into
+	// the floor on top of net_price + commission + acquiring. Default 0 —
+	// the floor then only covers cost + Ozon fees.
+	TargetMarginPercent float64 `json:"target_margin_percent,omitempty"`
 }
 
 // DefaultPriceParams returns sensible defaults for repricer strategy parameters.

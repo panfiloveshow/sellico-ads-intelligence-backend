@@ -563,22 +563,46 @@ type OzonCampaignStat struct {
 	RevenueRub pgtype.Numeric `json:"revenue_rub"`
 }
 
+type OzonPriceChange struct {
+	ID              pgtype.UUID        `json:"id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Sku             int64              `json:"sku"`
+	OfferID         pgtype.Text        `json:"offer_id"`
+	OldPriceRub     pgtype.Numeric     `json:"old_price_rub"`
+	NewPriceRub     pgtype.Numeric     `json:"new_price_rub"`
+	OldOldPriceRub  pgtype.Numeric     `json:"old_old_price_rub"`
+	NewOldPriceRub  pgtype.Numeric     `json:"new_old_price_rub"`
+	MinPriceRub     pgtype.Numeric     `json:"min_price_rub"`
+	FloorRub        pgtype.Numeric     `json:"floor_rub"`
+	Reason          pgtype.Text        `json:"reason"`
+	Source          string             `json:"source"`
+	StrategyID      pgtype.UUID        `json:"strategy_id"`
+	Status          string             `json:"status"`
+	DecisionContext []byte             `json:"decision_context"`
+	Error           pgtype.Text        `json:"error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	AppliedAt       pgtype.Timestamptz `json:"applied_at"`
+}
+
 type OzonProductPrice struct {
-	ID                      pgtype.UUID        `json:"id"`
-	SellerCabinetID         pgtype.UUID        `json:"seller_cabinet_id"`
-	Sku                     int64              `json:"sku"`
-	OfferID                 pgtype.Text        `json:"offer_id"`
-	Name                    pgtype.Text        `json:"name"`
-	PriceRub                pgtype.Numeric     `json:"price_rub"`
-	OldPriceRub             pgtype.Numeric     `json:"old_price_rub"`
-	MinPriceRub             pgtype.Numeric     `json:"min_price_rub"`
-	NetPriceRub             pgtype.Numeric     `json:"net_price_rub"`
-	MarketingSellerPriceRub pgtype.Numeric     `json:"marketing_seller_price_rub"`
-	ColorIndex              pgtype.Text        `json:"color_index"`
-	CommissionFboPct        pgtype.Numeric     `json:"commission_fbo_pct"`
-	CommissionFbsPct        pgtype.Numeric     `json:"commission_fbs_pct"`
-	AcquiringPct            pgtype.Numeric     `json:"acquiring_pct"`
-	SyncedAt                pgtype.Timestamptz `json:"synced_at"`
+	ID                       pgtype.UUID        `json:"id"`
+	SellerCabinetID          pgtype.UUID        `json:"seller_cabinet_id"`
+	Sku                      int64              `json:"sku"`
+	OfferID                  pgtype.Text        `json:"offer_id"`
+	Name                     pgtype.Text        `json:"name"`
+	PriceRub                 pgtype.Numeric     `json:"price_rub"`
+	OldPriceRub              pgtype.Numeric     `json:"old_price_rub"`
+	MinPriceRub              pgtype.Numeric     `json:"min_price_rub"`
+	NetPriceRub              pgtype.Numeric     `json:"net_price_rub"`
+	MarketingSellerPriceRub  pgtype.Numeric     `json:"marketing_seller_price_rub"`
+	ColorIndex               pgtype.Text        `json:"color_index"`
+	CommissionFboPct         pgtype.Numeric     `json:"commission_fbo_pct"`
+	CommissionFbsPct         pgtype.Numeric     `json:"commission_fbs_pct"`
+	AcquiringPct             pgtype.Numeric     `json:"acquiring_pct"`
+	SyncedAt                 pgtype.Timestamptz `json:"synced_at"`
+	OzonIndexMinPriceRub     pgtype.Numeric     `json:"ozon_index_min_price_rub"`
+	ExternalIndexMinPriceRub pgtype.Numeric     `json:"external_index_min_price_rub"`
+	SelfIndexMinPriceRub     pgtype.Numeric     `json:"self_index_min_price_rub"`
 }
 
 type OzonSyncState struct {

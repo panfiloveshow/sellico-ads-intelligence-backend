@@ -299,7 +299,7 @@ func (q *Queries) ListOzonCampaignsByCabinet(ctx context.Context, arg ListOzonCa
 }
 
 const listOzonProductPrices = `-- name: ListOzonProductPrices :many
-SELECT id, seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub, min_price_rub, net_price_rub, marketing_seller_price_rub, color_index, commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at FROM ozon_product_prices
+SELECT id, seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub, min_price_rub, net_price_rub, marketing_seller_price_rub, color_index, commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at, ozon_index_min_price_rub, external_index_min_price_rub, self_index_min_price_rub FROM ozon_product_prices
 WHERE seller_cabinet_id = $1
   AND (
     $4::text IS NULL
@@ -348,6 +348,9 @@ func (q *Queries) ListOzonProductPrices(ctx context.Context, arg ListOzonProduct
 			&i.CommissionFbsPct,
 			&i.AcquiringPct,
 			&i.SyncedAt,
+			&i.OzonIndexMinPriceRub,
+			&i.ExternalIndexMinPriceRub,
+			&i.SelfIndexMinPriceRub,
 		); err != nil {
 			return nil, err
 		}
@@ -539,9 +542,11 @@ const upsertOzonProductPrice = `-- name: UpsertOzonProductPrice :exec
 INSERT INTO ozon_product_prices (
     seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub,
     min_price_rub, net_price_rub, marketing_seller_price_rub, color_index,
-    commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at
+    commission_fbo_pct, commission_fbs_pct, acquiring_pct,
+    ozon_index_min_price_rub, external_index_min_price_rub, self_index_min_price_rub,
+    synced_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
 ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     offer_id = EXCLUDED.offer_id,
     name = COALESCE(EXCLUDED.name, ozon_product_prices.name),
@@ -554,23 +559,29 @@ ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     commission_fbo_pct = EXCLUDED.commission_fbo_pct,
     commission_fbs_pct = EXCLUDED.commission_fbs_pct,
     acquiring_pct = EXCLUDED.acquiring_pct,
+    ozon_index_min_price_rub = EXCLUDED.ozon_index_min_price_rub,
+    external_index_min_price_rub = EXCLUDED.external_index_min_price_rub,
+    self_index_min_price_rub = EXCLUDED.self_index_min_price_rub,
     synced_at = now()
 `
 
 type UpsertOzonProductPriceParams struct {
-	SellerCabinetID         pgtype.UUID    `json:"seller_cabinet_id"`
-	Sku                     int64          `json:"sku"`
-	OfferID                 pgtype.Text    `json:"offer_id"`
-	Name                    pgtype.Text    `json:"name"`
-	PriceRub                pgtype.Numeric `json:"price_rub"`
-	OldPriceRub             pgtype.Numeric `json:"old_price_rub"`
-	MinPriceRub             pgtype.Numeric `json:"min_price_rub"`
-	NetPriceRub             pgtype.Numeric `json:"net_price_rub"`
-	MarketingSellerPriceRub pgtype.Numeric `json:"marketing_seller_price_rub"`
-	ColorIndex              pgtype.Text    `json:"color_index"`
-	CommissionFboPct        pgtype.Numeric `json:"commission_fbo_pct"`
-	CommissionFbsPct        pgtype.Numeric `json:"commission_fbs_pct"`
-	AcquiringPct            pgtype.Numeric `json:"acquiring_pct"`
+	SellerCabinetID          pgtype.UUID    `json:"seller_cabinet_id"`
+	Sku                      int64          `json:"sku"`
+	OfferID                  pgtype.Text    `json:"offer_id"`
+	Name                     pgtype.Text    `json:"name"`
+	PriceRub                 pgtype.Numeric `json:"price_rub"`
+	OldPriceRub              pgtype.Numeric `json:"old_price_rub"`
+	MinPriceRub              pgtype.Numeric `json:"min_price_rub"`
+	NetPriceRub              pgtype.Numeric `json:"net_price_rub"`
+	MarketingSellerPriceRub  pgtype.Numeric `json:"marketing_seller_price_rub"`
+	ColorIndex               pgtype.Text    `json:"color_index"`
+	CommissionFboPct         pgtype.Numeric `json:"commission_fbo_pct"`
+	CommissionFbsPct         pgtype.Numeric `json:"commission_fbs_pct"`
+	AcquiringPct             pgtype.Numeric `json:"acquiring_pct"`
+	OzonIndexMinPriceRub     pgtype.Numeric `json:"ozon_index_min_price_rub"`
+	ExternalIndexMinPriceRub pgtype.Numeric `json:"external_index_min_price_rub"`
+	SelfIndexMinPriceRub     pgtype.Numeric `json:"self_index_min_price_rub"`
 }
 
 func (q *Queries) UpsertOzonProductPrice(ctx context.Context, arg UpsertOzonProductPriceParams) error {
@@ -588,6 +599,9 @@ func (q *Queries) UpsertOzonProductPrice(ctx context.Context, arg UpsertOzonProd
 		arg.CommissionFboPct,
 		arg.CommissionFbsPct,
 		arg.AcquiringPct,
+		arg.OzonIndexMinPriceRub,
+		arg.ExternalIndexMinPriceRub,
+		arg.SelfIndexMinPriceRub,
 	)
 	return err
 }

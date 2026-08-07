@@ -83,9 +83,11 @@ GROUP BY s.campaign_id;
 INSERT INTO ozon_product_prices (
     seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub,
     min_price_rub, net_price_rub, marketing_seller_price_rub, color_index,
-    commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at
+    commission_fbo_pct, commission_fbs_pct, acquiring_pct,
+    ozon_index_min_price_rub, external_index_min_price_rub, self_index_min_price_rub,
+    synced_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
 ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     offer_id = EXCLUDED.offer_id,
     name = COALESCE(EXCLUDED.name, ozon_product_prices.name),
@@ -98,6 +100,9 @@ ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     commission_fbo_pct = EXCLUDED.commission_fbo_pct,
     commission_fbs_pct = EXCLUDED.commission_fbs_pct,
     acquiring_pct = EXCLUDED.acquiring_pct,
+    ozon_index_min_price_rub = EXCLUDED.ozon_index_min_price_rub,
+    external_index_min_price_rub = EXCLUDED.external_index_min_price_rub,
+    self_index_min_price_rub = EXCLUDED.self_index_min_price_rub,
     synced_at = now();
 
 -- name: ListOzonProductPrices :many
