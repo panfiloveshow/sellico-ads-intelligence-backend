@@ -17,6 +17,7 @@ import (
 type Runtime struct {
 	server         *asynq.Server
 	repricerServer *asynq.Server
+	ozonServer     *asynq.Server
 	scheduler      *asynq.Scheduler
 	client         *asynq.Client
 	inspector      *asynq.Inspector
@@ -27,7 +28,29 @@ type Runtime struct {
 	mux            *asynq.ServeMux
 }
 
-func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, repricer *service.RepricerService, economicsSync *service.SellicoEconomicsSyncService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger) (*Runtime, error) {
+// RuntimeOption configures optional runtime modules without touching the
+// (long) positional NewRuntime signature.
+type RuntimeOption func(*runtimeOptions)
+
+type runtimeOptions struct {
+	ozonSync ozonSyncRunner
+}
+
+// WithOzonSyncService enables the Ozon sync module: a dedicated low-concurrency
+// asynq server for the "ozon-sync" queue plus the hourly sweep schedule. When
+// absent the WB/repricer servers are exactly as before.
+func WithOzonSyncService(r ozonSyncRunner) RuntimeOption {
+	return func(o *runtimeOptions) {
+		o.ozonSync = r
+	}
+}
+
+func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *sqlcgen.Queries, engine *service.RecommendationEngine, extendedEngine *service.ExtendedRecommendationEngine, exportGenerator *service.ExportGenerator, notifier *service.NotificationService, integrationRefresher *service.IntegrationRefreshService, bidRunner *service.BidAutomationService, repricer *service.RepricerService, economicsSync *service.SellicoEconomicsSyncService, semantics *service.SemanticsService, competitors *service.CompetitorService, delivery *service.DeliveryService, seo *service.SEOAnalyzerService, adsRead *service.AdsReadService, recommendations *service.RecommendationService, logger zerolog.Logger, opts ...RuntimeOption) (*Runtime, error) {
+	options := runtimeOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	redisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis uri for worker: %w", err)
@@ -85,6 +108,11 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	mux.HandleFunc(TaskSweepExtendedRecommendations, processor.HandleSweepExtendedRecommendations)
 	mux.HandleFunc(TaskSendClientAuditReport, processor.HandleSendClientAuditReport)
 	mux.HandleFunc(TaskSweepClientAuditReports, processor.HandleSweepClientAuditReports)
+	if options.ozonSync != nil {
+		processor = processor.WithOzonSync(options.ozonSync)
+		mux.HandleFunc(TaskOzonSweepSync, processor.HandleOzonSweepSync)
+		mux.HandleFunc(TaskOzonSyncCabinet, processor.HandleOzonSyncCabinet)
+	}
 
 	// WB queues are all weight 1 and the server runs with Concurrency 1 so WB
 	// jobs execute sequentially — WB API rate limits reject parallel calls.
@@ -126,6 +154,20 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		StrictPriority: true,
 	})
 
+	// Dedicated server for the Ozon sync queue: Ozon jobs must never queue
+	// behind (or hold up) WB syncs or the repricer. Low concurrency — each
+	// cabinet task already paces itself with per-credential rate limiters.
+	var ozonServer *asynq.Server
+	if options.ozonSync != nil {
+		ozonServer = asynq.NewServer(redisOpt, asynq.Config{
+			Concurrency:     2,
+			ShutdownTimeout: 30 * time.Second,
+			Queues: map[string]int{
+				QueueOzonSync: 1,
+			},
+		})
+	}
+
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 	inspector := asynq.NewInspector(redisOpt)
 
@@ -165,6 +207,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		{recInterval, TaskSweepExtendedRecommendations, QueueRecommendations},
 		{syncInterval, TaskSweepClientAuditReports, QueueRecommendations},
 	}
+	if options.ozonSync != nil {
+		ozonInterval := cfg.OzonSyncInterval
+		if ozonInterval == "" {
+			ozonInterval = "@every 1h"
+		}
+		sweepEntries = append(sweepEntries, struct {
+			cron     string
+			taskType string
+			queue    string
+		}{ozonInterval, TaskOzonSweepSync, QueueOzonSync})
+	}
 	for _, entry := range sweepEntries {
 		if _, err := scheduler.Register(entry.cron, NewSweepTask(entry.taskType), asynq.Queue(entry.queue)); err != nil {
 			return nil, fmt.Errorf("register sweep %s: %w", entry.taskType, err)
@@ -177,14 +230,20 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		Int("sweep_entries", len(sweepEntries)).
 		Msg("autopilot scheduler configured")
 
+	queues := append(queueNames(queueWeights), QueueRepricer, QueueRepricerPoll)
+	if ozonServer != nil {
+		queues = append(queues, QueueOzonSync)
+	}
+
 	return &Runtime{
 		server:         server,
 		repricerServer: repricerServer,
+		ozonServer:     ozonServer,
 		scheduler:      scheduler,
 		client:         client,
 		inspector:      inspector,
 		queries:        queries,
-		queues:         append(queueNames(queueWeights), QueueRepricer, QueueRepricerPoll),
+		queues:         queues,
 		logger:         logger,
 		mux:            mux,
 	}, nil
@@ -219,6 +278,15 @@ func (r *Runtime) Start() error {
 		r.server.Shutdown()
 		return err
 	}
+	if r.ozonServer != nil {
+		if err := r.ozonServer.Start(r.mux); err != nil {
+			cancel()
+			r.scheduler.Shutdown()
+			r.server.Shutdown()
+			r.repricerServer.Shutdown()
+			return err
+		}
+	}
 	r.logger.Info().Msg("worker runtime started")
 
 	// Kick off one catalog/price sync a few seconds after boot so the repricer
@@ -240,6 +308,14 @@ func (r *Runtime) Start() error {
 		asynq.Queue(QueueRepricer), asynq.ProcessIn(30*time.Second), asynq.Unique(30*time.Minute)); err != nil {
 		r.logger.Warn().Err(err).Msg("failed to enqueue startup economics sync")
 	}
+	// Kick the Ozon sweep shortly after boot (repricer precedent) so Ozon data
+	// appears without waiting a full OZON_SYNC_INTERVAL after a restart.
+	if r.ozonServer != nil {
+		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonSweepSync),
+			asynq.Queue(QueueOzonSync), asynq.ProcessIn(45*time.Second), asynq.Unique(30*time.Minute)); err != nil {
+			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon sweep")
+		}
+	}
 	return nil
 }
 
@@ -250,6 +326,9 @@ func (r *Runtime) Shutdown() {
 	r.scheduler.Shutdown()
 	r.server.Shutdown()
 	r.repricerServer.Shutdown()
+	if r.ozonServer != nil {
+		r.ozonServer.Shutdown()
+	}
 	if r.inspector != nil {
 		_ = r.inspector.Close()
 	}

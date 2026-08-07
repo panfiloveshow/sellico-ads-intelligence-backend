@@ -15,6 +15,7 @@ import (
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
@@ -39,6 +40,8 @@ func main() {
 	defer deps.Close()
 
 	wbClient := wb.NewClient(cfg, deps.Logger)
+	ozonSellerClient := ozon.NewSellerClient(cfg, deps.Logger)
+	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
 	asynqRedisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse api redis uri: %v\n", err)
@@ -148,6 +151,7 @@ func main() {
 		service.WithRepricerStrategyService(strategyService),
 		service.WithRepricerEngine(service.NewPriceEngine(deps.Logger)),
 	)
+	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)
@@ -283,6 +287,17 @@ func main() {
 				}
 				return taskErr
 			}),
+		OzonHandler: handler.NewOzonHandler(ozonSyncService, func(cabinetID uuid.UUID) error {
+			task, taskErr := worker.NewOzonCabinetTask(cabinetID)
+			if taskErr != nil {
+				return taskErr
+			}
+			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueOzonSync), asynq.MaxRetry(3), asynq.Timeout(30*time.Minute), asynq.Unique(5*time.Minute))
+			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+				return nil // already queued — treat repeated clicks as success
+			}
+			return taskErr
+		}),
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)

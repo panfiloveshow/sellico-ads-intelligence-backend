@@ -320,6 +320,12 @@ paths:
           in: query
           schema:
             type: string
+        - name: marketplace
+          in: query
+          description: Filter by marketplace code. Default (empty) returns all cabinets.
+          schema:
+            type: string
+            enum: [wb, ozon]
       responses:
         "200":
           description: Cabinet page
@@ -3094,6 +3100,107 @@ paths:
                 description: "SSE event stream (event: type\\ndata: JSON\\n\\n)"
 
   # --- Repricer (WB price management) ---
+  /api/v1/ozon/campaigns:
+    get:
+      tags: [Ozon]
+      summary: List Ozon campaigns of a cabinet with 7-day aggregate stats (spend, views, clicks, orders, DRR)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Campaign page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCampaignListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}:
+    get:
+      tags: [Ozon]
+      summary: Get an Ozon campaign with its products and bids
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Campaign with products
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCampaignDetailEnvelope" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/stats:
+    get:
+      tags: [Ozon]
+      summary: Daily statistics rows for an Ozon campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Daily stat rows
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCampaignStatListEnvelope" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/prices:
+    get:
+      tags: [Ozon]
+      summary: List Ozon product prices with built-in unit economics (commissions, acquiring, price index)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: search
+          in: query
+          description: Substring match on name/offer_id, or exact SKU
+          schema: { type: string }
+      responses:
+        "200":
+          description: Price page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonPriceListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/sync:
+    post:
+      tags: [Ozon]
+      summary: Enqueue a full Ozon cabinet sync (campaigns + stats + prices)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "202": { description: Sync enqueued }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/prices:
     get:
       tags: [Repricer]
@@ -3604,6 +3711,13 @@ components:
           format: uuid
         name:
           type: string
+        marketplace:
+          type: string
+          description: Legacy Sellico integration type (WildBerries | OZON)
+        marketplace_code:
+          type: string
+          enum: [wb, ozon]
+          description: Canonical marketplace code
         status:
           type: string
         last_synced_at:
@@ -4730,6 +4844,111 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SellerCabinet"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonCampaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        ozon_campaign_id: { type: integer, format: int64 }
+        title: { type: string }
+        adv_object_type: { type: string, description: "SKU | SEARCH_PROMO | BANNER | VIDEO_BANNER" }
+        state: { type: string, description: "e.g. CAMPAIGN_STATE_RUNNING" }
+        placement: { type: string }
+        autopilot_strategy: { type: string }
+        daily_budget_rub: { type: integer, format: int64, nullable: true }
+        weekly_budget_rub: { type: integer, format: int64, nullable: true }
+        from_date: { type: string, format: date, nullable: true }
+        to_date: { type: string, format: date, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    OzonCampaignWithStats:
+      allOf:
+        - $ref: "#/components/schemas/OzonCampaign"
+        - type: object
+          properties:
+            stats_views: { type: integer, format: int64 }
+            stats_clicks: { type: integer, format: int64 }
+            stats_spend_rub: { type: number }
+            stats_orders: { type: integer, format: int64 }
+            stats_revenue_rub: { type: number }
+            drr: { type: number, description: "spend / revenue * 100 over the last 7 days" }
+    OzonCampaignProduct:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid }
+        sku: { type: integer, format: int64 }
+        bid_rub: { type: number, nullable: true }
+        target_cir: { type: number, nullable: true }
+        top_position: { type: integer, nullable: true }
+        is_active: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    OzonCampaignStat:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid }
+        date: { type: string, format: date }
+        views: { type: integer, format: int64 }
+        clicks: { type: integer, format: int64 }
+        spend_rub: { type: number }
+        orders: { type: integer, format: int64 }
+        revenue_rub: { type: number }
+    OzonProductPrice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        sku: { type: integer, format: int64 }
+        offer_id: { type: string }
+        name: { type: string }
+        price_rub: { type: number, nullable: true }
+        old_price_rub: { type: number, nullable: true }
+        min_price_rub: { type: number, nullable: true }
+        net_price_rub: { type: number, nullable: true }
+        marketing_seller_price_rub: { type: number, nullable: true }
+        color_index: { type: string, description: "Ozon price index: SUPER/GREEN/..." }
+        commission_fbo_pct: { type: number, nullable: true }
+        commission_fbs_pct: { type: number, nullable: true }
+        acquiring_pct: { type: number, nullable: true }
+        synced_at: { type: string, format: date-time, nullable: true }
+    OzonCampaignListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonCampaignWithStats"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonCampaignDetailEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            campaign:
+              $ref: "#/components/schemas/OzonCampaign"
+            products:
+              type: array
+              items:
+                $ref: "#/components/schemas/OzonCampaignProduct"
+    OzonCampaignStatListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonCampaignStat"
+    OzonPriceListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonProductPrice"
         meta:
           $ref: "#/components/schemas/Meta"
     CampaignEnvelope:

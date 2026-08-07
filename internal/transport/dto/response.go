@@ -125,11 +125,15 @@ func WorkspaceMemberFromDomain(m domain.WorkspaceMember) WorkspaceMemberResponse
 
 // SellerCabinetResponse is the public representation (no encrypted_token).
 type SellerCabinetResponse struct {
-	ID                    string                         `json:"id"`
-	CabinetID             uuid.UUID                      `json:"cabinet_id"`
-	WorkspaceID           uuid.UUID                      `json:"workspace_id"`
-	Name                  string                         `json:"name"`
-	Marketplace           string                         `json:"marketplace"`
+	ID          string    `json:"id"`
+	CabinetID   uuid.UUID `json:"cabinet_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	Name        string    `json:"name"`
+	Marketplace string    `json:"marketplace"`
+	// MarketplaceCode is the canonical short code ('wb' | 'ozon'); Marketplace
+	// keeps the legacy Sellico integration-type value ('WildBerries' | 'OZON')
+	// so existing consumers stay unbroken.
+	MarketplaceCode       string                         `json:"marketplace_code"`
 	Status                string                         `json:"status"`
 	Source                string                         `json:"source"`
 	ExternalIntegrationID *string                        `json:"integration_id,omitempty"`
@@ -258,6 +262,7 @@ func SellerCabinetFromDomain(sc domain.SellerCabinet) SellerCabinetResponse {
 		WorkspaceID:           sc.WorkspaceID,
 		Name:                  sc.Name,
 		Marketplace:           marketplace,
+		MarketplaceCode:       sc.Marketplace,
 		Status:                sc.Status,
 		Source:                sc.Source,
 		ExternalIntegrationID: sc.ExternalIntegrationID,

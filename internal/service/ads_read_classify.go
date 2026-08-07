@@ -263,6 +263,9 @@ func (s *AdsReadService) listWorkspaceCabinets(ctx context.Context, workspaceID 
 	result := make([]adsDecryptedCabinet, 0, len(rows))
 	for _, row := range rows {
 		cabinet := sellerCabinetFromSqlc(row)
+		if cabinet.Marketplace != domain.MarketplaceWB {
+			continue
+		}
 		token, decryptErr := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 		if decryptErr != nil {
 			s.logger.Warn().

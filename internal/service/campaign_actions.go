@@ -1661,6 +1661,9 @@ func (s *CampaignActionService) decryptCabinetToken(ctx context.Context, cabinet
 	if err != nil {
 		return "", apperror.New(apperror.ErrNotFound, "seller cabinet not found")
 	}
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		return "", apperror.New(apperror.ErrValidation, "seller cabinet is not a Wildberries cabinet")
+	}
 	token, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 	if err != nil {
 		return "", apperror.New(apperror.ErrInternal, "failed to decrypt cabinet token")

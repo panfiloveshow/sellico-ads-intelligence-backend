@@ -1,0 +1,128 @@
+// Package ozon implements HTTP clients for the two Ozon APIs used by the
+// marketplace module:
+//
+//   - Seller API  (api-seller.ozon.ru)      — Client-Id + Api-Key headers
+//   - Performance API (api-performance.ozon.ru) — OAuth client_credentials
+//
+// Phase 1 is read-only: product/price listings, campaign listings and daily
+// statistics. The only write is the Performance token request.
+//
+// Money convention: the Performance API expresses budgets and bids in
+// MICRO-rubles (1 ₽ = 1_000_000). Conversion to rubles happens here, at the
+// client boundary — the rest of the system only ever sees rubles.
+package ozon
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// microPerRuble is the Performance API money scale: 1 ruble = 1e6 micro-rubles.
+const microPerRuble = 1_000_000
+
+// MicroRubToRub converts a Performance API micro-ruble string (e.g. "530000000")
+// to whole rubles, rounding half away from zero. Empty and "0" map to 0.
+func MicroRubToRub(raw string) (int64, error) {
+	f, err := MicroRubToRubFloat(raw)
+	if err != nil {
+		return 0, err
+	}
+	if f < 0 {
+		return int64(f - 0.5), nil
+	}
+	return int64(f + 0.5), nil
+}
+
+// MicroRubToRubFloat converts a micro-ruble string to rubles keeping kopecks
+// (used for per-SKU bids where sub-ruble precision matters).
+func MicroRubToRubFloat(raw string) (float64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, nil
+	}
+	micro, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, fmt.Errorf("ozon: parse micro-ruble value %q: %w", raw, err)
+	}
+	return micro / microPerRuble, nil
+}
+
+// ParsePriceString parses the Seller API's decimal-string money values
+// (e.g. "1990.0000"). Empty maps to 0.
+func ParsePriceString(raw string) (float64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, fmt.Errorf("ozon: parse price value %q: %w", raw, err)
+	}
+	return v, nil
+}
+
+// Credentials is the transport-level credential pair set. It mirrors
+// domain.OzonCredentials without importing the domain package.
+type Credentials struct {
+	ClientID         string
+	APIKey           string
+	PerfClientID     string
+	PerfClientSecret string
+}
+
+// ProductRef is one row of POST /v3/product/list.
+type ProductRef struct {
+	ProductID int64  `json:"product_id"`
+	OfferID   string `json:"offer_id"`
+}
+
+// ProductPrice is one parsed row of POST /v5/product/info/prices.
+type ProductPrice struct {
+	ProductID               int64
+	OfferID                 string
+	PriceRub                float64
+	OldPriceRub             float64
+	MinPriceRub             float64
+	NetPriceRub             float64
+	MarketingSellerPriceRub float64
+	VATPct                  float64
+	ColorIndex              string
+	CommissionFBOPct        float64
+	CommissionFBSPct        float64
+	AcquiringPct            float64
+}
+
+// Campaign is one campaign from GET /api/client/campaign, with budgets
+// already converted from micro-rubles to whole rubles.
+type Campaign struct {
+	ID                int64
+	Title             string
+	State             string
+	AdvObjectType     string
+	Placement         string
+	AutopilotStrategy string
+	DailyBudgetRub    *int64
+	WeeklyBudgetRub   *int64
+	FromDate          *time.Time
+	ToDate            *time.Time
+}
+
+// CampaignProduct is one SKU row from GET /api/client/campaign/{id}/v2/products,
+// bid converted from micro-rubles to rubles.
+type CampaignProduct struct {
+	SKU    int64
+	BidRub float64
+}
+
+// DailyStatRow is one row of GET /api/client/statistics/daily.
+type DailyStatRow struct {
+	CampaignID int64
+	Date       time.Time
+	Views      int64
+	Clicks     int64
+	SpendRub   float64
+	Orders     int64
+	RevenueRub float64
+}

@@ -1921,5 +1921,8 @@ func (s *BidAutomationService) decryptCabinetToken(ctx context.Context, cabinetI
 	if err != nil {
 		return "", err
 	}
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		return "", fmt.Errorf("seller cabinet %s is not a Wildberries cabinet", cabinetID)
+	}
 	return crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 }

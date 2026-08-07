@@ -330,6 +330,10 @@ func (s *RepricerService) mustCabinetToken(ctx context.Context, cabinetID uuid.U
 	if err != nil {
 		return ""
 	}
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		// Never hand an Ozon cabinet's blob to WB price endpoints.
+		return ""
+	}
 	return cabinet.EncryptedToken
 }
 

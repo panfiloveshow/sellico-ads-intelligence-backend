@@ -14,7 +14,7 @@ import (
 const createSellerCabinet = `-- name: CreateSellerCabinet :one
 INSERT INTO seller_cabinets (workspace_id, name, encrypted_token)
 VALUES ($1, $2, $3)
-RETURNING id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at
+RETURNING id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials
 `
 
 type CreateSellerCabinetParams struct {
@@ -40,12 +40,17 @@ func (q *Queries) CreateSellerCabinet(ctx context.Context, arg CreateSellerCabin
 		&i.Source,
 		&i.IntegrationType,
 		&i.LastSellicoSyncAt,
+		&i.PricesScopeStatus,
+		&i.PricesScopeCheckedAt,
+		&i.RepricerPausedUntil,
+		&i.Marketplace,
+		&i.EncryptedCredentials,
 	)
 	return i, err
 }
 
 const getSellerCabinetByExternalIntegrationID = `-- name: GetSellerCabinetByExternalIntegrationID :one
-SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at FROM seller_cabinets
+SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials FROM seller_cabinets
 WHERE external_integration_id = $1 AND deleted_at IS NULL
 `
 
@@ -66,12 +71,17 @@ func (q *Queries) GetSellerCabinetByExternalIntegrationID(ctx context.Context, e
 		&i.Source,
 		&i.IntegrationType,
 		&i.LastSellicoSyncAt,
+		&i.PricesScopeStatus,
+		&i.PricesScopeCheckedAt,
+		&i.RepricerPausedUntil,
+		&i.Marketplace,
+		&i.EncryptedCredentials,
 	)
 	return i, err
 }
 
 const getSellerCabinetByID = `-- name: GetSellerCabinetByID :one
-SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at FROM seller_cabinets
+SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials FROM seller_cabinets
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -92,12 +102,17 @@ func (q *Queries) GetSellerCabinetByID(ctx context.Context, id pgtype.UUID) (Sel
 		&i.Source,
 		&i.IntegrationType,
 		&i.LastSellicoSyncAt,
+		&i.PricesScopeStatus,
+		&i.PricesScopeCheckedAt,
+		&i.RepricerPausedUntil,
+		&i.Marketplace,
+		&i.EncryptedCredentials,
 	)
 	return i, err
 }
 
 const listActiveSellerCabinets = `-- name: ListActiveSellerCabinets :many
-SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at FROM seller_cabinets
+SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials FROM seller_cabinets
 WHERE status = 'active' AND deleted_at IS NULL
 ORDER BY created_at DESC
 `
@@ -125,6 +140,56 @@ func (q *Queries) ListActiveSellerCabinets(ctx context.Context) ([]SellerCabinet
 			&i.Source,
 			&i.IntegrationType,
 			&i.LastSellicoSyncAt,
+			&i.PricesScopeStatus,
+			&i.PricesScopeCheckedAt,
+			&i.RepricerPausedUntil,
+			&i.Marketplace,
+			&i.EncryptedCredentials,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveSellerCabinetsByMarketplace = `-- name: ListActiveSellerCabinetsByMarketplace :many
+SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials FROM seller_cabinets
+WHERE marketplace = $1 AND status = 'active' AND deleted_at IS NULL
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListActiveSellerCabinetsByMarketplace(ctx context.Context, marketplace string) ([]SellerCabinet, error) {
+	rows, err := q.db.Query(ctx, listActiveSellerCabinetsByMarketplace, marketplace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SellerCabinet{}
+	for rows.Next() {
+		var i SellerCabinet
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.EncryptedToken,
+			&i.Status,
+			&i.LastSyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.ExternalIntegrationID,
+			&i.Source,
+			&i.IntegrationType,
+			&i.LastSellicoSyncAt,
+			&i.PricesScopeStatus,
+			&i.PricesScopeCheckedAt,
+			&i.RepricerPausedUntil,
+			&i.Marketplace,
+			&i.EncryptedCredentials,
 		); err != nil {
 			return nil, err
 		}
@@ -137,7 +202,7 @@ func (q *Queries) ListActiveSellerCabinets(ctx context.Context) ([]SellerCabinet
 }
 
 const listActiveSellerCabinetsByWorkspace = `-- name: ListActiveSellerCabinetsByWorkspace :many
-SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at FROM seller_cabinets
+SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials FROM seller_cabinets
 WHERE workspace_id = $1 AND status = 'active' AND deleted_at IS NULL
 ORDER BY created_at DESC
 `
@@ -165,6 +230,11 @@ func (q *Queries) ListActiveSellerCabinetsByWorkspace(ctx context.Context, works
 			&i.Source,
 			&i.IntegrationType,
 			&i.LastSellicoSyncAt,
+			&i.PricesScopeStatus,
+			&i.PricesScopeCheckedAt,
+			&i.RepricerPausedUntil,
+			&i.Marketplace,
+			&i.EncryptedCredentials,
 		); err != nil {
 			return nil, err
 		}
@@ -177,7 +247,7 @@ func (q *Queries) ListActiveSellerCabinetsByWorkspace(ctx context.Context, works
 }
 
 const listSellerCabinetsByWorkspace = `-- name: ListSellerCabinetsByWorkspace :many
-SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at FROM seller_cabinets
+SELECT id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials FROM seller_cabinets
 WHERE workspace_id = $1 AND deleted_at IS NULL
   AND ($4::text IS NULL OR status = $4::text)
 ORDER BY created_at DESC
@@ -219,6 +289,11 @@ func (q *Queries) ListSellerCabinetsByWorkspace(ctx context.Context, arg ListSel
 			&i.Source,
 			&i.IntegrationType,
 			&i.LastSellicoSyncAt,
+			&i.PricesScopeStatus,
+			&i.PricesScopeCheckedAt,
+			&i.RepricerPausedUntil,
+			&i.Marketplace,
+			&i.EncryptedCredentials,
 		); err != nil {
 			return nil, err
 		}
@@ -296,6 +371,83 @@ func (q *Queries) UpdateSellerCabinetTokenCache(ctx context.Context, arg UpdateS
 	return err
 }
 
+const upsertSellicoOzonSellerCabinet = `-- name: UpsertSellicoOzonSellerCabinet :one
+INSERT INTO seller_cabinets (
+    workspace_id,
+    name,
+    encrypted_token,
+    encrypted_credentials,
+    marketplace,
+    status,
+    external_integration_id,
+    source,
+    integration_type,
+    last_sellico_sync_at
+)
+VALUES ($1, $2, $3, $4, 'ozon', $5, $6, 'sellico', $7, now())
+ON CONFLICT (external_integration_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    name = EXCLUDED.name,
+    encrypted_token = EXCLUDED.encrypted_token,
+    encrypted_credentials = EXCLUDED.encrypted_credentials,
+    marketplace = EXCLUDED.marketplace,
+    status = EXCLUDED.status,
+    source = EXCLUDED.source,
+    integration_type = EXCLUDED.integration_type,
+    last_sellico_sync_at = now(),
+    deleted_at = NULL,
+    updated_at = now()
+RETURNING id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials
+`
+
+type UpsertSellicoOzonSellerCabinetParams struct {
+	WorkspaceID           pgtype.UUID `json:"workspace_id"`
+	Name                  string      `json:"name"`
+	EncryptedToken        string      `json:"encrypted_token"`
+	EncryptedCredentials  pgtype.Text `json:"encrypted_credentials"`
+	Status                string      `json:"status"`
+	ExternalIntegrationID pgtype.Text `json:"external_integration_id"`
+	IntegrationType       pgtype.Text `json:"integration_type"`
+}
+
+// Ozon cabinets keep the Seller/Performance credential JSON (AES-GCM) in
+// encrypted_credentials; encrypted_token stores the encrypted Seller API key
+// only to satisfy the legacy NOT NULL column — WB code paths never read it
+// because they skip marketplace <> 'wb' rows.
+func (q *Queries) UpsertSellicoOzonSellerCabinet(ctx context.Context, arg UpsertSellicoOzonSellerCabinetParams) (SellerCabinet, error) {
+	row := q.db.QueryRow(ctx, upsertSellicoOzonSellerCabinet,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.EncryptedToken,
+		arg.EncryptedCredentials,
+		arg.Status,
+		arg.ExternalIntegrationID,
+		arg.IntegrationType,
+	)
+	var i SellerCabinet
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.EncryptedToken,
+		&i.Status,
+		&i.LastSyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.ExternalIntegrationID,
+		&i.Source,
+		&i.IntegrationType,
+		&i.LastSellicoSyncAt,
+		&i.PricesScopeStatus,
+		&i.PricesScopeCheckedAt,
+		&i.RepricerPausedUntil,
+		&i.Marketplace,
+		&i.EncryptedCredentials,
+	)
+	return i, err
+}
+
 const upsertSellicoSellerCabinet = `-- name: UpsertSellicoSellerCabinet :one
 INSERT INTO seller_cabinets (
     workspace_id,
@@ -318,7 +470,7 @@ ON CONFLICT (external_integration_id) DO UPDATE SET
     last_sellico_sync_at = now(),
     deleted_at = NULL,
     updated_at = now()
-RETURNING id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at
+RETURNING id, workspace_id, name, encrypted_token, status, last_synced_at, created_at, updated_at, deleted_at, external_integration_id, source, integration_type, last_sellico_sync_at, prices_scope_status, prices_scope_checked_at, repricer_paused_until, marketplace, encrypted_credentials
 `
 
 type UpsertSellicoSellerCabinetParams struct {
@@ -354,6 +506,11 @@ func (q *Queries) UpsertSellicoSellerCabinet(ctx context.Context, arg UpsertSell
 		&i.Source,
 		&i.IntegrationType,
 		&i.LastSellicoSyncAt,
+		&i.PricesScopeStatus,
+		&i.PricesScopeCheckedAt,
+		&i.RepricerPausedUntil,
+		&i.Marketplace,
+		&i.EncryptedCredentials,
 	)
 	return i, err
 }

@@ -38,6 +38,9 @@ type Integration struct {
 	Type     string
 	APIKey   string
 	ClientID string
+	// Ozon Performance API pair (only populated for OZON integrations).
+	PerformanceAPIKey       string
+	PerformanceClientSecret string
 }
 
 func NewClient(baseURL string, timeout time.Duration) *Client {
@@ -248,6 +251,16 @@ func parseIntegration(value any) Integration {
 		stringify(credentials["client_id"]),
 	)
 
+	perfAPIKey := firstNonEmpty(
+		stringify(raw["performance_api_key"]),
+		stringify(credentials["performance_api_key"]),
+	)
+
+	perfClientSecret := firstNonEmpty(
+		stringify(raw["performance_client_secret"]),
+		stringify(credentials["performance_client_secret"]),
+	)
+
 	integrationType := normalizeIntegrationType(firstNonEmpty(
 		stringify(raw["type"]),
 		stringify(raw["marketplace"]),
@@ -255,11 +268,13 @@ func parseIntegration(value any) Integration {
 	))
 
 	return Integration{
-		ID:       stringifyID(raw["id"]),
-		Name:     firstNonEmpty(stringify(raw["name"]), stringify(raw["title"])),
-		Type:     integrationType,
-		APIKey:   apiKey,
-		ClientID: clientID,
+		ID:                      stringifyID(raw["id"]),
+		Name:                    firstNonEmpty(stringify(raw["name"]), stringify(raw["title"])),
+		Type:                    integrationType,
+		APIKey:                  apiKey,
+		ClientID:                clientID,
+		PerformanceAPIKey:       perfAPIKey,
+		PerformanceClientSecret: perfClientSecret,
 	}
 }
 

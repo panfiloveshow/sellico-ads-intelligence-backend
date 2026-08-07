@@ -194,12 +194,12 @@ func (s *IntegrationRefreshService) RefreshViaServiceAccount(ctx context.Context
 
 	var upserted, unknownWorkspace, nonWB, missingKey, errors int
 	for _, integration := range integrations {
-		if integration.Type != "WildBerries" {
+		if integration.Type != "WildBerries" && integration.Type != "OZON" {
 			nonWB++
 			continue
 		}
 		// /collector/integrations strips work_space_id and may strip the api_key
-		// (premium-gated). We always re-fetch via /get-integration/{id} for WB
+		// (premium-gated). We always re-fetch via /get-integration/{id}
 		// because that endpoint is the only one that returns work_space_id —
 		// without which we cannot join to a local workspace.
 		full, err := s.sellicoClient.GetIntegration(ctx, token, integration.ID)
@@ -217,6 +217,25 @@ func (s *IntegrationRefreshService) RefreshViaServiceAccount(ctx context.Context
 			missingKey++
 			continue
 		}
+
+		if full.Type == "OZON" {
+			if err := s.upsertOzonCabinet(ctx, localWorkspaceID, sellico.Integration{
+				ID:                      full.ID,
+				Name:                    full.Name,
+				Type:                    full.Type,
+				APIKey:                  full.APIKey,
+				ClientID:                full.ClientID,
+				PerformanceAPIKey:       full.PerformanceAPIKey,
+				PerformanceClientSecret: full.PerformanceClientSecret,
+			}); err != nil {
+				s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("upsert ozon seller_cabinet failed")
+				errors++
+				continue
+			}
+			upserted++
+			continue
+		}
+
 		encrypted, err := crypto.Encrypt(full.APIKey, s.encryptionKey)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("integration_id", integration.ID).Msg("failed to encrypt api_key")
@@ -257,7 +276,20 @@ func (s *IntegrationRefreshService) refreshWorkspaceIntegrations(ctx context.Con
 	}
 
 	for _, integration := range integrations {
-		if integration.Type != "WildBerries" || integration.APIKey == "" {
+		if integration.APIKey == "" {
+			continue
+		}
+
+		if integration.Type == "OZON" {
+			if err := s.upsertOzonCabinet(ctx, workspaceID, integration); err != nil {
+				s.logger.Warn().
+					Err(err).
+					Str("integration_id", integration.ID).
+					Msg("failed to upsert sellico ozon cabinet")
+			}
+			continue
+		}
+		if integration.Type != "WildBerries" {
 			continue
 		}
 
@@ -281,5 +313,51 @@ func (s *IntegrationRefreshService) refreshWorkspaceIntegrations(ctx context.Con
 		}
 	}
 
+	return nil
+}
+
+// upsertOzonCabinet mirrors an OZON Sellico integration into seller_cabinets
+// (marketplace 'ozon', credentials encrypted as a JSON blob). Missing
+// Performance creds do not block the cabinet — it runs prices-only and the
+// limitation lands in ozon_sync_states.last_error.
+func (s *IntegrationRefreshService) upsertOzonCabinet(ctx context.Context, workspaceID uuid.UUID, integration sellico.Integration) error {
+	creds := domain.OzonCredentials{
+		ClientID:         integration.ClientID,
+		APIKey:           integration.APIKey,
+		PerfClientID:     integration.PerformanceAPIKey,
+		PerfClientSecret: integration.PerformanceClientSecret,
+	}
+	if !creds.HasSellerAPI() {
+		return fmt.Errorf("ozon integration %s missing client_id or api_key", integration.ID)
+	}
+
+	encryptedCredentials, err := encryptOzonCredentials(creds, s.encryptionKey)
+	if err != nil {
+		return err
+	}
+	encryptedToken, err := crypto.Encrypt(creds.APIKey, s.encryptionKey)
+	if err != nil {
+		return err
+	}
+
+	row, err := s.queries.UpsertSellicoOzonSellerCabinet(ctx, sqlcgen.UpsertSellicoOzonSellerCabinetParams{
+		WorkspaceID:           uuidToPgtype(workspaceID),
+		Name:                  integration.Name,
+		EncryptedToken:        encryptedToken,
+		EncryptedCredentials:  textToPgtype(encryptedCredentials),
+		Status:                domain.StatusActive,
+		ExternalIntegrationID: textToPgtype(integration.ID),
+		IntegrationType:       textToPgtype(integration.Type),
+	})
+	if err != nil {
+		return err
+	}
+
+	if !creds.HasPerformanceAPI() {
+		_ = s.queries.TouchOzonSyncState(ctx, sqlcgen.TouchOzonSyncStateParams{
+			SellerCabinetID: row.ID,
+			LastError:       textToPgtype("performance credentials missing: campaigns/stats sync disabled (prices-only mode)"),
+		})
+	}
 	return nil
 }

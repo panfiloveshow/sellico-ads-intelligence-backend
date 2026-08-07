@@ -307,6 +307,11 @@ func (s *SyncService) ListWorkspaceCabinetIDs(ctx context.Context, workspaceID u
 	}
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, row := range rows {
+		// WB sync fan-out must never pick up Ozon cabinets — their credentials
+		// are not WB tokens and the WB API calls would fail loudly.
+		if row.Marketplace != domain.MarketplaceWB {
+			continue
+		}
 		ids = append(ids, uuidFromPgtype(row.ID))
 	}
 	return ids, nil
@@ -1835,6 +1840,9 @@ func (s *SyncService) listSingleCabinet(ctx context.Context, cabinetID uuid.UUID
 		return nil, classifySellerCabinetLookupError(err)
 	}
 	cabinet := sellerCabinetFromSqlc(row)
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		return nil, apperror.New(apperror.ErrValidation, "seller cabinet is not a Wildberries cabinet")
+	}
 	token, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to decrypt cabinet token")
@@ -1858,6 +1866,9 @@ func (s *SyncService) listWorkspaceCabinets(ctx context.Context, workspaceID uui
 	result := make([]decryptedCabinet, 0, len(rows))
 	for _, row := range rows {
 		cabinet := sellerCabinetFromSqlc(row)
+		if cabinet.Marketplace != domain.MarketplaceWB {
+			continue
+		}
 		token, decryptErr := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 		if decryptErr != nil {
 			s.logger.Warn().

@@ -10,6 +10,7 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
 	emailclient "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/email"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/telegram"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
@@ -114,7 +115,11 @@ func main() {
 		)
 		deps.Logger.Info().Str("base", cfg.ProductsAPIBaseURL).Str("path", cfg.SellicoUnitEconomicsExportPath).Msg("products economics bridge enabled for repricer")
 	}
-	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger)
+	ozonSellerClient := ozon.NewSellerClient(cfg, deps.Logger)
+	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
+	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
+	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger,
+		worker.WithOzonSyncService(ozonSyncService))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap worker runtime: %v\n", err)
 		os.Exit(1)

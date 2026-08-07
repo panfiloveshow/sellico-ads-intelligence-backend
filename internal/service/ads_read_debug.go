@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/crypto"
@@ -190,6 +191,9 @@ func (s *AdsReadService) probeNormQueryCampaignSource(ctx context.Context, data 
 	if !ok {
 		return "selected seller cabinet not found"
 	}
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		return "selected seller cabinet is not a Wildberries cabinet"
+	}
 	token, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 	if err != nil {
 		return "failed to decrypt selected seller cabinet token"
@@ -359,6 +363,9 @@ func (s *AdsReadService) decryptDebugCabinetToken(ctx context.Context, data *ads
 	cabinet, ok := data.cabinets[cabinetID]
 	if !ok {
 		return "", apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+	}
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		return "", apperror.New(apperror.ErrValidation, "seller cabinet is not a Wildberries cabinet")
 	}
 	token, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 	if err != nil {

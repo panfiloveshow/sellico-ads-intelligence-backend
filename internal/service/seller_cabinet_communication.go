@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/crypto"
@@ -110,6 +111,9 @@ func (s *SellerCabinetService) GetCommunicationReputation(ctx context.Context, t
 	cabinet, err := s.resolveCabinet(ctx, token, workspaceRef, workspaceID, cabinetRef)
 	if err != nil {
 		return nil, err
+	}
+	if cabinet.Marketplace != domain.MarketplaceWB {
+		return nil, apperror.New(apperror.ErrValidation, "seller cabinet is not a Wildberries cabinet")
 	}
 
 	wbToken, err := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)

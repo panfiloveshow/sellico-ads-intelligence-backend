@@ -27,6 +27,43 @@ ON CONFLICT (external_integration_id) DO UPDATE SET
     updated_at = now()
 RETURNING *;
 
+-- name: UpsertSellicoOzonSellerCabinet :one
+-- Ozon cabinets keep the Seller/Performance credential JSON (AES-GCM) in
+-- encrypted_credentials; encrypted_token stores the encrypted Seller API key
+-- only to satisfy the legacy NOT NULL column — WB code paths never read it
+-- because they skip marketplace <> 'wb' rows.
+INSERT INTO seller_cabinets (
+    workspace_id,
+    name,
+    encrypted_token,
+    encrypted_credentials,
+    marketplace,
+    status,
+    external_integration_id,
+    source,
+    integration_type,
+    last_sellico_sync_at
+)
+VALUES ($1, $2, $3, $4, 'ozon', $5, $6, 'sellico', $7, now())
+ON CONFLICT (external_integration_id) DO UPDATE SET
+    workspace_id = EXCLUDED.workspace_id,
+    name = EXCLUDED.name,
+    encrypted_token = EXCLUDED.encrypted_token,
+    encrypted_credentials = EXCLUDED.encrypted_credentials,
+    marketplace = EXCLUDED.marketplace,
+    status = EXCLUDED.status,
+    source = EXCLUDED.source,
+    integration_type = EXCLUDED.integration_type,
+    last_sellico_sync_at = now(),
+    deleted_at = NULL,
+    updated_at = now()
+RETURNING *;
+
+-- name: ListActiveSellerCabinetsByMarketplace :many
+SELECT * FROM seller_cabinets
+WHERE marketplace = $1 AND status = 'active' AND deleted_at IS NULL
+ORDER BY created_at DESC;
+
 -- name: GetSellerCabinetByID :one
 SELECT * FROM seller_cabinets
 WHERE id = $1 AND deleted_at IS NULL;

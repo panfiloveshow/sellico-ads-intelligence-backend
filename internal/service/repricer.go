@@ -84,6 +84,9 @@ func (s *RepricerService) SyncPrices(ctx context.Context, workspaceID uuid.UUID)
 	total := 0
 	var syncErrors []error
 	for _, cabinet := range cabinets {
+		if cabinet.Marketplace != domain.MarketplaceWB {
+			continue // Ozon cabinets have their own repricer (phase 4)
+		}
 		cabinetID := uuidFromPgtype(cabinet.ID)
 		token, decErr := crypto.Decrypt(cabinet.EncryptedToken, s.encryptionKey)
 		if decErr != nil {
@@ -569,6 +572,9 @@ func (s *RepricerService) SyncQuarantine(ctx context.Context, workspaceID uuid.U
 	}
 	newlyDetected := 0
 	for _, cabinet := range cabinets {
+		if cabinet.Marketplace != domain.MarketplaceWB {
+			continue
+		}
 		cabinetID := uuidFromPgtype(cabinet.ID)
 		if s.pricesEndpointCoolingDown(ctx, cabinetID, wbEndpointPricesQuarantine) {
 			continue

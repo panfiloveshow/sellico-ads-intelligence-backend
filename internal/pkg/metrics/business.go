@@ -57,6 +57,23 @@ var (
 		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
 	}, []string{"path"})
 
+	// OzonAPIRequests counts Ozon API requests by api (seller|performance), path and result.
+	OzonAPIRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sellico",
+		Subsystem: "ozon_api",
+		Name:      "requests_total",
+		Help:      "Total Ozon API requests by api, path and result.",
+	}, []string{"api", "path", "status"})
+
+	// OzonAPILatency measures Ozon API response time.
+	OzonAPILatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "sellico",
+		Subsystem: "ozon_api",
+		Name:      "latency_seconds",
+		Help:      "Ozon API request latency in seconds.",
+		Buckets:   []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+	}, []string{"api", "path"})
+
 	// WBBreakerState tracks WB API circuit breaker state per breaker name:
 	// 0=closed, 1=half-open, 2=open.
 	WBBreakerState = promauto.NewGaugeVec(prometheus.GaugeOpts{

@@ -52,6 +52,7 @@ type RouterDeps struct {
 	ProductEventHandler      *handler.ProductEventHandler
 	ProductEconomicsHandler  *handler.ProductEconomicsHandler
 	PriceHandler             *handler.PriceHandler
+	OzonHandler              *handler.OzonHandler
 }
 
 // notImplemented is a placeholder handler returning 501 Not Implemented.
@@ -525,6 +526,23 @@ func NewRouter(deps RouterDeps) chi.Router {
 						ps.Get("/", notImplemented)
 						ps.With(middleware.RequireWriteAccess()).Post("/", notImplemented)
 						ps.With(middleware.RequireWriteAccess()).Delete("/{scheduleId}", notImplemented)
+					}
+				})
+
+				// Ozon module (phase 1: read-only)
+				scoped.Route("/ozon", func(oz chi.Router) {
+					if deps.OzonHandler != nil {
+						oz.Get("/campaigns", deps.OzonHandler.ListCampaigns)
+						oz.Get("/campaigns/{id}", deps.OzonHandler.GetCampaign)
+						oz.Get("/campaigns/{id}/stats", deps.OzonHandler.CampaignStats)
+						oz.Get("/prices", deps.OzonHandler.ListPrices)
+						oz.With(middleware.RequireWriteAccess()).Post("/sync", deps.OzonHandler.TriggerSync)
+					} else {
+						oz.Get("/campaigns", notImplemented)
+						oz.Get("/campaigns/{id}", notImplemented)
+						oz.Get("/campaigns/{id}/stats", notImplemented)
+						oz.Get("/prices", notImplemented)
+						oz.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
 					}
 				})
 

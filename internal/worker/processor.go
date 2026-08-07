@@ -100,6 +100,12 @@ type economicsSyncRunner interface {
 	SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
+// ozonSyncRunner syncs Ozon cabinets (campaigns + stats + prices).
+type ozonSyncRunner interface {
+	SyncCabinet(ctx context.Context, cabinetID uuid.UUID) error
+	ListOzonCabinetIDs(ctx context.Context) ([]uuid.UUID, error)
+}
+
 type semanticsCollector interface {
 	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
@@ -141,6 +147,7 @@ type Processor struct {
 	competitors          competitorExtractor
 	delivery             deliveryCollector
 	seo                  seoAnalyzer
+	ozonSync             ozonSyncRunner
 	logger               zerolog.Logger
 }
 
@@ -402,6 +409,9 @@ func (p *Processor) HandleCollectKeywords(ctx context.Context, task *asynq.Task)
 
 		fromPhrases := 0
 		for _, cabinet := range cabinets {
+			if cabinet.Marketplace != domain.MarketplaceWB {
+				continue // WB phrase pools only — Ozon cabinets have no WB phrases
+			}
 			cabinetID := uuid.UUID(cabinet.ID.Bytes)
 			count, runErr := p.semantics.CollectFromPhrases(ctx, workspaceID, cabinetID)
 			if runErr != nil {
@@ -479,6 +489,69 @@ func (p *Processor) HandleRepricer(ctx context.Context, task *asynq.Task) error 
 		return err
 	}
 	p.logger.Info().Str("workspace_id", workspaceID.String()).Int("changes", changes).Msg("repricer run completed")
+	return nil
+}
+
+// WithOzonSync sets the Ozon cabinet sync runner.
+func (p *Processor) WithOzonSync(r ozonSyncRunner) *Processor {
+	p.ozonSync = r
+	return p
+}
+
+// HandleOzonSweepSync walks all active Ozon cabinets and enqueues one
+// ozon:sync_cabinet task per cabinet. WB cabinets are never touched — the
+// runner lists marketplace='ozon' rows only.
+func (p *Processor) HandleOzonSweepSync(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping sweep")
+		return nil
+	}
+	cabinetIDs, err := p.ozonSync.ListOzonCabinetIDs(ctx)
+	if err != nil {
+		return err
+	}
+	enqueued := 0
+	for _, cabinetID := range cabinetIDs {
+		task, taskErr := NewOzonCabinetTask(cabinetID)
+		if taskErr != nil {
+			return taskErr
+		}
+		if _, taskErr := p.client.Enqueue(task,
+			asynq.Queue(QueueOzonSync),
+			asynq.MaxRetry(3),
+			asynq.Timeout(30*time.Minute),
+			asynq.Unique(30*time.Minute),
+		); taskErr != nil {
+			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+				continue
+			}
+			return taskErr
+		}
+		enqueued++
+	}
+	p.logger.Info().Int("cabinets", len(cabinetIDs)).Int("enqueued", enqueued).Msg("ozon sweep sync scheduled")
+	return nil
+}
+
+// HandleOzonSyncCabinet runs campaigns+stats+prices sync for one Ozon cabinet.
+func (p *Processor) HandleOzonSyncCabinet(ctx context.Context, task *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping")
+		return nil
+	}
+	var payload OzonCabinetTaskPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		return fmt.Errorf("parse ozon cabinet payload: %w", err)
+	}
+	cabinetID, err := uuid.Parse(payload.CabinetID)
+	if err != nil {
+		return fmt.Errorf("invalid ozon cabinet id %q: %w", payload.CabinetID, err)
+	}
+	if err := p.ozonSync.SyncCabinet(ctx, cabinetID); err != nil {
+		p.logger.Error().Err(err).Str("cabinet_id", cabinetID.String()).Msg("ozon cabinet sync failed")
+		return err
+	}
+	p.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("ozon cabinet sync completed")
 	return nil
 }
 

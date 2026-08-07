@@ -55,6 +55,11 @@ const (
 	QueueDelivery      = "delivery"
 	QueueSEO           = "seo"
 
+	// Ozon module (phase 1: read-only sync).
+	TaskOzonSweepSync   = "ozon:sweep_sync"
+	TaskOzonSyncCabinet = "ozon:sync_cabinet"
+	QueueOzonSync       = "ozon-sync"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"
@@ -103,6 +108,21 @@ func NewWorkspaceSyncTask(workspaceID uuid.UUID) (*asynq.Task, error) {
 
 func NewSweepTask(taskType string) *asynq.Task {
 	return asynq.NewTask(taskType, nil)
+}
+
+// OzonCabinetTaskPayload scopes an ozon task to a single seller cabinet —
+// Ozon syncs are per-cabinet, not per-workspace, because each cabinet holds
+// its own credential pairs and rate budget.
+type OzonCabinetTaskPayload struct {
+	CabinetID string `json:"cabinet_id"`
+}
+
+func NewOzonCabinetTask(cabinetID uuid.UUID) (*asynq.Task, error) {
+	data, err := json.Marshal(OzonCabinetTaskPayload{CabinetID: cabinetID.String()})
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TaskOzonSyncCabinet, data), nil
 }
 
 func NewExportTask(workspaceID, exportID uuid.UUID) (*asynq.Task, error) {

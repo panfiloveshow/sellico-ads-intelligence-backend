@@ -47,6 +47,10 @@ type Config struct {
 	AdsReadEntityLimit int // env: ADS_READ_ENTITY_LIMIT, default: 5000
 	AdsReadStatsLimit  int // env: ADS_READ_STATS_LIMIT, default: 20000
 
+	// Ozon APIs (phase 1: read-only sync)
+	OzonSellerAPIBaseURL string // env: OZON_SELLER_API_BASE_URL, default: "https://api-seller.ozon.ru"
+	OzonPerfAPIBaseURL   string // env: OZON_PERF_API_BASE_URL, default: "https://api-performance.ozon.ru"
+
 	// WB Catalog Parser
 	WBParserMinDelay time.Duration // env: WB_PARSER_MIN_DELAY, default: 2s
 	WBParserProxies  []string      // env: WB_PARSER_PROXIES, comma-separated
@@ -102,6 +106,7 @@ type Config struct {
 	RepricerInterval         string // env: REPRICER_INTERVAL, default: "@every 1h"
 	RepricerPollInterval     string // env: REPRICER_POLL_INTERVAL, default: "@every 5m"
 	RepricerScheduleInterval string // env: REPRICER_SCHEDULE_INTERVAL, default: "@every 15m"
+	OzonSyncInterval         string // env: OZON_SYNC_INTERVAL, default: "@every 1h"
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -128,6 +133,8 @@ func Load() *Config {
 		WBServiceUserAgent:                 getEnvOrDefault("WB_SERVICE_USER_AGENT", "wbas_sellico.ru2823"),
 		AdsReadEntityLimit:                 getEnvAsInt("ADS_READ_ENTITY_LIMIT", 5000),
 		AdsReadStatsLimit:                  getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
+		OzonSellerAPIBaseURL:               getEnvOrDefault("OZON_SELLER_API_BASE_URL", "https://api-seller.ozon.ru"),
+		OzonPerfAPIBaseURL:                 getEnvOrDefault("OZON_PERF_API_BASE_URL", "https://api-performance.ozon.ru"),
 		WBParserMinDelay:                   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
 		WBParserProxies:                    getEnvAsSlice("WB_PARSER_PROXIES", ","),
 		ExportStoragePath:                  getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
@@ -155,6 +162,7 @@ func Load() *Config {
 		RepricerInterval:                   getEnvOrDefault("REPRICER_INTERVAL", "@every 1h"),
 		RepricerPollInterval:               getEnvOrDefault("REPRICER_POLL_INTERVAL", "@every 5m"),
 		RepricerScheduleInterval:           getEnvOrDefault("REPRICER_SCHEDULE_INTERVAL", "@every 15m"),
+		OzonSyncInterval:                   getEnvOrDefault("OZON_SYNC_INTERVAL", "@every 1h"),
 		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),

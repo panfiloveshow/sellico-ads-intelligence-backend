@@ -70,6 +70,9 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 
 	imported := 0
 	for _, cab := range cabinets {
+		if cab.Marketplace != domain.MarketplaceWB {
+			continue // WB unit-economics bridge is keyed by nmID — WB cabinets only
+		}
 		integrationID := pgTextValue(cab.ExternalIntegrationID)
 		if integrationID == "" {
 			continue // manual cabinet, no Sellico link

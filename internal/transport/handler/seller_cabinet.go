@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -80,8 +81,15 @@ func (h *SellerCabinetHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	pg := pagination.Parse(r)
 
+	marketplace, ok := normalizeMarketplaceFilter(r.URL.Query().Get("marketplace"))
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "marketplace must be 'wb' or 'ozon'")
+		return
+	}
+
 	cabinets, err := h.svc.List(r.Context(), principal.Token, workspaceRef, workspaceID, service.SellerCabinetListFilter{
-		Status: r.URL.Query().Get("status"),
+		Status:      r.URL.Query().Get("status"),
+		Marketplace: marketplace,
 	}, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
@@ -281,4 +289,20 @@ func (h *SellerCabinetHandler) TriggerSync(w http.ResponseWriter, r *http.Reques
 		CabinetID:   result.CabinetID,
 		JobRunID:    result.JobRunID,
 	})
+}
+
+// normalizeMarketplaceFilter maps the ?marketplace= query value to the
+// canonical 'wb' | 'ozon' codes. Empty input means "no filter". The legacy
+// Sellico spellings are tolerated for frontend convenience.
+func normalizeMarketplaceFilter(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "", true
+	case "wb", "wildberries":
+		return domain.MarketplaceWB, true
+	case "ozon":
+		return domain.MarketplaceOzon, true
+	default:
+		return "", false
+	}
 }

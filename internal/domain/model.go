@@ -248,12 +248,23 @@ type AdsSyncPhaseRetry struct {
 	RunAt  *time.Time `json:"run_at,omitempty"`
 }
 
-// SellerCabinet represents a connected Wildberries seller account.
+// Marketplace values for SellerCabinet.Marketplace.
+const (
+	MarketplaceWB   = "wb"
+	MarketplaceOzon = "ozon"
+)
+
+// SellerCabinet represents a connected seller account (Wildberries or Ozon).
 type SellerCabinet struct {
-	ID                    uuid.UUID                     `json:"id"`
-	WorkspaceID           uuid.UUID                     `json:"workspace_id"`
-	Name                  string                        `json:"name"`
+	ID          uuid.UUID `json:"id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	Name        string    `json:"name"`
+	// Marketplace is 'wb' or 'ozon'. WB cabinets keep their API token in
+	// EncryptedToken; Ozon cabinets keep an AES-GCM encrypted OzonCredentials
+	// JSON blob in EncryptedCredentials.
+	Marketplace           string                        `json:"marketplace"`
 	EncryptedToken        string                        `json:"-"`
+	EncryptedCredentials  string                        `json:"-"`
 	Status                string                        `json:"status"`
 	ExternalIntegrationID *string                       `json:"external_integration_id,omitempty"`
 	Source                string                        `json:"source"`

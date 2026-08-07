@@ -34,6 +34,19 @@ type SellerCabinetService struct {
 
 type SellerCabinetListFilter struct {
 	Status string
+	// Marketplace filters by 'wb' or 'ozon'. Empty returns all cabinets
+	// (backwards-compatible default for existing consumers).
+	Marketplace string
+}
+
+func (f SellerCabinetListFilter) matches(cabinet domain.SellerCabinet) bool {
+	if f.Status != "" && cabinet.Status != f.Status {
+		return false
+	}
+	if f.Marketplace != "" && cabinet.Marketplace != f.Marketplace {
+		return false
+	}
+	return true
 }
 
 // NewSellerCabinetService creates a new SellerCabinetService.
@@ -101,7 +114,7 @@ func (s *SellerCabinetService) List(ctx context.Context, token, workspaceRef str
 			return nil, syncErr
 		}
 		cabinet.LastAutoSync = lastAutoSync
-		if filter.Status != "" && cabinet.Status != filter.Status {
+		if !filter.matches(*cabinet) {
 			continue
 		}
 		result = append(result, *cabinet)
@@ -216,11 +229,15 @@ func sellerCabinetFromSqlc(sc sqlcgen.SellerCabinet) domain.SellerCabinet {
 		ID:             uuidFromPgtype(sc.ID),
 		WorkspaceID:    uuidFromPgtype(sc.WorkspaceID),
 		Name:           sc.Name,
+		Marketplace:    sc.Marketplace,
 		EncryptedToken: sc.EncryptedToken,
 		Status:         sc.Status,
 		Source:         sc.Source,
 		CreatedAt:      sc.CreatedAt.Time,
 		UpdatedAt:      sc.UpdatedAt.Time,
+	}
+	if sc.EncryptedCredentials.Valid {
+		result.EncryptedCredentials = sc.EncryptedCredentials.String
 	}
 	if sc.ExternalIntegrationID.Valid {
 		value := sc.ExternalIntegrationID.String
@@ -453,7 +470,7 @@ func (s *SellerCabinetService) listLocalCabinets(ctx context.Context, workspaceI
 	for _, row := range rows {
 		cabinet := sellerCabinetFromSqlc(row)
 		cabinet.LastAutoSync = lastAutoSync
-		if filter.Status != "" && cabinet.Status != filter.Status {
+		if !filter.matches(cabinet) {
 			continue
 		}
 		result = append(result, cabinet)
@@ -481,7 +498,7 @@ func (s *SellerCabinetService) listWbIntegrations(ctx context.Context, token, wo
 
 		result := make([]sellico.Integration, 0, len(integrations))
 		for _, integration := range integrations {
-			if integration.Type != "WildBerries" {
+			if !supportedIntegrationType(integration.Type) {
 				continue
 			}
 			if integration.APIKey == "" {
@@ -518,7 +535,7 @@ func (s *SellerCabinetService) getWbIntegration(ctx context.Context, token, work
 		if getErr != nil {
 			continue
 		}
-		if integration.Type != "WildBerries" || strings.TrimSpace(integration.APIKey) == "" {
+		if !supportedIntegrationType(integration.Type) || strings.TrimSpace(integration.APIKey) == "" {
 			continue
 		}
 
@@ -528,7 +545,17 @@ func (s *SellerCabinetService) getWbIntegration(ctx context.Context, token, work
 	return nil, apperror.New(apperror.ErrNotFound, "seller cabinet not found")
 }
 
+// supportedIntegrationType reports whether a Sellico integration type maps to
+// a marketplace this backend can serve (WB in production, Ozon read-only).
+func supportedIntegrationType(integrationType string) bool {
+	return integrationType == "WildBerries" || integrationType == "OZON"
+}
+
 func (s *SellerCabinetService) ensureSellicoCabinet(ctx context.Context, workspaceID uuid.UUID, integration sellico.Integration) (*domain.SellerCabinet, error) {
+	if integration.Type == "OZON" {
+		return s.ensureSellicoOzonCabinet(ctx, workspaceID, integration)
+	}
+
 	encryptedToken, err := crypto.Encrypt(integration.APIKey, s.encryptionKey)
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to encrypt API token")
@@ -544,6 +571,58 @@ func (s *SellerCabinetService) ensureSellicoCabinet(ctx context.Context, workspa
 	})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to sync seller cabinet from Sellico")
+	}
+
+	result := sellerCabinetFromSqlc(row)
+	return &result, nil
+}
+
+// ensureSellicoOzonCabinet upserts an OZON integration as an ozon-marketplace
+// cabinet. Seller API creds (client_id + api_key) are required; Performance
+// creds are optional — without them the cabinet runs in prices-only mode and
+// the limitation is recorded in ozon_sync_states.last_error.
+func (s *SellerCabinetService) ensureSellicoOzonCabinet(ctx context.Context, workspaceID uuid.UUID, integration sellico.Integration) (*domain.SellerCabinet, error) {
+	creds := domain.OzonCredentials{
+		ClientID:         strings.TrimSpace(integration.ClientID),
+		APIKey:           strings.TrimSpace(integration.APIKey),
+		PerfClientID:     strings.TrimSpace(integration.PerformanceAPIKey),
+		PerfClientSecret: strings.TrimSpace(integration.PerformanceClientSecret),
+	}
+	if !creds.HasSellerAPI() {
+		return nil, apperror.New(apperror.ErrValidation, "ozon integration is missing client_id or api_key")
+	}
+
+	encryptedCredentials, err := encryptOzonCredentials(creds, s.encryptionKey)
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to encrypt ozon credentials")
+	}
+	// encrypted_token is NOT NULL for historical reasons; store the encrypted
+	// Seller API key there. WB code paths never read it: they skip any cabinet
+	// whose marketplace is not 'wb'.
+	encryptedToken, err := crypto.Encrypt(creds.APIKey, s.encryptionKey)
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to encrypt API token")
+	}
+
+	row, err := s.queries.UpsertSellicoOzonSellerCabinet(ctx, sqlcgen.UpsertSellicoOzonSellerCabinetParams{
+		WorkspaceID:           uuidToPgtype(workspaceID),
+		Name:                  integration.Name,
+		EncryptedToken:        encryptedToken,
+		EncryptedCredentials:  textToPgtype(encryptedCredentials),
+		Status:                domain.StatusActive,
+		ExternalIntegrationID: textToPgtype(integration.ID),
+		IntegrationType:       textToPgtype(integration.Type),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to sync ozon seller cabinet from Sellico")
+	}
+
+	if !creds.HasPerformanceAPI() {
+		// Best-effort note; sync jobs will keep updating it.
+		_ = s.queries.TouchOzonSyncState(ctx, sqlcgen.TouchOzonSyncStateParams{
+			SellerCabinetID: row.ID,
+			LastError:       textToPgtype("performance credentials missing: campaigns/stats sync disabled (prices-only mode)"),
+		})
 	}
 
 	result := sellerCabinetFromSqlc(row)

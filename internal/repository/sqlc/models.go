@@ -457,6 +457,77 @@ type SellerCabinet struct {
 	Source                string             `json:"source"`
 	IntegrationType       pgtype.Text        `json:"integration_type"`
 	LastSellicoSyncAt     pgtype.Timestamptz `json:"last_sellico_sync_at"`
+	PricesScopeStatus     string             `json:"prices_scope_status"`
+	PricesScopeCheckedAt  pgtype.Timestamptz `json:"prices_scope_checked_at"`
+	RepricerPausedUntil   pgtype.Timestamptz `json:"repricer_paused_until"`
+	Marketplace           string             `json:"marketplace"`
+	EncryptedCredentials  pgtype.Text        `json:"encrypted_credentials"`
+}
+
+type OzonCampaign struct {
+	ID                pgtype.UUID        `json:"id"`
+	SellerCabinetID   pgtype.UUID        `json:"seller_cabinet_id"`
+	OzonCampaignID    int64              `json:"ozon_campaign_id"`
+	Title             pgtype.Text        `json:"title"`
+	AdvObjectType     pgtype.Text        `json:"adv_object_type"`
+	State             pgtype.Text        `json:"state"`
+	Placement         pgtype.Text        `json:"placement"`
+	AutopilotStrategy pgtype.Text        `json:"autopilot_strategy"`
+	DailyBudgetRub    pgtype.Int8        `json:"daily_budget_rub"`
+	WeeklyBudgetRub   pgtype.Int8        `json:"weekly_budget_rub"`
+	FromDate          pgtype.Date        `json:"from_date"`
+	ToDate            pgtype.Date        `json:"to_date"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OzonCampaignProduct struct {
+	ID          pgtype.UUID        `json:"id"`
+	CampaignID  pgtype.UUID        `json:"campaign_id"`
+	Sku         int64              `json:"sku"`
+	BidRub      pgtype.Numeric     `json:"bid_rub"`
+	TargetCir   pgtype.Numeric     `json:"target_cir"`
+	TopPosition pgtype.Int4        `json:"top_position"`
+	IsActive    bool               `json:"is_active"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OzonCampaignStat struct {
+	ID         pgtype.UUID    `json:"id"`
+	CampaignID pgtype.UUID    `json:"campaign_id"`
+	Date       pgtype.Date    `json:"date"`
+	Views      int64          `json:"views"`
+	Clicks     int64          `json:"clicks"`
+	SpendRub   pgtype.Numeric `json:"spend_rub"`
+	Orders     int64          `json:"orders"`
+	RevenueRub pgtype.Numeric `json:"revenue_rub"`
+}
+
+type OzonProductPrice struct {
+	ID                      pgtype.UUID        `json:"id"`
+	SellerCabinetID         pgtype.UUID        `json:"seller_cabinet_id"`
+	Sku                     int64              `json:"sku"`
+	OfferID                 pgtype.Text        `json:"offer_id"`
+	Name                    pgtype.Text        `json:"name"`
+	PriceRub                pgtype.Numeric     `json:"price_rub"`
+	OldPriceRub             pgtype.Numeric     `json:"old_price_rub"`
+	MinPriceRub             pgtype.Numeric     `json:"min_price_rub"`
+	NetPriceRub             pgtype.Numeric     `json:"net_price_rub"`
+	MarketingSellerPriceRub pgtype.Numeric     `json:"marketing_seller_price_rub"`
+	ColorIndex              pgtype.Text        `json:"color_index"`
+	CommissionFboPct        pgtype.Numeric     `json:"commission_fbo_pct"`
+	CommissionFbsPct        pgtype.Numeric     `json:"commission_fbs_pct"`
+	AcquiringPct            pgtype.Numeric     `json:"acquiring_pct"`
+	SyncedAt                pgtype.Timestamptz `json:"synced_at"`
+}
+
+type OzonSyncState struct {
+	SellerCabinetID   pgtype.UUID        `json:"seller_cabinet_id"`
+	CampaignsSyncedAt pgtype.Timestamptz `json:"campaigns_synced_at"`
+	StatsSyncedAt     pgtype.Timestamptz `json:"stats_synced_at"`
+	PricesSyncedAt    pgtype.Timestamptz `json:"prices_synced_at"`
+	LastError         pgtype.Text        `json:"last_error"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type SeoAnalysis struct {
