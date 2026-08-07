@@ -244,7 +244,10 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		// Daily digest at 06:00 UTC (09:00 MSK).
 		{"0 6 * * *", TaskSweepRepricerDigest, QueueRepricer},
 		// Mirror Sellico cost data into product_economics (feeds margin-floor).
-		{"@every 6h", TaskSweepSellicoEconomics, QueueRepricer},
+		// On the poll queue: it talks to Sellico, not WB, and repricer-poll has
+		// strict priority — so it never waits hours behind a 429-backlogged
+		// repricer queue.
+		{"@every 6h", TaskSweepSellicoEconomics, QueueRepricerPoll},
 		{cfg.RepricerPollInterval, TaskSweepPollPriceTasks, QueueRepricerPoll},
 		{cfg.RepricerScheduleInterval, TaskExecutePriceSchedule, QueueRepricer},
 		{syncInterval, TaskSweepCollectKeywords, QueueSemantics},

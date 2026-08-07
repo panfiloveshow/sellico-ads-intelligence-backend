@@ -1678,6 +1678,14 @@ func (p *Processor) enqueueWorkspaceTask(taskType string, workspaceID uuid.UUID,
 		// uniqueness also prevents redundant evaluations under scheduler races.
 		opts = append(opts, asynq.Unique(10*time.Minute))
 	}
+	if taskType == TaskSyncPrices || taskType == TaskRepricer {
+		// Hourly sweeps re-enqueue every workspace; without uniqueness a
+		// 429-throttled repricer queue (Concurrency 1) accumulates duplicates
+		// unboundedly (seen: 1134 pending). MaxRetry stays low — the next
+		// sweep is the retry, no need for 10 asynq re-runs of a rate-limited
+		// workspace on top of it.
+		opts = append(opts, asynq.Unique(55*time.Minute), asynq.MaxRetry(2))
+	}
 	opts = append(opts, extraOpts...)
 
 	_, err = p.client.Enqueue(task, opts...)
