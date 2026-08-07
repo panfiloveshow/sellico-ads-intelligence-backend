@@ -324,5 +324,17 @@ func aiDecisionFromSqlc(row sqlcgen.AiDecision) domain.AIDecision {
 		id := uuidFromPgtype(row.AppliedBy)
 		decision.AppliedBy = &id
 	}
+	// Impact evaluation fields (ozon:ai_impact_sweep).
+	decision.OutcomeStatus = pgTextValue(row.OutcomeStatus)
+	decision.DRRBefore = pgNumericToFloatPtr(row.DrrBefore)
+	decision.DRRAfter = pgNumericToFloatPtr(row.DrrAfter)
+	decision.SpendBeforeRub = pgNumericToFloatPtr(row.SpendBeforeRub)
+	decision.SpendAfterRub = pgNumericToFloatPtr(row.SpendAfterRub)
+	decision.RevenueBeforeRub = pgNumericToFloatPtr(row.RevenueBeforeRub)
+	decision.RevenueAfterRub = pgNumericToFloatPtr(row.RevenueAfterRub)
+	if row.EvaluatedAt.Valid {
+		evaluated := row.EvaluatedAt.Time
+		decision.EvaluatedAt = &evaluated
+	}
 	return decision
 }

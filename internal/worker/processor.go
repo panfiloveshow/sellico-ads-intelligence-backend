@@ -108,6 +108,7 @@ type ozonSyncRunner interface {
 	ListOzonCabinetIDs(ctx context.Context) ([]uuid.UUID, error)
 	SyncAnalyticsAllCabinets(ctx context.Context) error
 	SyncPostingsAllCabinets(ctx context.Context) error
+	SyncPhrasesAllCabinets(ctx context.Context) error
 }
 
 // ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
@@ -116,10 +117,12 @@ type ozonStrategyRunner interface {
 }
 
 // ozonAIRunner is the AI autopilot: sweep fan-out enumeration + one cabinet
-// run (which resolves workspace/strategy internally).
+// run (which resolves workspace/strategy internally) + the impact sweep that
+// evaluates applied decisions after the fact (no LLM calls).
 type ozonAIRunner interface {
 	ListAICabinetIDs(ctx context.Context) ([]uuid.UUID, error)
 	RunForCabinetID(ctx context.Context, cabinetID uuid.UUID, trigger string) error
+	EvaluateImpactSweep(ctx context.Context) error
 }
 
 // ozonRepricerRunner executes ozon_price_* strategies for a workspace and
@@ -608,6 +611,36 @@ func (p *Processor) HandleOzonPostingsSync(ctx context.Context, _ *asynq.Task) e
 		return err
 	}
 	p.logger.Info().Msg("ozon postings sync completed")
+	return nil
+}
+
+// HandleOzonPhrasesSync pulls the async phrases (search query) report for
+// every Ozon cabinet sequentially — one report generation per account at a
+// time is an API-side limit, and one failed cabinet never fails the rest.
+func (p *Processor) HandleOzonPhrasesSync(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping phrases sync")
+		return nil
+	}
+	if err := p.ozonSync.SyncPhrasesAllCabinets(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon phrases sync finished with errors")
+		return err
+	}
+	p.logger.Info().Msg("ozon phrases sync completed")
+	return nil
+}
+
+// HandleOzonAIImpactSweep evaluates applied AI decisions against their
+// before/after campaign-stat windows. Pure local math — no LLM, no Ozon API.
+func (p *Processor) HandleOzonAIImpactSweep(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonAI == nil {
+		p.logger.Debug().Msg("ozon ai manager not configured, skipping impact sweep")
+		return nil
+	}
+	if err := p.ozonAI.EvaluateImpactSweep(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon ai impact sweep finished with errors")
+		return err
+	}
 	return nil
 }
 

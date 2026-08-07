@@ -22,6 +22,7 @@ type ozonAIServicer interface {
 	CheckManualRunAllowed(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
 	ApproveDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
 	RejectDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
+	GetImpact(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIImpactSummary, error)
 }
 
 // ozonAIRunEnqueuer enqueues an async ozon:ai_run task (trigger 'manual').
@@ -152,6 +153,24 @@ func (h *OzonHandler) aiDecisionAction(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, decision)
+}
+
+// AIImpact handles GET /ozon/ai/impact?cabinet_id= — the 30-day «ИИ
+// заработал/сэкономил» aggregate over applied decisions.
+func (h *OzonHandler) AIImpact(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAI(w) {
+		return
+	}
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	summary, err := h.ai.GetImpact(r.Context(), workspaceID, cabinetID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, summary)
 }
 
 // AIApproveDecision handles POST /ozon/ai/decisions/{id}/approve.

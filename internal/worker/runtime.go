@@ -147,6 +147,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		mux.HandleFunc(TaskOzonSyncCabinet, processor.HandleOzonSyncCabinet)
 		mux.HandleFunc(TaskOzonAnalyticsSync, processor.HandleOzonAnalyticsSync)
 		mux.HandleFunc(TaskOzonPostingsSync, processor.HandleOzonPostingsSync)
+		mux.HandleFunc(TaskOzonPhrasesSync, processor.HandleOzonPhrasesSync)
 	}
 	if options.ozonStrategy != nil && options.ozonSync != nil {
 		processor = processor.WithOzonStrategy(options.ozonStrategy)
@@ -157,6 +158,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		processor = processor.WithOzonAIManager(options.ozonAI)
 		mux.HandleFunc(TaskOzonAISweep, processor.HandleOzonAISweep)
 		mux.HandleFunc(TaskOzonAIRun, processor.HandleOzonAIRun)
+		mux.HandleFunc(TaskOzonAIImpactSweep, processor.HandleOzonAIImpactSweep)
 	}
 	if options.ozonRepricer != nil && options.ozonSync != nil {
 		processor = processor.WithOzonRepricer(options.ozonRepricer)
@@ -294,6 +296,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 			taskType string
 			queue    string
 		}{postingsInterval, TaskOzonPostingsSync, QueueOzonSync})
+		// Search queries (phrases report): asynchronous UUID flow, one report
+		// generation per account — sequential across cabinets, low frequency.
+		phrasesInterval := cfg.OzonPhrasesInterval
+		if phrasesInterval == "" {
+			phrasesInterval = "@every 12h"
+		}
+		sweepEntries = append(sweepEntries, struct {
+			cron     string
+			taskType string
+			queue    string
+		}{phrasesInterval, TaskOzonPhrasesSync, QueueOzonSync})
 		if options.ozonStrategy != nil {
 			strategyInterval := cfg.OzonStrategyInterval
 			if strategyInterval == "" {
@@ -315,6 +328,18 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 				taskType string
 				queue    string
 			}{aiInterval, TaskOzonAISweep, QueueOzonSync})
+			// Impact sweep: measures applied decisions (7d/7d windows). No
+			// LLM calls — but it lives with the AI module because it only
+			// makes sense when the AI produces decisions.
+			impactInterval := cfg.OzonAIImpactInterval
+			if impactInterval == "" {
+				impactInterval = "@every 12h"
+			}
+			sweepEntries = append(sweepEntries, struct {
+				cron     string
+				taskType string
+				queue    string
+			}{impactInterval, TaskOzonAIImpactSweep, QueueOzonSync})
 		}
 		if options.ozonRepricer != nil {
 			repricerInterval := cfg.OzonRepricerInterval

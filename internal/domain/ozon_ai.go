@@ -41,6 +41,18 @@ const (
 	AIDecisionStatusRejectedByGuardrail = "rejected_by_guardrail"
 )
 
+// AI decision impact outcome states (ai_decisions.outcome_status).
+const (
+	// AIOutcomePendingEval — seen by the impact sweep, after-window still has
+	// fewer than 3 days of stats; will be re-evaluated.
+	AIOutcomePendingEval = "pending_eval"
+	// AIOutcomeEvaluated — before/after numbers are written.
+	AIOutcomeEvaluated = "evaluated"
+	// AIOutcomeNotEvaluable — no campaign-level stats for the target (cpo_*)
+	// or the decision aged out (>14 days) without enough after-window data.
+	AIOutcomeNotEvaluable = "not_evaluable"
+)
+
 // AIRun is one AI manager execution over a cabinet.
 type AIRun struct {
 	ID               uuid.UUID  `json:"id"`
@@ -82,4 +94,44 @@ type AIDecision struct {
 	CreatedAt        time.Time       `json:"created_at"`
 	AppliedAt        *time.Time      `json:"applied_at,omitempty"`
 	AppliedBy        *uuid.UUID      `json:"applied_by,omitempty"`
+	// Impact evaluation (7d-before / 7d-after windows around applied_at;
+	// written by the ozon:ai_impact_sweep job).
+	OutcomeStatus    string     `json:"outcome_status,omitempty"`
+	DRRBefore        *float64   `json:"drr_before,omitempty"`
+	DRRAfter         *float64   `json:"drr_after,omitempty"`
+	SpendBeforeRub   *float64   `json:"spend_before_rub,omitempty"`
+	SpendAfterRub    *float64   `json:"spend_after_rub,omitempty"`
+	RevenueBeforeRub *float64   `json:"revenue_before_rub,omitempty"`
+	RevenueAfterRub  *float64   `json:"revenue_after_rub,omitempty"`
+	EvaluatedAt      *time.Time `json:"evaluated_at,omitempty"`
+}
+
+// AIImpactSummary is the 30-day «ИИ заработал/сэкономил» aggregate for a
+// cabinet. Attribution is deliberately rough: each applied decision is
+// compared over a 7-day window before vs a 7-day window after its apply
+// moment on its target campaign — no holdout, no cross-decision isolation.
+type AIImpactSummary struct {
+	WindowDays         int      `json:"window_days"`
+	DecisionsApplied   int64    `json:"decisions_applied"`
+	DecisionsEvaluated int64    `json:"decisions_evaluated"`
+	AvgDRRBefore       *float64 `json:"avg_drr_before,omitempty"`
+	AvgDRRAfter        *float64 `json:"avg_drr_after,omitempty"`
+	SpendDeltaRub      float64  `json:"spend_delta_rub"`
+	RevenueDeltaRub    float64  `json:"revenue_delta_rub"`
+	SavedRub           float64  `json:"saved_rub"`
+	ExtraRevenueRub    float64  `json:"extra_revenue_rub"`
+}
+
+// OzonSearchQueryStat is one aggregated search query row for
+// GET /ozon/search-queries (grouped by query over the requested window).
+type OzonSearchQueryStat struct {
+	Query       string   `json:"query"`
+	SKU         int64    `json:"sku,omitempty"`
+	ProductName string   `json:"product_name,omitempty"`
+	Views       int64    `json:"views"`
+	Clicks      int64    `json:"clicks"`
+	Orders      int64    `json:"orders"`
+	SpendRub    float64  `json:"spend_rub"`
+	AvgPosition *float64 `json:"avg_position,omitempty"`
+	CTR         float64  `json:"ctr_pct"`
 }

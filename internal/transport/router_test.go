@@ -236,6 +236,10 @@ func TestNewRouter_OzonRepricerParityRoutes(t *testing.T) {
 	assert.True(t, set["POST /api/v1/ozon/prices/pause"], "missing POST /api/v1/ozon/prices/pause")
 	assert.True(t, set["GET /api/v1/ozon/repricer/health"], "missing GET /api/v1/ozon/repricer/health")
 	assert.True(t, set["GET /api/v1/ozon/prices/heatmap"], "missing GET /api/v1/ozon/prices/heatmap")
+
+	// AI impact + search queries (phrases report mirror)
+	assert.True(t, set["GET /api/v1/ozon/ai/impact"], "missing GET /api/v1/ozon/ai/impact")
+	assert.True(t, set["GET /api/v1/ozon/search-queries"], "missing GET /api/v1/ozon/search-queries")
 }
 
 func TestPublicRoutes_NoAuth(t *testing.T) {

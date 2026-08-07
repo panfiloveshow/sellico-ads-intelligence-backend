@@ -157,3 +157,61 @@ WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND kind = 'cpo'
   AND source IN ('strategy', 'ai')
   AND status IN ('pending', 'applied', 'shadow');
+
+-- --- AI impact («ИИ заработал/сэкономил») ---
+
+-- ListAIDecisionsForImpactEval feeds the ozon:ai_impact_sweep job: applied
+-- decisions at least 4 days old that have no final evaluation yet.
+-- 'pending_eval' rows keep evaluated_at NULL and are rescanned until they
+-- either gather 3 after-days of stats or age out past 14 days.
+-- name: ListAIDecisionsForImpactEval :many
+SELECT * FROM ai_decisions
+WHERE status IN ('applied', 'auto_applied')
+  AND evaluated_at IS NULL
+  AND applied_at IS NOT NULL
+  AND applied_at <= now() - INTERVAL '4 days'
+ORDER BY applied_at
+LIMIT 500;
+
+-- name: SetAIDecisionOutcome :exec
+UPDATE ai_decisions SET
+    outcome_status = sqlc.arg('outcome_status'),
+    drr_before = sqlc.narg('drr_before'),
+    drr_after = sqlc.narg('drr_after'),
+    spend_before_rub = sqlc.narg('spend_before_rub'),
+    spend_after_rub = sqlc.narg('spend_after_rub'),
+    revenue_before_rub = sqlc.narg('revenue_before_rub'),
+    revenue_after_rub = sqlc.narg('revenue_after_rub'),
+    evaluated_at = CASE WHEN sqlc.arg('outcome_status')::text IN ('evaluated', 'not_evaluable')
+                        THEN now() ELSE evaluated_at END
+WHERE id = sqlc.arg('id');
+
+-- GetOzonCampaignStatsWindowTotals sums one campaign's stats over a closed
+-- date window for the before/after impact comparison. days counts rows, i.e.
+-- days that actually have data.
+-- name: GetOzonCampaignStatsWindowTotals :one
+SELECT
+    COALESCE(SUM(spend_rub), 0)::numeric AS spend_rub,
+    COALESCE(SUM(revenue_rub), 0)::numeric AS revenue_rub,
+    COUNT(*)::bigint AS days
+FROM ozon_campaign_stats
+WHERE campaign_id = sqlc.arg('campaign_id')
+  AND date BETWEEN sqlc.arg('date_from') AND sqlc.arg('date_to');
+
+-- name: GetOzonCampaignByCabinetAndOzonID :one
+SELECT * FROM ozon_campaigns
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND ozon_campaign_id = sqlc.arg('ozon_campaign_id');
+
+-- ListAIDecisionImpactRows powers GET /ozon/ai/impact: every applied decision
+-- of the last N days with its evaluation numbers (aggregation is done in Go —
+-- the formulas are unit-tested there).
+-- name: ListAIDecisionImpactRows :many
+SELECT id, action_type, status, outcome_status, applied_at,
+       drr_before, drr_after, spend_before_rub, spend_after_rub,
+       revenue_before_rub, revenue_after_rub
+FROM ai_decisions
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND status IN ('applied', 'auto_applied')
+  AND applied_at >= sqlc.arg('since');

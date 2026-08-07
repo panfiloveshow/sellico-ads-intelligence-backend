@@ -31,6 +31,11 @@ const (
 	aiPackEconomicsLimit = 300
 	// aiPackStatsWindowDays is the stats lookback window.
 	aiPackStatsWindowDays = 14
+	// aiPackTopQueriesPerSKU caps the search-query detail per SKU.
+	aiPackTopQueriesPerSKU = 15
+	// aiPackSearchQueryWindowDays is the search-query lookback window (the
+	// phrases sync requests 7 days at a time; the table accumulates more).
+	aiPackSearchQueryWindowDays = 30
 )
 
 type aiPackTotals struct {
@@ -91,15 +96,28 @@ type aiPackRules struct {
 	MaxChangesPerDay int     `json:"max_changes_per_day"`
 }
 
+// aiPackSearchQuery is one aggregated search query row of the context pack
+// (top queries by views per SKU over the last aiPackSearchQueryWindowDays).
+type aiPackSearchQuery struct {
+	SKU         int64    `json:"sku,omitempty"`
+	Query       string   `json:"query"`
+	Views       int64    `json:"views"`
+	Clicks      int64    `json:"clicks"`
+	Orders      int64    `json:"orders"`
+	SpendRub    float64  `json:"spend_rub"`
+	AvgPosition *float64 `json:"avg_position,omitempty"`
+}
+
 type aiContextPack struct {
-	Rules          aiPackRules       `json:"rules"`
-	Campaigns      []aiPackCampaign  `json:"campaigns"`
-	RestCampaigns  int               `json:"rest_campaigns_count,omitempty"`
-	RestTotals     *aiPackTotals     `json:"rest_campaigns_totals_14d,omitempty"`
-	CPO            []aiPackCPO       `json:"cpo_products,omitempty"`
-	Economics      []aiPackEconomics `json:"economics,omitempty"`
-	BidLimits      json.RawMessage   `json:"ozon_bid_limits,omitempty"`
-	BoundCampaigns bool              `json:"bound_campaigns_only,omitempty"`
+	Rules          aiPackRules         `json:"rules"`
+	Campaigns      []aiPackCampaign    `json:"campaigns"`
+	RestCampaigns  int                 `json:"rest_campaigns_count,omitempty"`
+	RestTotals     *aiPackTotals       `json:"rest_campaigns_totals_14d,omitempty"`
+	CPO            []aiPackCPO         `json:"cpo_products,omitempty"`
+	Economics      []aiPackEconomics   `json:"economics,omitempty"`
+	SearchQueries  []aiPackSearchQuery `json:"search_queries_30d,omitempty"`
+	BidLimits      json.RawMessage     `json:"ozon_bid_limits,omitempty"`
+	BoundCampaigns bool                `json:"bound_campaigns_only,omitempty"`
 }
 
 // aiCabinetData keeps the raw rows the guardrail/apply phases need after the
@@ -341,6 +359,10 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		}
 	}
 
+	// Top search queries per SKU from the phrases-report mirror. Non-fatal:
+	// an empty table (sync not run yet) simply leaves the section out.
+	pack.SearchQueries = s.topSearchQueriesForSKUs(ctx, cabinetID, skus, aiPackTopQueriesPerSKU)
+
 	// Bid limits reference (hour-cached passthrough); included only when small
 	// enough to be worth the tokens. Failures are non-fatal by design.
 	if s.actions != nil {
@@ -364,6 +386,11 @@ func marshalAIContextPack(pack *aiContextPack, maxBytes int) ([]byte, error) {
 		},
 		func(p *aiContextPack) { // 2: drop the bid-limits reference
 			p.BidLimits = nil
+		},
+		func(p *aiContextPack) { // 2.5: cap search queries at 100 rows total
+			if len(p.SearchQueries) > 100 {
+				p.SearchQueries = p.SearchQueries[:100]
+			}
 		},
 		func(p *aiContextPack) { // 3: halve product detail
 			for i := range p.Campaigns {
@@ -395,6 +422,7 @@ func marshalAIContextPack(pack *aiContextPack, maxBytes int) ([]byte, error) {
 			if len(p.CPO) > 50 {
 				p.CPO = p.CPO[:50]
 			}
+			p.SearchQueries = nil
 		},
 	}
 	payload, err := json.Marshal(pack)
@@ -415,6 +443,44 @@ func marshalAIContextPack(pack *aiContextPack, maxBytes int) ([]byte, error) {
 		return nil, fmt.Errorf("context pack still %d bytes after all reductions (cap %d)", len(payload), maxBytes)
 	}
 	return payload, nil
+}
+
+// topSearchQueriesForSKUs loads the per-SKU top queries by views over the
+// last aiPackSearchQueryWindowDays days. SKU 0 (rows the report did not
+// attribute to a product) is always included. Best-effort: any failure
+// returns nil and the pack simply has no search-query section.
+func (s *OzonAIManagerService) topSearchQueriesForSKUs(ctx context.Context, cabinetID uuid.UUID, skus []int64, perSKU int) []aiPackSearchQuery {
+	lookup := append(append(make([]int64, 0, len(skus)+1), skus...), 0)
+	since := time.Now().UTC().AddDate(0, 0, -aiPackSearchQueryWindowDays)
+	rows, err := s.queries.ListOzonSearchQueriesBySkus(ctx, sqlcgen.ListOzonSearchQueriesBySkusParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Skus:            lookup,
+		DateFrom:        pgtype.Date{Time: since, Valid: true},
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to load search queries for ai context")
+		return nil
+	}
+	// Rows arrive ordered by (sku, views DESC); the per-SKU top-N cut happens
+	// here (sqlc cannot express the ROW_NUMBER filter).
+	perSKUCount := map[int64]int{}
+	out := make([]aiPackSearchQuery, 0, len(rows))
+	for _, row := range rows {
+		if perSKUCount[row.Sku] >= perSKU {
+			continue
+		}
+		perSKUCount[row.Sku]++
+		out = append(out, aiPackSearchQuery{
+			SKU:         row.Sku,
+			Query:       row.Query,
+			Views:       row.Views,
+			Clicks:      row.Clicks,
+			Orders:      row.Orders,
+			SpendRub:    roundRub(pgNumericToFloat(row.SpendRub)),
+			AvgPosition: pgNumericToFloatPtr(row.AvgPosition),
+		})
+	}
+	return out
 }
 
 func pgInt8ToPtr(value pgtype.Int8) *int64 {

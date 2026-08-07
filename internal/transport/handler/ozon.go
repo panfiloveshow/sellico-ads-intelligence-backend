@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,7 @@ type ozonServicer interface {
 	GetCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) (*domain.OzonCampaign, []domain.OzonCampaignProduct, error)
 	ListCampaignStats(ctx context.Context, workspaceID, campaignID uuid.UUID, from, to time.Time) ([]domain.OzonCampaignStat, error)
 	ListPrices(ctx context.Context, workspaceID, cabinetID uuid.UUID, search string, limit, offset int32) ([]domain.OzonProductPrice, int64, error)
+	ListSearchQueries(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, search string, days int, limit, offset int32) ([]domain.OzonSearchQueryStat, int64, error)
 }
 
 // ozonActionsServicer is the write/management surface (phase 2).
@@ -167,6 +169,41 @@ func (h *OzonHandler) ListPrices(w http.ResponseWriter, r *http.Request) {
 	pg := pagination.Parse(r)
 
 	items, total, err := h.svc.ListPrices(r.Context(), workspaceID, cabinetID, r.URL.Query().Get("search"), int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: total})
+}
+
+// ListSearchQueries handles GET /ozon/search-queries?cabinet_id=&sku=&search=&days=&page=
+// — per-query aggregates from the phrases-report mirror.
+func (h *OzonHandler) ListSearchQueries(w http.ResponseWriter, r *http.Request) {
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	var sku *int64
+	if raw := r.URL.Query().Get("sku"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "sku must be an integer")
+			return
+		}
+		sku = &parsed
+	}
+	days := 30
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > 90 {
+			dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "days must be between 1 and 90")
+			return
+		}
+		days = parsed
+	}
+	pg := pagination.Parse(r)
+
+	items, total, err := h.svc.ListSearchQueries(r.Context(), workspaceID, cabinetID, sku, r.URL.Query().Get("search"), days, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return

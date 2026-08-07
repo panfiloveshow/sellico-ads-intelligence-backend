@@ -24,6 +24,14 @@ type AiDecision struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	AppliedAt        pgtype.Timestamptz `json:"applied_at"`
 	AppliedBy        pgtype.UUID        `json:"applied_by"`
+	OutcomeStatus    pgtype.Text        `json:"outcome_status"`
+	DrrBefore        pgtype.Numeric     `json:"drr_before"`
+	DrrAfter         pgtype.Numeric     `json:"drr_after"`
+	SpendBeforeRub   pgtype.Numeric     `json:"spend_before_rub"`
+	SpendAfterRub    pgtype.Numeric     `json:"spend_after_rub"`
+	RevenueBeforeRub pgtype.Numeric     `json:"revenue_before_rub"`
+	RevenueAfterRub  pgtype.Numeric     `json:"revenue_after_rub"`
+	EvaluatedAt      pgtype.Timestamptz `json:"evaluated_at"`
 }
 
 type AiRun struct {
@@ -664,6 +672,19 @@ type OzonProductPrice struct {
 	OzonIndexMinPriceRub     pgtype.Numeric     `json:"ozon_index_min_price_rub"`
 	ExternalIndexMinPriceRub pgtype.Numeric     `json:"external_index_min_price_rub"`
 	SelfIndexMinPriceRub     pgtype.Numeric     `json:"self_index_min_price_rub"`
+}
+
+type OzonSearchQuery struct {
+	ID              pgtype.UUID    `json:"id"`
+	SellerCabinetID pgtype.UUID    `json:"seller_cabinet_id"`
+	Sku             int64          `json:"sku"`
+	Query           string         `json:"query"`
+	Date            pgtype.Date    `json:"date"`
+	Views           int64          `json:"views"`
+	Clicks          int64          `json:"clicks"`
+	Orders          int64          `json:"orders"`
+	SpendRub        pgtype.Numeric `json:"spend_rub"`
+	AvgPosition     pgtype.Numeric `json:"avg_position"`
 }
 
 type OzonSyncState struct {

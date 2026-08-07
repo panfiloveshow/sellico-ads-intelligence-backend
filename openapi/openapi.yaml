@@ -3748,6 +3748,63 @@ paths:
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
         "409": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/impact:
+    get:
+      tags: [Ozon]
+      summary: 30-day AI impact aggregate («ИИ заработал/сэкономил»)
+      description: >
+        Aggregates applied AI decisions of the last 30 days with their
+        before/after evaluation (7-day windows around each apply; rough
+        attribution, no holdout).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Impact summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIImpactEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/search-queries:
+    get:
+      tags: [Ozon]
+      summary: Aggregated search queries of a cabinet (phrases report mirror)
+      description: >
+        Per-query aggregates over the last `days` days from the Performance
+        API phrases report mirror, enriched with product names by the query's
+        top SKU.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: sku
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: days
+          in: query
+          schema: { type: integer, default: 30, minimum: 1, maximum: 90 }
+      responses:
+        "200":
+          description: Search query page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonSearchQueryListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/ai/decisions:
     get:
       tags: [Ozon]
@@ -5776,6 +5833,63 @@ components:
         created_at: { type: string, format: date-time }
         applied_at: { type: string, format: date-time, nullable: true }
         applied_by: { type: string, format: uuid, nullable: true }
+        outcome_status:
+          type: string
+          enum: [pending_eval, evaluated, not_evaluable]
+          description: Impact evaluation state (7d-before/7d-after windows around applied_at)
+        drr_before: { type: number, nullable: true, description: "ДРР % over the 7 days before apply (null when the window had no revenue)" }
+        drr_after: { type: number, nullable: true, description: "ДРР % over the 7 days after apply (null when the window had no revenue)" }
+        spend_before_rub: { type: number, nullable: true }
+        spend_after_rub: { type: number, nullable: true }
+        revenue_before_rub: { type: number, nullable: true }
+        revenue_after_rub: { type: number, nullable: true }
+        evaluated_at: { type: string, format: date-time, nullable: true }
+    AIImpactSummary:
+      type: object
+      description: >
+        30-day «ИИ заработал/сэкономил» aggregate over applied decisions.
+        Attribution is deliberately rough: each decision is measured on its
+        target campaign over a 7-day window before vs after the apply moment.
+        saved_rub sums spend reductions only where the after-window revenue
+        held at ≥ 90% of the before-window revenue; extra_revenue_rub sums
+        positive revenue deltas.
+      properties:
+        window_days: { type: integer, description: Aggregation window (30) }
+        decisions_applied: { type: integer }
+        decisions_evaluated: { type: integer }
+        avg_drr_before: { type: number, nullable: true }
+        avg_drr_after: { type: number, nullable: true }
+        spend_delta_rub: { type: number, description: "Σ (spend_after − spend_before) по evaluated-решениям" }
+        revenue_delta_rub: { type: number, description: "Σ (revenue_after − revenue_before) по evaluated-решениям" }
+        saved_rub: { type: number, description: "Σ max(0, spend_before − spend_after) где revenue_after ≥ 0.9 × revenue_before" }
+        extra_revenue_rub: { type: number, description: "Σ max(0, revenue_after − revenue_before)" }
+    AIImpactEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/AIImpactSummary"
+    OzonSearchQueryStat:
+      type: object
+      description: One aggregated search query (phrases report mirror)
+      properties:
+        query: { type: string }
+        sku: { type: integer, format: int64, description: "Top SKU of the query by views (0 = not attributed)" }
+        product_name: { type: string }
+        views: { type: integer, format: int64 }
+        clicks: { type: integer, format: int64 }
+        orders: { type: integer, format: int64 }
+        spend_rub: { type: number }
+        avg_position: { type: number, nullable: true, description: Views-weighted average position }
+        ctr_pct: { type: number }
+    OzonSearchQueryListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonSearchQueryStat"
+        meta:
+          $ref: "#/components/schemas/Meta"
     AIDecisionEnvelope:
       type: object
       properties:

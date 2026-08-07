@@ -68,6 +68,9 @@ const (
 	// its low concurrency keeps multi-minute LLM cabinet runs sequential.
 	TaskOzonAISweep = "ozon:ai_sweep"
 	TaskOzonAIRun   = "ozon:ai_run"
+	// AI impact sweep: measures applied AI decisions against 7d-before/7d-after
+	// campaign stats windows (no LLM calls — pure local math).
+	TaskOzonAIImpactSweep = "ozon:ai_impact_sweep"
 
 	// Ozon module (phase 4: repricer). Per-workspace runs on the ozon-sync
 	// queue; the service itself paces writes per cabinet.
@@ -85,6 +88,11 @@ const (
 	// into the 7×24 ozon_orders_hourly matrix — sequential across cabinets on
 	// its own low-frequency schedule (OZON_POSTINGS_INTERVAL).
 	TaskOzonPostingsSync = "ozon:sync_postings"
+
+	// Ozon module (phase 7: search queries). The Performance API phrases
+	// report is asynchronous and limited to one generation per account —
+	// cabinets run sequentially on their own low-frequency schedule.
+	TaskOzonPhrasesSync = "ozon:sync_phrases"
 
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"

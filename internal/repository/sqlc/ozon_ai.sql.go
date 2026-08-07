@@ -89,7 +89,7 @@ func (q *Queries) FinishAIRun(ctx context.Context, arg FinishAIRunParams) error 
 }
 
 const getAIDecisionByID = `-- name: GetAIDecisionByID :one
-SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by FROM ai_decisions
+SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at FROM ai_decisions
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -117,6 +117,14 @@ func (q *Queries) GetAIDecisionByID(ctx context.Context, arg GetAIDecisionByIDPa
 		&i.CreatedAt,
 		&i.AppliedAt,
 		&i.AppliedBy,
+		&i.OutcomeStatus,
+		&i.DrrBefore,
+		&i.DrrAfter,
+		&i.SpendBeforeRub,
+		&i.SpendAfterRub,
+		&i.RevenueBeforeRub,
+		&i.RevenueAfterRub,
+		&i.EvaluatedAt,
 	)
 	return i, err
 }
@@ -252,6 +260,71 @@ func (q *Queries) GetOzonAICPOGuardState(ctx context.Context, arg GetOzonAICPOGu
 	return i, err
 }
 
+const getOzonCampaignByCabinetAndOzonID = `-- name: GetOzonCampaignByCabinetAndOzonID :one
+SELECT id, seller_cabinet_id, ozon_campaign_id, title, adv_object_type, state, placement, autopilot_strategy, daily_budget_rub, weekly_budget_rub, from_date, to_date, created_at, updated_at FROM ozon_campaigns
+WHERE seller_cabinet_id = $1
+  AND ozon_campaign_id = $2
+`
+
+type GetOzonCampaignByCabinetAndOzonIDParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	OzonCampaignID  int64       `json:"ozon_campaign_id"`
+}
+
+func (q *Queries) GetOzonCampaignByCabinetAndOzonID(ctx context.Context, arg GetOzonCampaignByCabinetAndOzonIDParams) (OzonCampaign, error) {
+	row := q.db.QueryRow(ctx, getOzonCampaignByCabinetAndOzonID, arg.SellerCabinetID, arg.OzonCampaignID)
+	var i OzonCampaign
+	err := row.Scan(
+		&i.ID,
+		&i.SellerCabinetID,
+		&i.OzonCampaignID,
+		&i.Title,
+		&i.AdvObjectType,
+		&i.State,
+		&i.Placement,
+		&i.AutopilotStrategy,
+		&i.DailyBudgetRub,
+		&i.WeeklyBudgetRub,
+		&i.FromDate,
+		&i.ToDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getOzonCampaignStatsWindowTotals = `-- name: GetOzonCampaignStatsWindowTotals :one
+SELECT
+    COALESCE(SUM(spend_rub), 0)::numeric AS spend_rub,
+    COALESCE(SUM(revenue_rub), 0)::numeric AS revenue_rub,
+    COUNT(*)::bigint AS days
+FROM ozon_campaign_stats
+WHERE campaign_id = $1
+  AND date BETWEEN $2 AND $3
+`
+
+type GetOzonCampaignStatsWindowTotalsParams struct {
+	CampaignID pgtype.UUID `json:"campaign_id"`
+	DateFrom   pgtype.Date `json:"date_from"`
+	DateTo     pgtype.Date `json:"date_to"`
+}
+
+type GetOzonCampaignStatsWindowTotalsRow struct {
+	SpendRub   pgtype.Numeric `json:"spend_rub"`
+	RevenueRub pgtype.Numeric `json:"revenue_rub"`
+	Days       int64          `json:"days"`
+}
+
+// GetOzonCampaignStatsWindowTotals sums one campaign's stats over a closed
+// date window for the before/after impact comparison. days counts rows, i.e.
+// days that actually have data.
+func (q *Queries) GetOzonCampaignStatsWindowTotals(ctx context.Context, arg GetOzonCampaignStatsWindowTotalsParams) (GetOzonCampaignStatsWindowTotalsRow, error) {
+	row := q.db.QueryRow(ctx, getOzonCampaignStatsWindowTotals, arg.CampaignID, arg.DateFrom, arg.DateTo)
+	var i GetOzonCampaignStatsWindowTotalsRow
+	err := row.Scan(&i.SpendRub, &i.RevenueRub, &i.Days)
+	return i, err
+}
+
 const getRunningAIRunForCabinet = `-- name: GetRunningAIRunForCabinet :one
 SELECT id, workspace_id, seller_cabinet_id, strategy_id, status, trigger, summary, error, prompt_tokens, completion_tokens, started_at, finished_at FROM ai_runs
 WHERE seller_cabinet_id = $1
@@ -294,7 +367,7 @@ VALUES (
     $7, $8,
     $9, $10, $11
 )
-RETURNING id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by
+RETURNING id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at
 `
 
 type InsertAIDecisionParams struct {
@@ -342,6 +415,14 @@ func (q *Queries) InsertAIDecision(ctx context.Context, arg InsertAIDecisionPara
 		&i.CreatedAt,
 		&i.AppliedAt,
 		&i.AppliedBy,
+		&i.OutcomeStatus,
+		&i.DrrBefore,
+		&i.DrrAfter,
+		&i.SpendBeforeRub,
+		&i.SpendAfterRub,
+		&i.RevenueBeforeRub,
+		&i.RevenueAfterRub,
+		&i.EvaluatedAt,
 	)
 	return i, err
 }
@@ -391,8 +472,74 @@ func (q *Queries) InsertAIRun(ctx context.Context, arg InsertAIRunParams) (AiRun
 	return i, err
 }
 
+const listAIDecisionImpactRows = `-- name: ListAIDecisionImpactRows :many
+SELECT id, action_type, status, outcome_status, applied_at,
+       drr_before, drr_after, spend_before_rub, spend_after_rub,
+       revenue_before_rub, revenue_after_rub
+FROM ai_decisions
+WHERE workspace_id = $1
+  AND seller_cabinet_id = $2
+  AND status IN ('applied', 'auto_applied')
+  AND applied_at >= $3
+`
+
+type ListAIDecisionImpactRowsParams struct {
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Since           pgtype.Timestamptz `json:"since"`
+}
+
+type ListAIDecisionImpactRowsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	ActionType       string             `json:"action_type"`
+	Status           string             `json:"status"`
+	OutcomeStatus    pgtype.Text        `json:"outcome_status"`
+	AppliedAt        pgtype.Timestamptz `json:"applied_at"`
+	DrrBefore        pgtype.Numeric     `json:"drr_before"`
+	DrrAfter         pgtype.Numeric     `json:"drr_after"`
+	SpendBeforeRub   pgtype.Numeric     `json:"spend_before_rub"`
+	SpendAfterRub    pgtype.Numeric     `json:"spend_after_rub"`
+	RevenueBeforeRub pgtype.Numeric     `json:"revenue_before_rub"`
+	RevenueAfterRub  pgtype.Numeric     `json:"revenue_after_rub"`
+}
+
+// ListAIDecisionImpactRows powers GET /ozon/ai/impact: every applied decision
+// of the last N days with its evaluation numbers (aggregation is done in Go —
+// the formulas are unit-tested there).
+func (q *Queries) ListAIDecisionImpactRows(ctx context.Context, arg ListAIDecisionImpactRowsParams) ([]ListAIDecisionImpactRowsRow, error) {
+	rows, err := q.db.Query(ctx, listAIDecisionImpactRows, arg.WorkspaceID, arg.SellerCabinetID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAIDecisionImpactRowsRow{}
+	for rows.Next() {
+		var i ListAIDecisionImpactRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActionType,
+			&i.Status,
+			&i.OutcomeStatus,
+			&i.AppliedAt,
+			&i.DrrBefore,
+			&i.DrrAfter,
+			&i.SpendBeforeRub,
+			&i.SpendAfterRub,
+			&i.RevenueBeforeRub,
+			&i.RevenueAfterRub,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAIDecisions = `-- name: ListAIDecisions :many
-SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by FROM ai_decisions
+SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at FROM ai_decisions
 WHERE workspace_id = $1
   AND seller_cabinet_id = $2
   AND ($3::text IS NULL OR status = $3::text)
@@ -442,6 +589,74 @@ func (q *Queries) ListAIDecisions(ctx context.Context, arg ListAIDecisionsParams
 			&i.CreatedAt,
 			&i.AppliedAt,
 			&i.AppliedBy,
+			&i.OutcomeStatus,
+			&i.DrrBefore,
+			&i.DrrAfter,
+			&i.SpendBeforeRub,
+			&i.SpendAfterRub,
+			&i.RevenueBeforeRub,
+			&i.RevenueAfterRub,
+			&i.EvaluatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAIDecisionsForImpactEval = `-- name: ListAIDecisionsForImpactEval :many
+
+SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at FROM ai_decisions
+WHERE status IN ('applied', 'auto_applied')
+  AND evaluated_at IS NULL
+  AND applied_at IS NOT NULL
+  AND applied_at <= now() - INTERVAL '4 days'
+ORDER BY applied_at
+LIMIT 500
+`
+
+// --- AI impact («ИИ заработал/сэкономил») ---
+// ListAIDecisionsForImpactEval feeds the ozon:ai_impact_sweep job: applied
+// decisions at least 4 days old that have no final evaluation yet.
+// 'pending_eval' rows keep evaluated_at NULL and are rescanned until they
+// either gather 3 after-days of stats or age out past 14 days.
+func (q *Queries) ListAIDecisionsForImpactEval(ctx context.Context) ([]AiDecision, error) {
+	rows, err := q.db.Query(ctx, listAIDecisionsForImpactEval)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AiDecision{}
+	for rows.Next() {
+		var i AiDecision
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.WorkspaceID,
+			&i.SellerCabinetID,
+			&i.ActionType,
+			&i.Target,
+			&i.Proposal,
+			&i.Rationale,
+			&i.ExpectedEffect,
+			&i.GuardrailVerdict,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.AppliedAt,
+			&i.AppliedBy,
+			&i.OutcomeStatus,
+			&i.DrrBefore,
+			&i.DrrAfter,
+			&i.SpendBeforeRub,
+			&i.SpendAfterRub,
+			&i.RevenueBeforeRub,
+			&i.RevenueAfterRub,
+			&i.EvaluatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -593,7 +808,7 @@ func (q *Queries) ListOzonCampaignDailyStatsSince(ctx context.Context, arg ListO
 }
 
 const listOzonProductPricesBySkus = `-- name: ListOzonProductPricesBySkus :many
-SELECT id, seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub, min_price_rub, net_price_rub, marketing_seller_price_rub, color_index, commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at FROM ozon_product_prices
+SELECT id, seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub, min_price_rub, net_price_rub, marketing_seller_price_rub, color_index, commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at, ozon_index_min_price_rub, external_index_min_price_rub, self_index_min_price_rub FROM ozon_product_prices
 WHERE seller_cabinet_id = $1
   AND sku = ANY($2::bigint[])
 `
@@ -628,6 +843,9 @@ func (q *Queries) ListOzonProductPricesBySkus(ctx context.Context, arg ListOzonP
 			&i.CommissionFbsPct,
 			&i.AcquiringPct,
 			&i.SyncedAt,
+			&i.OzonIndexMinPriceRub,
+			&i.ExternalIndexMinPriceRub,
+			&i.SelfIndexMinPriceRub,
 		); err != nil {
 			return nil, err
 		}
@@ -637,6 +855,45 @@ func (q *Queries) ListOzonProductPricesBySkus(ctx context.Context, arg ListOzonP
 		return nil, err
 	}
 	return items, nil
+}
+
+const setAIDecisionOutcome = `-- name: SetAIDecisionOutcome :exec
+UPDATE ai_decisions SET
+    outcome_status = $1,
+    drr_before = $2,
+    drr_after = $3,
+    spend_before_rub = $4,
+    spend_after_rub = $5,
+    revenue_before_rub = $6,
+    revenue_after_rub = $7,
+    evaluated_at = CASE WHEN $1::text IN ('evaluated', 'not_evaluable')
+                        THEN now() ELSE evaluated_at END
+WHERE id = $8
+`
+
+type SetAIDecisionOutcomeParams struct {
+	OutcomeStatus    pgtype.Text    `json:"outcome_status"`
+	DrrBefore        pgtype.Numeric `json:"drr_before"`
+	DrrAfter         pgtype.Numeric `json:"drr_after"`
+	SpendBeforeRub   pgtype.Numeric `json:"spend_before_rub"`
+	SpendAfterRub    pgtype.Numeric `json:"spend_after_rub"`
+	RevenueBeforeRub pgtype.Numeric `json:"revenue_before_rub"`
+	RevenueAfterRub  pgtype.Numeric `json:"revenue_after_rub"`
+	ID               pgtype.UUID    `json:"id"`
+}
+
+func (q *Queries) SetAIDecisionOutcome(ctx context.Context, arg SetAIDecisionOutcomeParams) error {
+	_, err := q.db.Exec(ctx, setAIDecisionOutcome,
+		arg.OutcomeStatus,
+		arg.DrrBefore,
+		arg.DrrAfter,
+		arg.SpendBeforeRub,
+		arg.SpendAfterRub,
+		arg.RevenueBeforeRub,
+		arg.RevenueAfterRub,
+		arg.ID,
+	)
+	return err
 }
 
 const setAIDecisionStatus = `-- name: SetAIDecisionStatus :exec

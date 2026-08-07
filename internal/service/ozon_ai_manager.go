@@ -221,7 +221,7 @@ func (s *OzonAIManagerService) execute(ctx context.Context, run sqlcgen.AiRun, w
 		// call with submit_proposals forced.
 		messages = append(messages, resp.Message)
 		if call != nil && call.Function.Name == "request_data" {
-			toolResult := s.handleDataRequest(ctx, workspaceID, call.Function.Arguments, data)
+			toolResult := s.handleDataRequest(ctx, workspaceID, cabinetID, call.Function.Arguments, data)
 			messages = append(messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: toolResult})
 		} else {
 			messages = append(messages, llm.Message{Role: "user", Content: "Сформируй финальные предложения: вызови submit_proposals."})
@@ -284,9 +284,10 @@ func addUsage(total, add llm.Usage) llm.Usage {
 }
 
 // handleDataRequest serves the request_data tool. competitive_bids hits the
-// Performance API (the one permitted call class); the other kinds have no
-// backing tables yet and answer honestly so the model does not hallucinate.
-func (s *OzonAIManagerService) handleDataRequest(ctx context.Context, workspaceID uuid.UUID, arguments string, data *aiCabinetData) string {
+// Performance API (the one permitted call class); search_queries answers from
+// the local ozon_search_queries mirror; price_history has no backing table
+// yet and answers honestly so the model does not hallucinate.
+func (s *OzonAIManagerService) handleDataRequest(ctx context.Context, workspaceID, cabinetID uuid.UUID, arguments string, data *aiCabinetData) string {
 	var req aiDataRequest
 	if err := json.Unmarshal([]byte(arguments), &req); err != nil {
 		return `{"error":"не удалось разобрать запрос данных"}`
@@ -322,7 +323,36 @@ func (s *OzonAIManagerService) handleDataRequest(ctx context.Context, workspaceI
 		}
 		payload, _ := json.Marshal(map[string]any{"competitive_bids": out})
 		return string(payload)
-	case "search_queries", "price_history":
+	case "search_queries":
+		// SKU scope: the requested SKUs (capped) or everything the run knows.
+		skus := req.SKUs
+		if len(skus) > 50 {
+			skus = skus[:50]
+		}
+		if len(skus) == 0 {
+			seen := map[int64]struct{}{}
+			for _, bids := range data.bidsByCampaignSKU {
+				for sku := range bids {
+					if _, ok := seen[sku]; !ok {
+						seen[sku] = struct{}{}
+						skus = append(skus, sku)
+					}
+				}
+			}
+			for sku := range data.cpoBySKU {
+				if _, ok := seen[sku]; !ok {
+					seen[sku] = struct{}{}
+					skus = append(skus, sku)
+				}
+			}
+		}
+		queries := s.topSearchQueriesForSKUs(ctx, cabinetID, skus, aiPackTopQueriesPerSKU)
+		if len(queries) == 0 {
+			return `{"search_queries":[],"note":"по этим SKU пока нет данных поисковых запросов (синк ещё не собрал отчёт phrases)"}`
+		}
+		payload, _ := json.Marshal(map[string]any{"search_queries": queries})
+		return string(payload)
+	case "price_history":
 		return `{"error":"эти данные пока не собираются; работай с тем, что есть в контексте"}`
 	default:
 		return `{"error":"неизвестный тип данных"}`
@@ -678,7 +708,7 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 - Каждое предложение обосновывай цифрами из контекста (rationale) и ожидаемым эффектом (expected_effect).
 
 Инструменты:
-- request_data — ОДИН дополнительный запрос данных, только если без них решение невозможно (конкурентные ставки и т.п.).
+- request_data — ОДИН дополнительный запрос данных, только если без них решение невозможно (конкурентные ставки, поисковые запросы по SKU).
 - submit_proposals — финальный список предложений + краткое резюме по кабинету (summary, по-русски).
 
 Действия: bid_change (target: ozon_campaign_id+sku, new_value = ставка ₽), budget_change (target: ozon_campaign_id, new_value = бюджет ₽ в том поле, которое кампания уже использует), campaign_pause / campaign_activate (target: ozon_campaign_id), cpo_bid (target: sku, new_value = фикс. ставка ₽), cpo_enable / cpo_disable (target: sku).
