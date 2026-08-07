@@ -740,7 +740,13 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 
 Действия: bid_change (target: ozon_campaign_id+sku, new_value = ставка ₽), budget_change (target: ozon_campaign_id, new_value = бюджет ₽ в том поле, которое кампания уже использует), campaign_pause / campaign_activate (target: ozon_campaign_id), cpo_bid (target: sku, new_value = фикс. ставка ₽), cpo_enable / cpo_disable (target: sku).
 
-Если менять нечего — вызови submit_proposals с пустым списком proposals и объясни в summary, почему.`,
+Если менять нечего — вызови submit_proposals с пустым списком proposals и объясни в summary, почему.
+
+Стиль текстов (summary, rationale, expected_effect) — их читает менеджер магазина, не программист:
+- Пиши простым деловым русским. НИКОГДА не используй имена полей и технический жаргон: вместо spend_rub — «расход», orders — «заказы», revenue_rub — «выручка», net_price — «себестоимость», SKU-кампания — «кампания».
+- Числа пиши по-человечески: «116 тыс. показов», «расход 0 ₽».
+- Кампании называй по названию («Общ», «Оплата за заказ»), номер — только если названия нет.
+- Summary — 3–6 коротких предложений: что происходит в кабинете и что ты сделал/почему ничего не сделал. Рекомендации человеку (проверить биллинг, карточки) давай отдельным последним предложением, без нумерованных списков.`,
 		params.TargetACoS, params.MaxChangePercent, params.MinBid, params.MaxBid)
 }
 
