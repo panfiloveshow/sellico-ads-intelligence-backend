@@ -109,9 +109,10 @@ func (c *PerfClient) GetCompetitiveBids(ctx context.Context, creds Credentials, 
 		if end > len(skus) {
 			end = len(skus)
 		}
+		// Параметр называется skus (Ozon: «have no skus in request» на sku=).
 		query := url.Values{}
 		for _, sku := range skus[start:end] {
-			query.Add("sku", strconv.FormatInt(sku, 10))
+			query.Add("skus", strconv.FormatInt(sku, 10))
 		}
 		body, err := c.doJSON(ctx, creds, http.MethodGet, fmt.Sprintf("/api/client/campaign/%d/products/bids/competitive", campaignID), query, nil)
 		if err != nil {
