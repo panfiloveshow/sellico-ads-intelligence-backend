@@ -392,9 +392,13 @@ func parseDailyStatsCSV(body []byte) ([]DailyStatRow, error) {
 		return nil, nil
 	}
 
+	// Header names carry units in the live export ("Расход, ₽", "Заказы, шт.",
+	// "Заказы, ₽") — map the full normalized name; aliases below list the
+	// unit-suffixed forms first so "Заказы, шт." and "Заказы, ₽" stay distinct.
 	col := map[string]int{}
 	for i, name := range records[0] {
-		col[strings.ToLower(strings.TrimSpace(name))] = i
+		normalized := strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(name))), " ")
+		col[normalized] = i
 	}
 	pick := func(row []string, names ...string) string {
 		for _, name := range names {
@@ -425,9 +429,9 @@ func parseDailyStatsCSV(body []byte) ([]DailyStatRow, error) {
 			Date:       date,
 			Views:      parseI(pick(row, "views", "показы")),
 			Clicks:     parseI(pick(row, "clicks", "клики")),
-			SpendRub:   parseF(pick(row, "moneyspent", "spend", "расход")),
-			Orders:     parseI(pick(row, "orders", "заказы")),
-			RevenueRub: parseF(pick(row, "ordersmoney", "выручка")),
+			SpendRub:   parseF(pick(row, "расход, ₽", "moneyspent", "spend", "расход")),
+			Orders:     parseI(pick(row, "заказы, шт.", "заказы, шт", "orders", "заказы")),
+			RevenueRub: parseF(pick(row, "заказы, ₽", "ordersmoney", "выручка")),
 		})
 	}
 	return out, nil
