@@ -98,12 +98,14 @@ func (c *SellerClient) ListProductPrices(ctx context.Context, creds Credentials)
 		Cursor string `json:"cursor"`
 		Limit  int    `json:"limit"`
 	}
+	// Docs describe money fields as strings, but the live API sends plain
+	// numbers — flexFloat accepts both.
 	type wirePrice struct {
-		Price                string    `json:"price"`
-		OldPrice             string    `json:"old_price"`
-		MinPrice             string    `json:"min_price"`
-		NetPrice             string    `json:"net_price"`
-		MarketingSellerPrice string    `json:"marketing_seller_price"`
+		Price                flexFloat `json:"price"`
+		OldPrice             flexFloat `json:"old_price"`
+		MinPrice             flexFloat `json:"min_price"`
+		NetPrice             flexFloat `json:"net_price"`
+		MarketingSellerPrice flexFloat `json:"marketing_seller_price"`
 		VAT                  flexFloat `json:"vat"`
 	}
 	type wireItem struct {
@@ -149,15 +151,15 @@ func (c *SellerClient) ListProductPrices(ctx context.Context, creds Credentials)
 				CommissionFBSPct: float64(item.Commissions.SalesPercentFBS),
 				AcquiringPct:     float64(item.Acquiring),
 			}
-			var parseErr error
-			if row.PriceRub, parseErr = ParsePriceString(item.Price.Price); parseErr != nil {
-				c.logger.Warn().Err(parseErr).Int64("product_id", row.ProductID).Msg("skip unparseable price")
+			row.PriceRub = float64(item.Price.Price)
+			if row.PriceRub == 0 {
+				c.logger.Warn().Int64("product_id", row.ProductID).Msg("skip product with zero price")
 				continue
 			}
-			row.OldPriceRub, _ = ParsePriceString(item.Price.OldPrice)
-			row.MinPriceRub, _ = ParsePriceString(item.Price.MinPrice)
-			row.NetPriceRub, _ = ParsePriceString(item.Price.NetPrice)
-			row.MarketingSellerPriceRub, _ = ParsePriceString(item.Price.MarketingSellerPrice)
+			row.OldPriceRub = float64(item.Price.OldPrice)
+			row.MinPriceRub = float64(item.Price.MinPrice)
+			row.NetPriceRub = float64(item.Price.NetPrice)
+			row.MarketingSellerPriceRub = float64(item.Price.MarketingSellerPrice)
 			out = append(out, row)
 		}
 		if len(resp.Items) < sellerPageSize || resp.Cursor == "" {
