@@ -110,6 +110,17 @@ func (s *OzonAIManagerService) RunForCabinet(ctx context.Context, workspaceID, c
 		s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("ai run already in progress; skipping")
 		return nil
 	}
+	// Min-gap: deploys restart the worker and fire the startup kick, which
+	// stacked runs 20 minutes apart. Cron/kick runs keep a 2h floor between
+	// completed runs; manual runs from the UI are exempt.
+	if trigger != domain.AIRunTriggerManual {
+		if last, err := s.queries.GetLastCompletedAIRunAt(ctx, uuidToPgtype(cabinetID)); err == nil &&
+			last.Valid && time.Since(last.Time) < 2*time.Hour {
+			s.logger.Info().Str("cabinet_id", cabinetID.String()).
+				Time("last_completed", last.Time).Msg("ai run min-gap not reached; skipping")
+			return nil
+		}
+	}
 
 	run, err := s.queries.InsertAIRun(ctx, sqlcgen.InsertAIRunParams{
 		WorkspaceID:     uuidToPgtype(workspaceID),
@@ -133,7 +144,14 @@ func (s *OzonAIManagerService) RunForCabinet(ctx context.Context, workspaceID, c
 			Str("cabinet_id", cabinetID.String()).
 			Str("run_id", uuidFromPgtype(run.ID).String()).
 			Msg("ai run failed")
-		s.finishRun(ctx, run.ID, domain.AIRunStatusFailed, "", truncateError(execErr.Error()), usage)
+		errText := truncateError(execErr.Error())
+		if errors.Is(execErr, llm.ErrTransient) {
+			// Провайдер перегружен/недоступен — это не ошибка кабинета.
+			// Менеджеру показываем человеческий текст; повтор придёт со
+			// следующим циклом свипа автоматически.
+			errText = "Провайдер ИИ перегружен — прогон повторится автоматически при следующем цикле"
+		}
+		s.finishRun(ctx, run.ID, domain.AIRunStatusFailed, "", errText, usage)
 		return fmt.Errorf("ai run %s: %w", uuidFromPgtype(run.ID), execErr)
 	}
 	s.finishRun(ctx, run.ID, domain.AIRunStatusCompleted, summary, "", usage)

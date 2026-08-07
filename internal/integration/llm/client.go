@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,13 +33,18 @@ const (
 	// DefaultMaxTokens bounds one completion (reasoning + final tool call).
 	DefaultMaxTokens = 8192
 
-	// maxAttempts caps retries on 429/5xx/network errors.
-	maxAttempts = 3
+	// maxAttempts caps retries on 429/5xx/network errors. NVIDIA free tier
+	// routinely 504s while its queue drains — give it real chances.
+	maxAttempts = 5
 	// defaultRetryDelay is the base backoff when no Retry-After arrives.
-	defaultRetryDelay = 5 * time.Second
+	defaultRetryDelay = 20 * time.Second
 	// maxRetryDelay caps a server-provided Retry-After.
 	maxRetryDelay = 2 * time.Minute
 )
+
+// ErrTransient marks failures worth retrying later (provider overload,
+// timeouts) — callers can present them as "повторим позже", not as errors.
+var ErrTransient = errors.New("transient llm failure")
 
 // Config configures the client; zero fields fall back to the defaults above.
 // An empty APIKey means "AI disabled": Enabled() reports false and every call
@@ -285,12 +291,13 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResp
 			Usage:        wire.Usage,
 		}, nil
 	}
-	return nil, fmt.Errorf("llm: all %d attempts exhausted: %w", maxAttempts, lastErr)
+	return nil, fmt.Errorf("llm: all %d attempts exhausted: %w: %w", maxAttempts, ErrTransient, lastErr)
 }
 
-// backoff is exponential on the base retry delay: d, 2d, 4d…
+// backoff grows linearly on the base retry delay: d, 2d, 3d… (exponential on
+// a 20s base would overshoot the provider queue's typical drain time).
 func (c *Client) backoff(attempt int) time.Duration {
-	return c.retryDelay << (attempt - 1)
+	return c.retryDelay * time.Duration(attempt)
 }
 
 // parseRetryAfter understands delay-seconds Retry-After values (the only form
