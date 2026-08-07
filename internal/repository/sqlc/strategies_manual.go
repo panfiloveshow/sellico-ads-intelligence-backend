@@ -20,11 +20,12 @@ type Strategy struct {
 }
 
 type StrategyBinding struct {
-	ID         pgtype.UUID        `json:"id"`
-	StrategyID pgtype.UUID        `json:"strategy_id"`
-	CampaignID pgtype.UUID        `json:"campaign_id"`
-	ProductID  pgtype.UUID        `json:"product_id"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID             pgtype.UUID        `json:"id"`
+	StrategyID     pgtype.UUID        `json:"strategy_id"`
+	CampaignID     pgtype.UUID        `json:"campaign_id"`
+	ProductID      pgtype.UUID        `json:"product_id"`
+	OzonCampaignID pgtype.UUID        `json:"ozon_campaign_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type DaypartingState struct {
@@ -307,7 +308,7 @@ func (q *Queries) UpsertDaypartingState(ctx context.Context, arg UpsertDaypartin
 }
 
 func (q *Queries) ListStrategyBindings(ctx context.Context, strategyID pgtype.UUID) ([]StrategyBinding, error) {
-	rows, err := q.db.Query(ctx, `SELECT id, strategy_id, campaign_id, product_id, created_at FROM strategy_bindings WHERE strategy_id = $1`, strategyID)
+	rows, err := q.db.Query(ctx, `SELECT id, strategy_id, campaign_id, product_id, ozon_campaign_id, created_at FROM strategy_bindings WHERE strategy_id = $1`, strategyID)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +316,7 @@ func (q *Queries) ListStrategyBindings(ctx context.Context, strategyID pgtype.UU
 	var items []StrategyBinding
 	for rows.Next() {
 		var i StrategyBinding
-		if err := rows.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.CreatedAt); err != nil {
+		if err := rows.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.OzonCampaignID, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -324,7 +325,7 @@ func (q *Queries) ListStrategyBindings(ctx context.Context, strategyID pgtype.UU
 }
 
 func (q *Queries) ListActiveStrategyBindingsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]StrategyBinding, error) {
-	rows, err := q.db.Query(ctx, `SELECT b.id, b.strategy_id, b.campaign_id, b.product_id, b.created_at FROM strategy_bindings b JOIN strategies s ON s.id = b.strategy_id WHERE s.workspace_id = $1 AND s.is_active = true`, workspaceID)
+	rows, err := q.db.Query(ctx, `SELECT b.id, b.strategy_id, b.campaign_id, b.product_id, b.ozon_campaign_id, b.created_at FROM strategy_bindings b JOIN strategies s ON s.id = b.strategy_id WHERE s.workspace_id = $1 AND s.is_active = true`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +333,7 @@ func (q *Queries) ListActiveStrategyBindingsByWorkspace(ctx context.Context, wor
 	var items []StrategyBinding
 	for rows.Next() {
 		var i StrategyBinding
-		if err := rows.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.CreatedAt); err != nil {
+		if err := rows.Scan(&i.ID, &i.StrategyID, &i.CampaignID, &i.ProductID, &i.OzonCampaignID, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

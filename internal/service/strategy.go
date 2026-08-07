@@ -584,6 +584,10 @@ func bindingFromSqlc(row sqlcgen.StrategyBinding) domain.StrategyBinding {
 		id := uuidFromPgtype(row.ProductID)
 		b.ProductID = &id
 	}
+	if row.OzonCampaignID.Valid {
+		id := uuidFromPgtype(row.OzonCampaignID)
+		b.OzonCampaignID = &id
+	}
 	return b
 }
 
