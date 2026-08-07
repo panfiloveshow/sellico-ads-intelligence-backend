@@ -363,13 +363,25 @@ func parseDailyStatsCSV(body []byte) ([]DailyStatRow, error) {
 	if len(body) == 0 {
 		return nil, nil
 	}
+	// Detect the delimiter from the header line: a comma-separated file parses
+	// "successfully" with Comma=';' as one wide column and silently yields
+	// zero rows, so error-based fallback alone is not enough.
+	delimiter := byte(';')
+	if head, _, _ := bytes.Cut(body, []byte("\n")); bytes.Count(head, []byte(",")) > bytes.Count(head, []byte(";")) {
+		delimiter = ','
+	}
 	reader := csv.NewReader(bytes.NewReader(body))
-	reader.Comma = ';'
+	reader.Comma = rune(delimiter)
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	if err != nil {
-		// Retry with comma separator before giving up.
+		// Retry with the other separator before giving up.
 		reader = csv.NewReader(bytes.NewReader(body))
+		if delimiter == ';' {
+			reader.Comma = ','
+		} else {
+			reader.Comma = ';'
+		}
 		reader.FieldsPerRecord = -1
 		records, err = reader.ReadAll()
 		if err != nil {

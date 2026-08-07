@@ -268,6 +268,25 @@ func (s *OzonAIManagerService) execute(ctx context.Context, run sqlcgen.AiRun, w
 	return submission.Summary, usage, nil
 }
 
+// aiDecisionStatusFor maps a guardrail verdict + automation level to the
+// decision status. Pure (unit-tested): a non-empty verdict always rejects;
+// otherwise level 1 = shadow, 2 = proposed (copilot), 3 = auto_applied.
+// Only auto_applied ever reaches applyProposal — shadow and proposed
+// decisions never trigger writes.
+func aiDecisionStatusFor(guardrailVerdict string, automationLevel int) string {
+	if guardrailVerdict != "" {
+		return domain.AIDecisionStatusRejectedByGuardrail
+	}
+	switch automationLevel {
+	case 1:
+		return domain.AIDecisionStatusShadow
+	case 2:
+		return domain.AIDecisionStatusProposed
+	default: // 3 — autopilot
+		return domain.AIDecisionStatusAutoApplied
+	}
+}
+
 func parseSubmission(arguments string) (*aiSubmission, error) {
 	var submission aiSubmission
 	if err := json.Unmarshal([]byte(arguments), &submission); err != nil {
@@ -364,20 +383,10 @@ func (s *OzonAIManagerService) handleDataRequest(ctx context.Context, workspaceI
 func (s *OzonAIManagerService) processProposal(ctx context.Context, run sqlcgen.AiRun, workspaceID, cabinetID uuid.UUID, params domain.StrategyParams, proposal aiProposal, data *aiCabinetData) (string, error) {
 	verdict := s.evaluateProposal(ctx, cabinetID, params, proposal, data)
 
-	status := domain.AIDecisionStatusShadow
+	status := aiDecisionStatusFor(verdict, params.AutomationLevel)
 	guardrailVerdict := "passed"
 	if verdict != "" {
-		status = domain.AIDecisionStatusRejectedByGuardrail
 		guardrailVerdict = verdict
-	} else {
-		switch params.AutomationLevel {
-		case 1:
-			status = domain.AIDecisionStatusShadow
-		case 2:
-			status = domain.AIDecisionStatusProposed
-		default: // 3 — autopilot
-			status = domain.AIDecisionStatusAutoApplied
-		}
 	}
 
 	targetJSON, _ := json.Marshal(proposal.Target)
