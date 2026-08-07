@@ -3,6 +3,8 @@ package service
 import (
 	"strings"
 	"testing"
+
+	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
 func TestComputeOzonFloor_WithNetPrice(t *testing.T) {
@@ -153,5 +155,49 @@ func TestOzonHourlyGuardReason(t *testing.T) {
 	reason := ozonHourlyGuardReason(10, ozonHardHourlyWriteCap)
 	if reason == "" || !strings.Contains(reason, "10/10") {
 		t.Fatalf("expected block at 10/10, got %q", reason)
+	}
+}
+
+func TestOzonEffectiveNetPrice_FallbackToSellicoEconomics(t *testing.T) {
+	// No net_price from Ozon → cost comes from the Sellico unit-economics
+	// mirror: cost_price + other_costs. logistics_cost_rub must NOT be added
+	// (Ozon logistics is already inside the commission percentages).
+	econ := &sqlcgen.OzonProductEconomic{
+		CostPriceRub:     floatToPgNumeric(400),
+		OtherCostsRub:    floatToPgNumeric(50),
+		LogisticsCostRub: floatToPgNumeric(120),
+	}
+	if cost := ozonEffectiveNetPrice(0, econ); cost != 450 {
+		t.Fatalf("cost = %v, want 450 (400 cost + 50 other, no logistics)", cost)
+	}
+	// The fallback cost must feed the same floor formula as a native net_price:
+	// (450 + 25) / (1 − 0.20) = 593.75
+	floor, reason := computeOzonFloor(ozonFloorInputs{
+		NetPriceRub:      ozonEffectiveNetPrice(0, econ),
+		CommissionFBOPct: 20,
+		AcquiringRub:     25,
+	})
+	if reason != "" {
+		t.Fatalf("unexpected reason %q", reason)
+	}
+	if floor != 593.75 {
+		t.Fatalf("floor = %v, want 593.75", floor)
+	}
+}
+
+func TestOzonEffectiveNetPrice_PrefersNativeNetPrice(t *testing.T) {
+	econ := &sqlcgen.OzonProductEconomic{CostPriceRub: floatToPgNumeric(400)}
+	if cost := ozonEffectiveNetPrice(500, econ); cost != 500 {
+		t.Fatalf("cost = %v, want 500 (Ozon net_price wins over economics)", cost)
+	}
+}
+
+func TestOzonEffectiveNetPrice_NoData(t *testing.T) {
+	if cost := ozonEffectiveNetPrice(0, nil); cost != 0 {
+		t.Fatalf("cost = %v, want 0 without any source", cost)
+	}
+	// A row without a positive cost_price is unusable even when present.
+	if cost := ozonEffectiveNetPrice(0, &sqlcgen.OzonProductEconomic{OtherCostsRub: floatToPgNumeric(50)}); cost != 0 {
+		t.Fatalf("cost = %v, want 0 when cost_price is absent", cost)
 	}
 }

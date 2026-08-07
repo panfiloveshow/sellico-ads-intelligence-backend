@@ -11,9 +11,13 @@ import (
 )
 
 // WBUnitEconomics is one product's cost data pulled from Sellico's unit economics
-// (GET /products/unit-economics/export), keyed by WB nmID. Costs are in rubles.
+// (GET /products/unit-economics/export). WB items are keyed by nmID; Ozon items
+// (the same export for OZON integrations) are keyed by OfferID (артикул) and may
+// also carry an Ozon SKU. Costs are in rubles.
 type WBUnitEconomics struct {
 	NmID              int64
+	OfferID           string // Ozon items only
+	SKU               int64  // Ozon items only, optional
 	CostPrice         float64
 	CommissionPercent *float64
 	TaxPercent        *float64
@@ -63,6 +67,8 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 	var payload struct {
 		Items []struct {
 			NmID              json.Number  `json:"nm_id"`
+			OfferID           string       `json:"offer_id"`
+			SKU               *json.Number `json:"sku"`
 			CostPrice         json.Number  `json:"cost_price"`
 			CommissionPercent *json.Number `json:"commission_percent"`
 			TaxPercent        *json.Number `json:"tax_percent"`
@@ -95,15 +101,27 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 
 	out := make([]WBUnitEconomics, 0, len(payload.Items))
 	for _, it := range payload.Items {
-		nm, err := it.NmID.Int64()
-		if err != nil || nm <= 0 {
+		// WB items carry nm_id, Ozon items carry offer_id (артикул); a row
+		// without either key is unusable. Parse tolerantly — the Laravel
+		// exporter serves both marketplaces from the same endpoint.
+		nm, nmErr := it.NmID.Int64()
+		if nmErr != nil || nm <= 0 {
+			nm = 0
+		}
+		offerID := strings.TrimSpace(it.OfferID)
+		if nm <= 0 && offerID == "" {
 			continue
 		}
 		cost, err := it.CostPrice.Float64()
 		if err != nil || cost <= 0 {
 			continue
 		}
-		row := WBUnitEconomics{NmID: nm, CostPrice: cost, Source: strings.TrimSpace(payload.Source), Ready: it.Ready}
+		row := WBUnitEconomics{NmID: nm, OfferID: offerID, CostPrice: cost, Source: strings.TrimSpace(payload.Source), Ready: it.Ready}
+		if it.SKU != nil {
+			if v, err := it.SKU.Int64(); err == nil && v > 0 {
+				row.SKU = v
+			}
+		}
 		if it.CommissionPercent != nil {
 			if v, err := it.CommissionPercent.Float64(); err == nil {
 				row.CommissionPercent = &v

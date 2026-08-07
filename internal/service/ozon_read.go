@@ -146,11 +146,47 @@ func (s *OzonSyncService) ListPrices(ctx context.Context, workspaceID, cabinetID
 	if err != nil {
 		return nil, 0, apperror.New(apperror.ErrInternal, "failed to list ozon prices")
 	}
+	// Sellico unit-economics mirror: cost fallback for the informational floor
+	// when Ozon itself does not report net_price for a product.
+	economics := map[string]sqlcgen.OzonProductEconomic{}
+	if econRows, econErr := s.queries.ListOzonProductEconomicsByCabinet(ctx, uuidToPgtype(cabinetID)); econErr == nil {
+		for _, econ := range econRows {
+			economics[econ.OfferID] = econ
+		}
+	}
+
 	result := make([]domain.OzonProductPrice, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, ozonProductPriceFromSqlc(row))
+		price := ozonProductPriceFromSqlc(row)
+		applyOzonEconomicsFloorFallback(&price, row, economics)
+		result = append(result, price)
 	}
 	return result, total, nil
+}
+
+// applyOzonEconomicsFloorFallback recomputes the informational floor from the
+// Sellico cost (cost_price + other_costs; logistics для Ozon уже сидит в
+// комиссиях — не добавляется) when the mirror row has no net_price of its own.
+func applyOzonEconomicsFloorFallback(price *domain.OzonProductPrice, row sqlcgen.OzonProductPrice, economics map[string]sqlcgen.OzonProductEconomic) {
+	if pgNumericToFloat(row.NetPriceRub) > 0 || !row.OfferID.Valid {
+		return // Ozon's own net_price already produced the floor (or no key)
+	}
+	econ, ok := economics[row.OfferID.String]
+	if !ok {
+		return
+	}
+	cost := ozonEffectiveNetPrice(0, &econ)
+	if cost <= 0 {
+		return
+	}
+	if floor, reason := computeOzonFloor(ozonFloorInputs{
+		NetPriceRub:      cost,
+		CommissionFBOPct: pgNumericToFloat(row.CommissionFboPct),
+		CommissionFBSPct: pgNumericToFloat(row.CommissionFbsPct),
+		AcquiringRub:     pgNumericToFloat(row.AcquiringPct),
+	}); reason == "" {
+		price.FloorRub = &floor
+	}
 }
 
 func (s *OzonSyncService) getOwnedCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) (*domain.OzonCampaign, error) {

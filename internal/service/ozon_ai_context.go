@@ -307,8 +307,20 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		if pricesErr != nil {
 			return nil, nil, fmt.Errorf("list product prices: %w", pricesErr)
 		}
+		// Cost fallback: when Ozon does not report net_price, take the cost
+		// from the Sellico unit-economics mirror (cost_price + other_costs;
+		// logistics is already inside Ozon commissions, never added). Failures
+		// are non-fatal — the pack simply keeps net_price empty.
+		// TODO: feed economics.max_allowed_drr into the AI context as a
+		// per-product ad-spend ceiling.
+		economics := map[string]sqlcgen.OzonProductEconomic{}
+		if econRows, econErr := s.queries.ListOzonProductEconomicsByCabinet(ctx, uuidToPgtype(cabinetID)); econErr == nil {
+			for _, econ := range econRows {
+				economics[econ.OfferID] = econ
+			}
+		}
 		for _, row := range priceRows {
-			pack.Economics = append(pack.Economics, aiPackEconomics{
+			entry := aiPackEconomics{
 				SKU:              row.Sku,
 				OfferID:          pgTextValue(row.OfferID),
 				PriceRub:         pgNumericToFloatPtr(row.PriceRub),
@@ -317,7 +329,15 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				CommissionFBOPct: pgNumericToFloatPtr(row.CommissionFboPct),
 				CommissionFBSPct: pgNumericToFloatPtr(row.CommissionFbsPct),
 				ColorIndex:       pgTextValue(row.ColorIndex),
-			})
+			}
+			if (entry.NetPriceRub == nil || *entry.NetPriceRub <= 0) && row.OfferID.Valid {
+				if econ, ok := economics[row.OfferID.String]; ok {
+					if cost := ozonEffectiveNetPrice(0, &econ); cost > 0 {
+						entry.NetPriceRub = &cost
+					}
+				}
+			}
+			pack.Economics = append(pack.Economics, entry)
 		}
 	}
 

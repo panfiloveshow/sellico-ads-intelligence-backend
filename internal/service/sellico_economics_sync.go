@@ -70,12 +70,26 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 
 	imported := 0
 	for _, cab := range cabinets {
-		if cab.Marketplace != domain.MarketplaceWB {
-			continue // WB unit-economics bridge is keyed by nmID — WB cabinets only
-		}
 		integrationID := pgTextValue(cab.ExternalIntegrationID)
 		if integrationID == "" {
 			continue // manual cabinet, no Sellico link
+		}
+
+		// The same export endpoint serves both marketplaces: WB items are
+		// keyed by nm_id, Ozon items by offer_id (артикул).
+		switch cab.Marketplace {
+		case domain.MarketplaceOzon:
+			n, ozonErr := s.syncOzonCabinet(ctx, cab.ID, integrationID)
+			if ozonErr != nil {
+				s.logger.Warn().Err(ozonErr).Str("integration_id", integrationID).Msg("sync ozon sellico economics failed")
+				continue
+			}
+			imported += n
+			continue
+		case domain.MarketplaceWB:
+			// WB flow below (product_economics keyed by nmID).
+		default:
+			continue
 		}
 
 		rows, err := s.client.ListWBUnitEconomics(ctx, s.token, s.path, integrationID)
@@ -111,8 +125,56 @@ func (s *SellicoEconomicsSyncService) SyncWorkspace(ctx context.Context, workspa
 	return imported, nil
 }
 
+// syncOzonCabinet mirrors Sellico unit economics of one OZON integration into
+// ozon_product_economics, keyed by (cabinet, offer_id). Only rows that carry an
+// offer_id and a positive cost are useful — the margin-floor repricer falls
+// back to this cost when Ozon itself does not report net_price. Returns how
+// many rows were upserted.
+func (s *SellicoEconomicsSyncService) syncOzonCabinet(ctx context.Context, cabinetID pgtype.UUID, integrationID string) (int, error) {
+	rows, err := s.client.ListWBUnitEconomics(ctx, s.token, s.path, integrationID)
+	if err != nil {
+		return 0, fmt.Errorf("fetch sellico economics: %w", err)
+	}
+	upserted := 0
+	for _, row := range rows {
+		// Ozon contract: offer_id required, cost_price guaranteed; the ready
+		// flag is a WB-only concept, so it is not checked here.
+		if row.OfferID == "" || row.CostPrice <= 0 {
+			continue
+		}
+		source := row.Source
+		if source == "" {
+			source = "sellico"
+		}
+		var sku pgtype.Int8
+		if row.SKU > 0 {
+			sku = pgtype.Int8{Int64: row.SKU, Valid: true}
+		}
+		if err := s.queries.UpsertOzonProductEconomics(ctx, sqlcgen.UpsertOzonProductEconomicsParams{
+			SellerCabinetID:   cabinetID,
+			OfferID:           row.OfferID,
+			Sku:               sku,
+			CostPriceRub:      floatToPgNumeric(row.CostPrice),
+			LogisticsCostRub:  floatPtrToPgNumeric(row.LogisticsCost),
+			OtherCostsRub:     floatPtrToPgNumeric(row.OtherCosts),
+			TaxPercent:        floatPtrToPgNumeric(row.TaxPercent),
+			CommissionPercent: floatPtrToPgNumeric(row.CommissionPercent),
+			MaxAllowedDrr:     floatPtrToPgNumeric(row.MaxAllowedDRR),
+			Source:            pgtype.Text{String: source, Valid: true},
+		}); err != nil {
+			s.logger.Warn().Err(err).Str("offer_id", row.OfferID).Msg("upsert ozon economics failed")
+			continue
+		}
+		upserted++
+	}
+	return upserted, nil
+}
+
 func (s *SellicoEconomicsSyncService) verifyCabinetProducts(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID, rows []sellico.WBUnitEconomics) error {
 	for _, row := range rows {
+		if row.NmID <= 0 {
+			continue // Ozon-shaped row (offer_id key) — not part of the WB snapshot check
+		}
 		product, err := s.queries.GetProductByWBProductID(ctx, sqlcgen.GetProductByWBProductIDParams{
 			WorkspaceID: uuidToPgtype(workspaceID),
 			WbProductID: row.NmID,

@@ -118,6 +118,30 @@ func computeOzonFloor(in ozonFloorInputs) (float64, string) {
 	return 0, "missing_net_price"
 }
 
+// ozonEffectiveNetPrice picks the cost that feeds the floor formula: Ozon's own
+// net_price when it is pushed to the marketplace, otherwise the Sellico
+// unit-economics fallback (cost_price + other_costs). logistics_cost_rub is
+// deliberately NOT added: on Ozon logistics is already inside the commission
+// percentages the floor formula applies, so adding it would double-count.
+// NOTE: econ.MaxAllowedDrr is ignored here for now — TODO: feed it into the AI
+// autopilot context as a per-product ad-spend ceiling.
+func ozonEffectiveNetPrice(netPriceRub float64, econ *sqlcgen.OzonProductEconomic) float64 {
+	if netPriceRub > 0 {
+		return netPriceRub
+	}
+	if econ == nil {
+		return 0
+	}
+	cost := pgNumericToFloat(econ.CostPriceRub)
+	if cost <= 0 {
+		return 0
+	}
+	if other := pgNumericToFloat(econ.OtherCostsRub); other > 0 {
+		cost += other
+	}
+	return cost
+}
+
 // ozonPriceDecision is the engine verdict for one product.
 type ozonPriceDecision struct {
 	ShouldChange  bool
@@ -281,6 +305,10 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 	if len(prices) == 0 {
 		return 0, nil
 	}
+	economics, err := s.loadCabinetEconomics(ctx, cabinet.ID)
+	if err != nil {
+		return 0, err
+	}
 
 	now := time.Now().UTC()
 	written := 0
@@ -295,7 +323,7 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 			if _, done := decided[row.Sku]; done {
 				continue
 			}
-			decision, ok := s.evaluateProduct(ctx, cabinet.ID, strategy, params, row, now)
+			decision, ok := s.evaluateProduct(ctx, cabinet.ID, strategy, params, row, economics, now)
 			if !ok {
 				continue
 			}
@@ -352,7 +380,7 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 
 // evaluateProduct runs guardrails and the strategy engine for one price row.
 // Returns (decision, true) only when a change should be recorded.
-func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uuid.UUID, strategy domain.Strategy, params domain.StrategyParams, row sqlcgen.OzonProductPrice, now time.Time) (ozonPriceDecision, bool) {
+func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uuid.UUID, strategy domain.Strategy, params domain.StrategyParams, row sqlcgen.OzonProductPrice, economics map[string]sqlcgen.OzonProductEconomic, now time.Time) (ozonPriceDecision, bool) {
 	current := pgNumericToFloat(row.PriceRub)
 	if current <= 0 {
 		return ozonPriceDecision{}, false
@@ -361,8 +389,16 @@ func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uui
 		return ozonPriceDecision{}, false
 	}
 
+	// Cost source: Ozon's own net_price, else the Sellico unit-economics
+	// mirror keyed by offer_id (себестоимость из юнит-экономики Sellico).
+	var econ *sqlcgen.OzonProductEconomic
+	if row.OfferID.Valid {
+		if e, ok := economics[row.OfferID.String]; ok {
+			econ = &e
+		}
+	}
 	floor, floorReason := computeOzonFloor(ozonFloorInputs{
-		NetPriceRub:         pgNumericToFloat(row.NetPriceRub),
+		NetPriceRub:         ozonEffectiveNetPrice(pgNumericToFloat(row.NetPriceRub), econ),
 		CommissionFBOPct:    pgNumericToFloat(row.CommissionFboPct),
 		CommissionFBSPct:    pgNumericToFloat(row.CommissionFbsPct),
 		AcquiringRub:        pgNumericToFloat(row.AcquiringPct),
@@ -824,6 +860,20 @@ func (s *OzonRepricerService) loadCabinetPrices(ctx context.Context, cabinetID u
 			return out, nil
 		}
 	}
+}
+
+// loadCabinetEconomics mirrors the Sellico unit-economics rows of one cabinet
+// into a map keyed by offer_id (артикул) for the cost fallback.
+func (s *OzonRepricerService) loadCabinetEconomics(ctx context.Context, cabinetID uuid.UUID) (map[string]sqlcgen.OzonProductEconomic, error) {
+	rows, err := s.queries.ListOzonProductEconomicsByCabinet(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return nil, fmt.Errorf("list cabinet economics: %w", err)
+	}
+	out := make(map[string]sqlcgen.OzonProductEconomic, len(rows))
+	for _, row := range rows {
+		out[row.OfferID] = row
+	}
+	return out, nil
 }
 
 func floatPtrToPgNumeric(value *float64) pgtype.Numeric {
