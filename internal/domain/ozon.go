@@ -171,6 +171,61 @@ type OzonPriceChange struct {
 	AppliedAt       *time.Time `json:"applied_at,omitempty"`
 }
 
+// Ozon price schedule statuses (ozon_price_schedule_entries.status).
+const (
+	OzonScheduleStatusPending   = "pending"
+	OzonScheduleStatusApplied   = "applied"
+	OzonScheduleStatusReverted  = "reverted"
+	OzonScheduleStatusCancelled = "cancelled"
+	OzonScheduleStatusFailed    = "failed"
+)
+
+// OzonPriceScheduleInput is the API input for one scheduled Ozon price change.
+type OzonPriceScheduleInput struct {
+	SKU               int64      `json:"sku"`
+	ScheduledPriceRub float64    `json:"scheduled_price_rub"`
+	RevertPriceRub    *float64   `json:"revert_price_rub,omitempty"`
+	StartsAt          time.Time  `json:"starts_at"`
+	EndsAt            *time.Time `json:"ends_at,omitempty"`
+}
+
+// OzonPriceScheduleEntry is one calendar entry: apply ScheduledPriceRub at
+// StartsAt; when EndsAt passes, restore RevertPriceRub.
+type OzonPriceScheduleEntry struct {
+	ID                uuid.UUID  `json:"id"`
+	SellerCabinetID   uuid.UUID  `json:"seller_cabinet_id"`
+	SKU               int64      `json:"sku"`
+	OfferID           string     `json:"offer_id,omitempty"`
+	ScheduledPriceRub float64    `json:"scheduled_price_rub"`
+	RevertPriceRub    *float64   `json:"revert_price_rub,omitempty"`
+	StartsAt          time.Time  `json:"starts_at"`
+	EndsAt            *time.Time `json:"ends_at,omitempty"`
+	Status            string     `json:"status"`
+	Error             string     `json:"error,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	AppliedAt         *time.Time `json:"applied_at,omitempty"`
+	RevertedAt        *time.Time `json:"reverted_at,omitempty"`
+	// Warning is a non-blocking creation note (e.g. price below the computed
+	// margin floor). Never persisted.
+	Warning string `json:"warning,omitempty"`
+}
+
+// OzonRepricerHealth is a one-glance Ozon repricer status summary.
+type OzonRepricerHealth struct {
+	PausedUntil        *time.Time             `json:"paused_until,omitempty"`
+	LastSweepAt        *time.Time             `json:"last_sweep_at,omitempty"`
+	PendingSchedules   int                    `json:"pending_schedules"`
+	Changes24h         OzonRepricerChanges24h `json:"changes_24h"`
+	ProductsBelowFloor int                    `json:"products_below_floor"`
+}
+
+// OzonRepricerChanges24h buckets the last 24h of ozon_price_changes.
+type OzonRepricerChanges24h struct {
+	Applied int `json:"applied"`
+	Shadow  int `json:"shadow"`
+	Failed  int `json:"failed"`
+}
+
 // OzonCPOProduct is the per-SKU CPO (search promo) state mirrored from
 // search_promo/v2/products. Name/OfferID are read-time enrichment from the
 // ozon_products mapping.

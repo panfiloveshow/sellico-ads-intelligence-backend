@@ -3538,6 +3538,132 @@ paths:
         "202": { description: Repricer run enqueued }
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/price-schedules:
+    get:
+      tags: [Ozon]
+      summary: List Ozon price-calendar entries of a cabinet (newest starts_at first)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, applied, reverted, cancelled, failed]
+      responses:
+        "200":
+          description: Schedule entry page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonPriceScheduleListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+    post:
+      tags: [Ozon]
+      summary: Plan a future Ozon price change (optional auto-revert at ends_at); a price below the margin floor yields a warning, not a rejection
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, sku, scheduled_price_rub, starts_at]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                sku: { type: integer, format: int64, description: "Seller API product_id (the ozon_product_prices key)" }
+                scheduled_price_rub: { type: number }
+                revert_price_rub: { type: number, nullable: true, description: "Price to restore at ends_at; defaults to the current mirror price when ends_at is set" }
+                starts_at: { type: string, format: date-time }
+                ends_at: { type: string, format: date-time, nullable: true }
+      responses:
+        "201":
+          description: Created schedule entry (check `warning` for a below-floor note)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OzonPriceScheduleEntry"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/price-schedules/{id}:
+    delete:
+      tags: [Ozon]
+      summary: Cancel a pending schedule entry (applied/reverted history is immutable)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Entry cancelled }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/prices/pause:
+    post:
+      tags: [Ozon]
+      summary: Freeze the cabinet's Ozon repricer automation for N hours (0 unfreezes; manual writes are unaffected)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, hours]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                hours: { type: integer, minimum: 0, maximum: 720 }
+      responses:
+        "200":
+          description: New pause state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      paused_until: { type: string, format: date-time, nullable: true }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/repricer/health:
+    get:
+      tags: [Ozon]
+      summary: One-glance Ozon repricer status of a cabinet
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Repricer health summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OzonRepricerHealth"
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/sync:
     post:
       tags: [Ozon]
@@ -5496,6 +5622,49 @@ components:
             $ref: "#/components/schemas/OzonPriceChange"
         meta:
           $ref: "#/components/schemas/Meta"
+    OzonPriceScheduleEntry:
+      type: object
+      description: One Ozon price-calendar entry — apply scheduled_price_rub at starts_at, restore revert_price_rub after ends_at
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        sku: { type: integer, format: int64, description: "Seller API product_id" }
+        offer_id: { type: string }
+        scheduled_price_rub: { type: number }
+        revert_price_rub: { type: number, nullable: true }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time, nullable: true }
+        status:
+          type: string
+          enum: [pending, applied, reverted, cancelled, failed]
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        applied_at: { type: string, format: date-time, nullable: true }
+        reverted_at: { type: string, format: date-time, nullable: true }
+        warning: { type: string, description: "Non-blocking creation note (e.g. price below the margin floor); never persisted" }
+    OzonPriceScheduleListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonPriceScheduleEntry"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonRepricerHealth:
+      type: object
+      description: One-glance Ozon repricer status summary of a cabinet
+      properties:
+        paused_until: { type: string, format: date-time, nullable: true }
+        last_sweep_at: { type: string, format: date-time, nullable: true, description: "Last strategy-sweep decision recorded for the cabinet" }
+        pending_schedules: { type: integer }
+        changes_24h:
+          type: object
+          properties:
+            applied: { type: integer }
+            shadow: { type: integer }
+            failed: { type: integer }
+        products_below_floor: { type: integer, description: "Products whose current price sits below the computed margin floor" }
     OzonCompetitiveBid:
       type: object
       properties:
@@ -6065,7 +6234,23 @@ components:
         name: { type: string }
         type:
           type: string
-          enum: [acos, roas, anti_sliv, dayparting, search_playbook]
+          enum:
+            - acos
+            - roas
+            - anti_sliv
+            - dayparting
+            - search_playbook
+            - price_margin_floor
+            - price_inventory_demand
+            - price_ad_linked
+            - price_peak_hours
+            - price_competitor_follow
+            - ozon_cpc_target_drr
+            - ozon_ai_autopilot
+            - ozon_price_margin_floor
+            - ozon_price_competitor_follow
+            - ozon_price_inventory_demand
+            - ozon_price_ad_linked
         params:
           $ref: "#/components/schemas/StrategyParams"
         is_active: { type: boolean }

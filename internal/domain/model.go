@@ -274,6 +274,10 @@ type SellerCabinet struct {
 	IntegrationType       *string                       `json:"integration_type,omitempty"`
 	LastSyncedAt          *time.Time                    `json:"last_synced_at,omitempty"`
 	LastSellicoSyncAt     *time.Time                    `json:"last_sellico_sync_at,omitempty"`
+	// RepricerPausedUntil is the repricer freeze switch (WB and Ozon alike):
+	// while in the future, strategy sweeps and scheduled price changes skip
+	// this cabinet; manual writes are unaffected.
+	RepricerPausedUntil *time.Time `json:"repricer_paused_until,omitempty"`
 	LastAutoSync          *SellerCabinetAutoSyncSummary `json:"last_auto_sync,omitempty"`
 	CreatedAt             time.Time                     `json:"created_at"`
 	UpdatedAt             time.Time                     `json:"updated_at"`

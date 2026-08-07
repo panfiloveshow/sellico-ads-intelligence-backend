@@ -31,15 +31,20 @@ type SellerClient struct {
 	httpClient *http.Client
 	logger     zerolog.Logger
 	limiters   *limiterPool
+	// analyticsLimiters is a dedicated 1-request-per-minute budget per
+	// cabinet for POST /v1/analytics/data — Ozon's documented limit for the
+	// method is far below the general Seller API budget.
+	analyticsLimiters *limiterPool
 }
 
 // NewSellerClient creates a Seller API client from the application config.
 func NewSellerClient(cfg *config.Config, logger zerolog.Logger) *SellerClient {
 	return &SellerClient{
-		baseURL:    cfg.OzonSellerAPIBaseURL,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		logger:     logger.With().Str("component", "ozon_seller_client").Logger(),
-		limiters:   newLimiterPool(rate.Limit(sellerRPS), sellerRPS),
+		baseURL:           cfg.OzonSellerAPIBaseURL,
+		httpClient:        &http.Client{Timeout: 30 * time.Second},
+		logger:            logger.With().Str("component", "ozon_seller_client").Logger(),
+		limiters:          newLimiterPool(rate.Limit(sellerRPS), sellerRPS),
+		analyticsLimiters: newLimiterPool(rate.Every(time.Minute), 1),
 	}
 }
 
@@ -390,6 +395,158 @@ func (c *SellerClient) UpdatePrices(ctx context.Context, creds Credentials, item
 		}
 	}
 	return out, nil
+}
+
+// GetProductStocks pages through POST /v4/product/info/stocks (cursor
+// pagination) and returns per-product stock with present/reserved summed
+// across the fulfillment schemes. Numbers are parsed flexibly (the API has
+// shipped numbers-as-strings before).
+func (c *SellerClient) GetProductStocks(ctx context.Context, creds Credentials) ([]ProductStock, error) {
+	type request struct {
+		Filter struct {
+			Visibility string `json:"visibility"`
+		} `json:"filter"`
+		Cursor string `json:"cursor"`
+		Limit  int    `json:"limit"`
+	}
+	type wireStock struct {
+		SKU      flexInt64 `json:"sku"`
+		Type     string    `json:"type"`
+		Present  flexInt64 `json:"present"`
+		Reserved flexInt64 `json:"reserved"`
+	}
+	type wireItem struct {
+		ProductID flexInt64   `json:"product_id"`
+		OfferID   string      `json:"offer_id"`
+		Stocks    []wireStock `json:"stocks"`
+	}
+	// v4 returns items/cursor at the top level; older shapes wrapped the
+	// payload in "result" with last_id — accept both.
+	type response struct {
+		Items  []wireItem `json:"items"`
+		Cursor string     `json:"cursor"`
+		Result struct {
+			Items  []wireItem `json:"items"`
+			LastID string     `json:"last_id"`
+		} `json:"result"`
+	}
+
+	var out []ProductStock
+	cursor := ""
+	for {
+		req := request{Cursor: cursor, Limit: sellerPageSize}
+		req.Filter.Visibility = "ALL"
+
+		body, err := c.do(ctx, creds, "/v4/product/info/stocks", req)
+		if err != nil {
+			return nil, err
+		}
+		var resp response
+		if err := decodeJSON(body, &resp, "product/info/stocks"); err != nil {
+			return nil, err
+		}
+		items := resp.Items
+		next := resp.Cursor
+		if len(items) == 0 && len(resp.Result.Items) > 0 {
+			items = resp.Result.Items
+			next = resp.Result.LastID
+		}
+		for _, item := range items {
+			if item.ProductID == 0 {
+				continue
+			}
+			row := ProductStock{ProductID: int64(item.ProductID), OfferID: item.OfferID}
+			for _, stock := range item.Stocks {
+				row.Present += int64(stock.Present)
+				row.Reserved += int64(stock.Reserved)
+			}
+			out = append(out, row)
+		}
+		if len(items) < sellerPageSize || next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
+// analyticsPageSize is the Ozon limit for one /v1/analytics/data request.
+const analyticsPageSize = 1000
+
+// GetAnalyticsSalesDaily pulls per-SKU daily ordered_units/revenue via
+// POST /v1/analytics/data (dimension ["sku","day"], offset pagination).
+//
+// RATE LIMIT: Ozon allows 1 request per minute on this method — every page
+// waits on the dedicated per-cabinet 1/min limiter before going out, so a
+// multi-page pull takes minutes by design. Callers must run it on a
+// low-frequency schedule, never inside the hourly sync.
+func (c *SellerClient) GetAnalyticsSalesDaily(ctx context.Context, creds Credentials, dateFrom, dateTo time.Time) ([]SalesDaily, error) {
+	type request struct {
+		DateFrom  string   `json:"date_from"`
+		DateTo    string   `json:"date_to"`
+		Metrics   []string `json:"metrics"`
+		Dimension []string `json:"dimension"`
+		Limit     int      `json:"limit"`
+		Offset    int      `json:"offset"`
+	}
+	type wireDimension struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	type wireRow struct {
+		Dimensions []wireDimension `json:"dimensions"`
+		Metrics    []flexFloat     `json:"metrics"`
+	}
+	type response struct {
+		Result struct {
+			Data []wireRow `json:"data"`
+		} `json:"result"`
+	}
+
+	analyticsLim := c.analyticsLimiters.get(creds.ClientID)
+	var out []SalesDaily
+	for offset := 0; ; offset += analyticsPageSize {
+		if err := analyticsLim.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("ozon seller: analytics rate limiter wait: %w", err)
+		}
+		req := request{
+			DateFrom:  dateFrom.Format("2006-01-02"),
+			DateTo:    dateTo.Format("2006-01-02"),
+			Metrics:   []string{"ordered_units", "revenue"},
+			Dimension: []string{"sku", "day"},
+			Limit:     analyticsPageSize,
+			Offset:    offset,
+		}
+		body, err := c.do(ctx, creds, "/v1/analytics/data", req)
+		if err != nil {
+			return nil, err
+		}
+		var resp response
+		if err := decodeJSON(body, &resp, "analytics/data"); err != nil {
+			return nil, err
+		}
+		for _, row := range resp.Result.Data {
+			if len(row.Dimensions) < 2 || len(row.Metrics) < 2 {
+				continue
+			}
+			sku, err := strconv.ParseInt(row.Dimensions[0].ID, 10, 64)
+			if err != nil || sku == 0 {
+				continue
+			}
+			date, err := time.Parse("2006-01-02", row.Dimensions[1].ID)
+			if err != nil {
+				continue
+			}
+			out = append(out, SalesDaily{
+				SKU:          sku,
+				Date:         date,
+				OrderedUnits: int64(float64(row.Metrics[0])),
+				RevenueRub:   float64(row.Metrics[1]),
+			})
+		}
+		if len(resp.Result.Data) < analyticsPageSize {
+			return out, nil
+		}
+	}
 }
 
 // do executes one Seller API POST with rate limiting, retry (429 honors

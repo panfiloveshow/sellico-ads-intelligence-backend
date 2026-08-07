@@ -269,6 +269,10 @@ func sellerCabinetFromSqlc(sc sqlcgen.SellerCabinet) domain.SellerCabinet {
 		t := sc.LastSellicoSyncAt.Time
 		result.LastSellicoSyncAt = &t
 	}
+	if sc.RepricerPausedUntil.Valid {
+		t := sc.RepricerPausedUntil.Time
+		result.RepricerPausedUntil = &t
+	}
 	if sc.DeletedAt.Valid {
 		t := sc.DeletedAt.Time
 		result.DeletedAt = &t

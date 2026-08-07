@@ -144,6 +144,26 @@ type PriceUpdateResult struct {
 	Errors    []string
 }
 
+// ProductStock is one parsed row of POST /v4/product/info/stocks with
+// present/reserved summed across the fulfillment schemes (FBO+FBS).
+type ProductStock struct {
+	ProductID int64
+	OfferID   string
+	Present   int64
+	Reserved  int64
+}
+
+// SalesDaily is one parsed row of POST /v1/analytics/data with
+// dimension [sku, day]: ordered units and revenue of one sales SKU on one
+// day. SKU here is the SALES sku (analytics/campaign key space), not the
+// Seller API product_id.
+type SalesDaily struct {
+	SKU          int64
+	Date         time.Time
+	OrderedUnits int64
+	RevenueRub   float64
+}
+
 // Campaign is one campaign from GET /api/client/campaign, with budgets
 // already converted from micro-rubles to whole rubles.
 type Campaign struct {

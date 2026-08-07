@@ -145,6 +145,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		processor = processor.WithOzonSync(options.ozonSync)
 		mux.HandleFunc(TaskOzonSweepSync, processor.HandleOzonSweepSync)
 		mux.HandleFunc(TaskOzonSyncCabinet, processor.HandleOzonSyncCabinet)
+		mux.HandleFunc(TaskOzonAnalyticsSync, processor.HandleOzonAnalyticsSync)
 	}
 	if options.ozonStrategy != nil && options.ozonSync != nil {
 		processor = processor.WithOzonStrategy(options.ozonStrategy)
@@ -160,6 +161,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		processor = processor.WithOzonRepricer(options.ozonRepricer)
 		mux.HandleFunc(TaskOzonRepricerSweep, processor.HandleOzonRepricerSweep)
 		mux.HandleFunc(TaskOzonRepricerRun, processor.HandleOzonRepricerRun)
+		mux.HandleFunc(TaskOzonExecuteSchedules, processor.HandleOzonExecuteSchedules)
 	}
 
 	// WB queues are all weight 1 and the server runs with Concurrency 1 so WB
@@ -268,6 +270,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 			taskType string
 			queue    string
 		}{ozonInterval, TaskOzonSweepSync, QueueOzonSync})
+		// Daily-sales analytics: /v1/analytics/data allows 1 request/minute
+		// per cabinet, so this runs on its own low-frequency schedule.
+		analyticsInterval := cfg.OzonAnalyticsInterval
+		if analyticsInterval == "" {
+			analyticsInterval = "@every 12h"
+		}
+		sweepEntries = append(sweepEntries, struct {
+			cron     string
+			taskType string
+			queue    string
+		}{analyticsInterval, TaskOzonAnalyticsSync, QueueOzonSync})
 		if options.ozonStrategy != nil {
 			strategyInterval := cfg.OzonStrategyInterval
 			if strategyInterval == "" {
@@ -300,6 +313,13 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 				taskType string
 				queue    string
 			}{repricerInterval, TaskOzonRepricerSweep, QueueOzonSync})
+			// Price calendar executor: 15m granularity is the schedule
+			// contract (entries fire within 15 minutes of starts_at/ends_at).
+			sweepEntries = append(sweepEntries, struct {
+				cron     string
+				taskType string
+				queue    string
+			}{"@every 15m", TaskOzonExecuteSchedules, QueueOzonSync})
 		}
 	}
 	for _, entry := range sweepEntries {

@@ -98,6 +98,12 @@ func (s *OzonSyncService) SyncCabinet(ctx context.Context, cabinetID uuid.UUID) 
 	if err := s.SyncPrices(ctx, *cabinet); err != nil {
 		issues = append(issues, fmt.Sprintf("prices: %v", err))
 	}
+	// Stocks are best-effort: the inventory-demand strategy degrades to
+	// "stock unknown" (skip) without them, so a stocks failure never blocks
+	// the price mirror and is recorded as a note, not a retryable issue.
+	if err := s.SyncStocks(ctx, *cabinet); err != nil {
+		notes = append(notes, fmt.Sprintf("stocks: %v", err))
+	}
 
 	if len(issues) > 0 || len(notes) > 0 {
 		combined := strings.Join(append(append([]string{}, issues...), notes...), "; ")
@@ -399,6 +405,119 @@ func (s *OzonSyncService) SyncPrices(ctx context.Context, cabinet domain.SellerC
 		Int("prices", upserted).
 		Msg("ozon prices synced")
 	return nil
+}
+
+// SyncStocks mirrors POST /v4/product/info/stocks into ozon_product_stocks
+// (present/reserved summed across fulfillment schemes, keyed by product_id —
+// the ozon_product_prices key space).
+func (s *OzonSyncService) SyncStocks(ctx context.Context, cabinet domain.SellerCabinet) error {
+	creds, err := s.credentials(cabinet)
+	if err != nil {
+		return err
+	}
+	if !creds.HasSellerAPI() {
+		return fmt.Errorf("seller api credentials missing")
+	}
+
+	stocks, err := s.sellerClient.GetProductStocks(ctx, ozonClientCreds(creds))
+	if err != nil {
+		return fmt.Errorf("product/info/stocks: %w", err)
+	}
+	upserted := 0
+	for _, stock := range stocks {
+		if err := s.queries.UpsertOzonProductStock(ctx, sqlcgen.UpsertOzonProductStockParams{
+			SellerCabinetID: uuidToPgtype(cabinet.ID),
+			Sku:             stock.ProductID,
+			OfferID:         textToPgtype(stock.OfferID),
+			Present:         clampInt32(stock.Present),
+			Reserved:        clampInt32(stock.Reserved),
+		}); err != nil {
+			return fmt.Errorf("upsert stock for product %d: %w", stock.ProductID, err)
+		}
+		upserted++
+	}
+
+	s.logger.Info().
+		Str("cabinet_id", cabinet.ID.String()).
+		Int("stocks", upserted).
+		Msg("ozon stocks synced")
+	return nil
+}
+
+// SyncSalesDaily mirrors the last ozonStatsWindowDays days of per-SKU sales
+// (POST /v1/analytics/data) into ozon_sales_daily. The analytics method is
+// limited to 1 request/minute per cabinet — this runs on its own
+// low-frequency schedule (ozon:sync_analytics), NEVER inside the hourly
+// SyncCabinet.
+func (s *OzonSyncService) SyncSalesDaily(ctx context.Context, cabinet domain.SellerCabinet) error {
+	creds, err := s.credentials(cabinet)
+	if err != nil {
+		return err
+	}
+	if !creds.HasSellerAPI() {
+		return fmt.Errorf("seller api credentials missing")
+	}
+
+	dateTo := time.Now().UTC()
+	dateFrom := dateTo.AddDate(0, 0, -ozonStatsWindowDays)
+	rows, err := s.sellerClient.GetAnalyticsSalesDaily(ctx, ozonClientCreds(creds), dateFrom, dateTo)
+	if err != nil {
+		return fmt.Errorf("analytics/data: %w", err)
+	}
+
+	upserted := 0
+	for _, row := range rows {
+		if err := s.queries.UpsertOzonSalesDaily(ctx, sqlcgen.UpsertOzonSalesDailyParams{
+			SellerCabinetID: uuidToPgtype(cabinet.ID),
+			Sku:             row.SKU,
+			Date:            pgtype.Date{Time: row.Date, Valid: true},
+			OrderedUnits:    clampInt32(row.OrderedUnits),
+			RevenueRub:      floatToPgNumeric(row.RevenueRub),
+		}); err != nil {
+			return fmt.Errorf("upsert sales for sku %d @ %s: %w", row.SKU, row.Date.Format("2006-01-02"), err)
+		}
+		upserted++
+	}
+
+	s.logger.Info().
+		Str("cabinet_id", cabinet.ID.String()).
+		Int("rows", upserted).
+		Msg("ozon daily sales synced")
+	return nil
+}
+
+// SyncAnalyticsAllCabinets runs SyncSalesDaily for every active Ozon cabinet
+// SEQUENTIALLY — the per-cabinet 1/min analytics budget makes parallelism
+// pointless, and one slow cabinet must not fail the rest.
+func (s *OzonSyncService) SyncAnalyticsAllCabinets(ctx context.Context) error {
+	cabinetIDs, err := s.ListOzonCabinetIDs(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, cabinetID := range cabinetIDs {
+		cabinet, loadErr := s.loadOzonCabinet(ctx, cabinetID)
+		if loadErr != nil {
+			errs = append(errs, fmt.Errorf("cabinet %s: %w", cabinetID, loadErr))
+			continue
+		}
+		if syncErr := s.SyncSalesDaily(ctx, *cabinet); syncErr != nil {
+			s.logger.Warn().Err(syncErr).Str("cabinet_id", cabinetID.String()).Msg("ozon analytics sync failed for cabinet")
+			errs = append(errs, fmt.Errorf("cabinet %s: %w", cabinetID, syncErr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// clampInt32 narrows an int64 counter defensively for INTEGER columns.
+func clampInt32(v int64) int32 {
+	if v > 2147483647 {
+		return 2147483647
+	}
+	if v < -2147483648 {
+		return -2147483648
+	}
+	return int32(v)
 }
 
 // --- helpers ---

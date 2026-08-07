@@ -247,6 +247,7 @@ type ozonPriceDecisionContext struct {
 	CompetitorRub float64 `json:"competitor_min_rub,omitempty"`
 	UserID        string  `json:"user_id,omitempty"`
 	RollbackOf    string  `json:"rollback_of,omitempty"`
+	ScheduleID    string  `json:"schedule_id,omitempty"`
 }
 
 // ozonPriceIntent is one pending live write of the auto path.
@@ -297,6 +298,12 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 	if err != nil {
 		return 0, err
 	}
+	// Freeze switch: a paused cabinet skips the whole strategy sweep (manual
+	// writes stay available — the pause governs automation only).
+	if cabinet.RepricerPausedUntil != nil && cabinet.RepricerPausedUntil.After(time.Now()) {
+		s.logger.Info().Str("cabinet_id", cabinet.ID.String()).Time("paused_until", *cabinet.RepricerPausedUntil).Msg("ozon repricer paused, skipping cabinet")
+		return 0, nil
+	}
 
 	prices, err := s.loadCabinetPrices(ctx, cabinet.ID)
 	if err != nil {
@@ -306,6 +313,10 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 		return 0, nil
 	}
 	economics, err := s.loadCabinetEconomics(ctx, cabinet.ID)
+	if err != nil {
+		return 0, err
+	}
+	aux, err := s.loadStrategyAux(ctx, cabinet.ID, strategies)
 	if err != nil {
 		return 0, err
 	}
@@ -323,7 +334,7 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 			if _, done := decided[row.Sku]; done {
 				continue
 			}
-			decision, ok := s.evaluateProduct(ctx, cabinet.ID, strategy, params, row, economics, now)
+			decision, ok := s.evaluateProduct(ctx, cabinet.ID, strategy, params, row, economics, aux, now)
 			if !ok {
 				continue
 			}
@@ -380,7 +391,7 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 
 // evaluateProduct runs guardrails and the strategy engine for one price row.
 // Returns (decision, true) only when a change should be recorded.
-func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uuid.UUID, strategy domain.Strategy, params domain.StrategyParams, row sqlcgen.OzonProductPrice, economics map[string]sqlcgen.OzonProductEconomic, now time.Time) (ozonPriceDecision, bool) {
+func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uuid.UUID, strategy domain.Strategy, params domain.StrategyParams, row sqlcgen.OzonProductPrice, economics map[string]sqlcgen.OzonProductEconomic, aux ozonStrategyAux, now time.Time) (ozonPriceDecision, bool) {
 	current := pgNumericToFloat(row.PriceRub)
 	if current <= 0 {
 		return ozonPriceDecision{}, false
@@ -416,6 +427,21 @@ func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uui
 		decision = decideOzonMarginFloor(current, floor)
 	case domain.StrategyTypeOzonPriceCompetitorFollow:
 		decision = decideOzonCompetitorFollow(current, floor, ozonCompetitorMin(row), params.UndercutPercent, params.StepPercent)
+	case domain.StrategyTypeOzonPriceInventoryDemand:
+		stock, stockKnown := aux.presentByProductID[row.Sku]
+		decision = decideOzonInventoryDemand(current, floor, stock, stockKnown, aux.velocityForProduct(row.Sku), strategy.Params)
+	case domain.StrategyTypeOzonPriceAdLinked:
+		salesSKU := aux.salesSKUByProductID[row.Sku]
+		var maxDRRFallback *float64
+		if econ != nil && econ.MaxAllowedDrr.Valid {
+			maxDRRFallback = pgNumericToFloatPtr(econ.MaxAllowedDrr)
+		}
+		var drrPtr *float64
+		if drr, ok := aux.drrBySalesSKU[salesSKU]; ok {
+			drrValue := drr
+			drrPtr = &drrValue
+		}
+		decision = decideOzonAdLinked(current, floor, drrPtr, aux.spendBySalesSKU[salesSKU], maxDRRFallback, strategy.Params)
 	default:
 		return ozonPriceDecision{}, false
 	}
@@ -450,6 +476,193 @@ func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uui
 		return ozonPriceDecision{}, false
 	}
 	return decision, true
+}
+
+// ozonVelocityLookbackDays is the shared sales-velocity / ad-ДРР window for
+// the inventory-demand and ad-linked strategies. ponytail: mirrors the WB
+// repricer's shared window (priceVelocityLookbackDays), not each strategy's
+// own LookbackDays; per-strategy windows can be added if needed.
+const ozonVelocityLookbackDays = 14
+
+// ozonStrategyAux is the extra per-cabinet data the inventory-demand and
+// ad-linked strategies need on top of the price mirror. Maps stay empty when
+// no strategy of the cabinet needs them.
+type ozonStrategyAux struct {
+	// presentByProductID: available stock summed over schemes, keyed by
+	// product_id. A missing key means "stock unknown" → the engine skips.
+	presentByProductID map[int64]int64
+	// salesSKUByProductID bridges the two Ozon key spaces: prices/stocks are
+	// keyed by product_id, analytics/campaigns by the sales SKU.
+	salesSKUByProductID map[int64]int64
+	// velocityBySalesSKU: avg ordered units/day over the lookback window.
+	velocityBySalesSKU map[int64]float64
+	// drrBySalesSKU: ad ДРР % (spend/revenue×100) over the lookback window;
+	// only present when the SKU had both spend and revenue.
+	drrBySalesSKU map[int64]float64
+	// spendBySalesSKU: ad spend rubles over the window (ad-linked only acts
+	// on SKUs with spend > 0).
+	spendBySalesSKU map[int64]float64
+}
+
+// velocityForProduct resolves units/day for a price row via the sales-SKU
+// mapping (0 = no sales in the window).
+func (a ozonStrategyAux) velocityForProduct(productID int64) float64 {
+	return a.velocityBySalesSKU[a.salesSKUByProductID[productID]]
+}
+
+// loadStrategyAux loads stocks/velocity/ДРР only when a strategy of the
+// cabinet actually needs them.
+func (s *OzonRepricerService) loadStrategyAux(ctx context.Context, cabinetID uuid.UUID, strategies []domain.Strategy) (ozonStrategyAux, error) {
+	aux := ozonStrategyAux{
+		presentByProductID:  map[int64]int64{},
+		salesSKUByProductID: map[int64]int64{},
+		velocityBySalesSKU:  map[int64]float64{},
+		drrBySalesSKU:       map[int64]float64{},
+		spendBySalesSKU:     map[int64]float64{},
+	}
+	needsInventory, needsAd := false, false
+	for _, strategy := range strategies {
+		switch strategy.Type {
+		case domain.StrategyTypeOzonPriceInventoryDemand:
+			needsInventory = true
+		case domain.StrategyTypeOzonPriceAdLinked:
+			needsAd = true
+		}
+	}
+	if !needsInventory && !needsAd {
+		return aux, nil
+	}
+
+	// product_id → sales SKU bridge (both strategies key their signals by
+	// the sales SKU except stocks, which arrive by product_id).
+	productRows, err := s.queries.ListOzonProductsByCabinet(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return aux, fmt.Errorf("list product mapping: %w", err)
+	}
+	for _, row := range productRows {
+		if row.Sku.Valid && row.Sku.Int64 != 0 {
+			aux.salesSKUByProductID[row.ProductID] = row.Sku.Int64
+		}
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -ozonVelocityLookbackDays)
+	if needsInventory {
+		stockRows, err := s.queries.ListOzonProductStocksByCabinet(ctx, uuidToPgtype(cabinetID))
+		if err != nil {
+			return aux, fmt.Errorf("list stocks: %w", err)
+		}
+		for _, row := range stockRows {
+			aux.presentByProductID[row.Sku] = int64(row.Present)
+		}
+		salesRows, err := s.queries.OzonSalesVelocityByCabinet(ctx, sqlcgen.OzonSalesVelocityByCabinetParams{
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			Date:            pgtype.Date{Time: since, Valid: true},
+		})
+		if err != nil {
+			return aux, fmt.Errorf("aggregate sales velocity: %w", err)
+		}
+		for _, row := range salesRows {
+			aux.velocityBySalesSKU[row.Sku] = float64(row.Units) / float64(ozonVelocityLookbackDays)
+		}
+	}
+	if needsAd {
+		adRows, err := s.queries.OzonSkuAdSpendByCabinet(ctx, sqlcgen.OzonSkuAdSpendByCabinetParams{
+			SellerCabinetID: uuidToPgtype(cabinetID),
+			Date:            pgtype.Date{Time: since, Valid: true},
+		})
+		if err != nil {
+			return aux, fmt.Errorf("aggregate ad spend: %w", err)
+		}
+		for _, row := range adRows {
+			spend := pgNumericToFloat(row.SpendRub)
+			if spend <= 0 {
+				continue
+			}
+			aux.spendBySalesSKU[row.Sku] = spend
+			if revenue := pgNumericToFloat(row.RevenueRub); revenue > 0 {
+				aux.drrBySalesSKU[row.Sku] = spend / revenue * 100
+			}
+		}
+	}
+	return aux, nil
+}
+
+// --- inventory-demand + ad-linked wrappers over the shared pure engine ---
+
+// ozonEngineParams adapts strategy params for the WB pure engine: the
+// precomputed Ozon floor is injected as MinPriceRub so resolveFloor lands on
+// it (Ozon economics never route through ComputeMinEffectivePrice).
+func ozonEngineParams(params domain.StrategyParams, floorRub float64) domain.StrategyParams {
+	if floorRub > 0 {
+		floorInt := int64(math.Ceil(floorRub))
+		if params.MinPriceRub == nil || *params.MinPriceRub < floorInt {
+			params.MinPriceRub = &floorInt
+		}
+	}
+	return params
+}
+
+// ozonDecisionFromEngine converts a WB engine verdict back to the Ozon shape.
+// The engine works in whole rubles (discount 0 → base == effective), so
+// TargetEffectiveRub is the Ozon target price directly.
+func ozonDecisionFromEngine(d PriceDecision, floorRub float64) ozonPriceDecision {
+	if !d.ShouldChange {
+		return ozonPriceDecision{
+			Direction:  "none",
+			Reason:     d.Reason,
+			SkipReason: d.SkipReason,
+			FloorRub:   floorRub,
+		}
+	}
+	target := float64(d.TargetEffectiveRub)
+	if floorRub > 0 && target < floorRub {
+		target = floorRub // belt-and-braces: ceil rounding already guarantees this
+	}
+	return ozonPriceDecision{
+		ShouldChange: true,
+		NewPriceRub:  roundRub(target),
+		FloorRub:     floorRub,
+		Direction:    d.Direction,
+		Reason:       d.Reason,
+	}
+}
+
+// decideOzonInventoryDemand runs «Разгрузка склада» for one Ozon product:
+// overstock + slow sales → step down (clamped to the floor), low stock +
+// active sales → step up (requires max_price_rub). Reuses the pure WB
+// DecideInventoryDemand engine.
+func decideOzonInventoryDemand(currentRub, floorRub float64, stock int64, stockKnown bool, salesPerDay float64, params domain.StrategyParams) ozonPriceDecision {
+	if currentRub <= 0 {
+		return ozonSkip("invalid_current_price")
+	}
+	in := PriceEngineInputs{
+		Current:          domain.ProductPrice{PriceRub: int64(math.Round(currentRub))},
+		Stock:            stock,
+		StockKnown:       stockKnown,
+		SalesUnitsPerDay: salesPerDay,
+	}
+	return ozonDecisionFromEngine(DecideInventoryDemand(in, ozonEngineParams(params, floorRub)), floorRub)
+}
+
+// decideOzonAdLinked runs «Реклама → цена» for one Ozon product: when the ad
+// ДРР exceeds the allowed ceiling (strategy param first, Sellico economics
+// max_allowed_drr as fallback), price steps down toward the floor. Only SKUs
+// with ad spend > 0 in the window are considered. Reuses the pure WB
+// DecideAdLinked engine.
+func decideOzonAdLinked(currentRub, floorRub float64, drr *float64, spendRub float64, maxDRRFallback *float64, params domain.StrategyParams) ozonPriceDecision {
+	if currentRub <= 0 {
+		return ozonSkip("invalid_current_price")
+	}
+	if spendRub <= 0 {
+		return ozonSkip("no_ad_spend")
+	}
+	in := PriceEngineInputs{
+		Current:            domain.ProductPrice{PriceRub: int64(math.Round(currentRub))},
+		DRR:                drr,
+		HasActiveCampaigns: true,
+	}
+	in.Economics.MaxAllowedDRR = maxDRRFallback
+	return ozonDecisionFromEngine(DecideAdLinked(in, ozonEngineParams(params, floorRub)), floorRub)
 }
 
 // ozonCompetitorMin picks the lowest present competitor price: other sellers

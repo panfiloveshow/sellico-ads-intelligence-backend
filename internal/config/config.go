@@ -120,6 +120,7 @@ type Config struct {
 	OzonStrategyInterval     string // env: OZON_STRATEGY_INTERVAL, default: "@every 1h"
 	OzonAIInterval           string // env: OZON_AI_INTERVAL, default: "@every 4h"
 	OzonRepricerInterval     string // env: OZON_REPRICER_INTERVAL, default: "@every 1h"
+	OzonAnalyticsInterval    string // env: OZON_ANALYTICS_INTERVAL, default: "@every 12h" (analytics/data is 1 req/min per cabinet)
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -184,6 +185,7 @@ func Load() *Config {
 		OzonStrategyInterval:               getEnvOrDefault("OZON_STRATEGY_INTERVAL", "@every 1h"),
 		OzonAIInterval:                     getEnvOrDefault("OZON_AI_INTERVAL", "@every 4h"),
 		OzonRepricerInterval:               getEnvOrDefault("OZON_REPRICER_INTERVAL", "@every 1h"),
+		OzonAnalyticsInterval:              getEnvOrDefault("OZON_ANALYTICS_INTERVAL", "@every 12h"),
 		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),

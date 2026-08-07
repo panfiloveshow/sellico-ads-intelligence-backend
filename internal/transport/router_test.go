@@ -217,6 +217,26 @@ func TestNewRouter_RoutesExist(t *testing.T) {
 	assert.True(t, set["DELETE /api/v1/price-schedules/{scheduleId}"], "missing schedule cancel route")
 }
 
+func TestNewRouter_OzonRepricerParityRoutes(t *testing.T) {
+	r := NewRouter(RouterDeps{
+		JWTSecret:         "test-secret-key-for-testing-only",
+		MembershipChecker: &stubMembershipChecker{role: domain.RoleOwner},
+		OzonHandler:       handler.NewOzonHandler(nil, nil, nil).WithRepricer(nil, nil),
+	})
+	set := map[string]bool{}
+	err := chi.Walk(r, func(method, rt string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		set[fmt.Sprintf("%s %s", method, rt)] = true
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.True(t, set["GET /api/v1/ozon/price-schedules"], "missing GET /api/v1/ozon/price-schedules")
+	assert.True(t, set["POST /api/v1/ozon/price-schedules"], "missing POST /api/v1/ozon/price-schedules")
+	assert.True(t, set["DELETE /api/v1/ozon/price-schedules/{id}"], "missing DELETE /api/v1/ozon/price-schedules/{id}")
+	assert.True(t, set["POST /api/v1/ozon/prices/pause"], "missing POST /api/v1/ozon/prices/pause")
+	assert.True(t, set["GET /api/v1/ozon/repricer/health"], "missing GET /api/v1/ozon/repricer/health")
+}
+
 func TestPublicRoutes_NoAuth(t *testing.T) {
 	r := newTestRouter()
 	ts := httptest.NewServer(r)

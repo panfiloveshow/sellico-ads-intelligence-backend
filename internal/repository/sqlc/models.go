@@ -610,6 +610,41 @@ type OzonProductEconomic struct {
 	SyncedAt          pgtype.Timestamptz `json:"synced_at"`
 }
 
+type OzonPriceScheduleEntry struct {
+	ID                pgtype.UUID        `json:"id"`
+	SellerCabinetID   pgtype.UUID        `json:"seller_cabinet_id"`
+	Sku               int64              `json:"sku"`
+	OfferID           pgtype.Text        `json:"offer_id"`
+	ScheduledPriceRub pgtype.Numeric     `json:"scheduled_price_rub"`
+	RevertPriceRub    pgtype.Numeric     `json:"revert_price_rub"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	Status            string             `json:"status"`
+	Error             pgtype.Text        `json:"error"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	AppliedAt         pgtype.Timestamptz `json:"applied_at"`
+	RevertedAt        pgtype.Timestamptz `json:"reverted_at"`
+}
+
+type OzonProductStock struct {
+	ID              pgtype.UUID        `json:"id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Sku             int64              `json:"sku"`
+	OfferID         pgtype.Text        `json:"offer_id"`
+	Present         int32              `json:"present"`
+	Reserved        int32              `json:"reserved"`
+	SyncedAt        pgtype.Timestamptz `json:"synced_at"`
+}
+
+type OzonSalesDaily struct {
+	ID              pgtype.UUID    `json:"id"`
+	SellerCabinetID pgtype.UUID    `json:"seller_cabinet_id"`
+	Sku             int64          `json:"sku"`
+	Date            pgtype.Date    `json:"date"`
+	OrderedUnits    int32          `json:"ordered_units"`
+	RevenueRub      pgtype.Numeric `json:"revenue_rub"`
+}
+
 type OzonProductPrice struct {
 	ID                       pgtype.UUID        `json:"id"`
 	SellerCabinetID          pgtype.UUID        `json:"seller_cabinet_id"`

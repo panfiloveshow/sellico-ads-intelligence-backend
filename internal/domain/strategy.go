@@ -69,6 +69,12 @@ const (
 	// net_price, commissions, acquiring, competitor price indexes).
 	StrategyTypeOzonPriceMarginFloor      = "ozon_price_margin_floor"
 	StrategyTypeOzonPriceCompetitorFollow = "ozon_price_competitor_follow"
+
+	// Phase 5 (WB parity): «Разгрузка склада» on ozon_product_stocks +
+	// ozon_sales_daily velocity, and «Реклама → цена» on the per-SKU ДРР
+	// derived from ozon_campaign_stats via ozon_campaign_products.
+	StrategyTypeOzonPriceInventoryDemand = "ozon_price_inventory_demand"
+	StrategyTypeOzonPriceAdLinked        = "ozon_price_ad_linked"
 )
 
 // IsOzonStrategy reports whether a strategy type belongs to the Ozon module.
@@ -82,7 +88,14 @@ func IsOzonStrategy(strategyType string) bool {
 // IsOzonPriceStrategy reports whether a strategy type is an Ozon repricer
 // strategy (executed by OzonRepricerService only).
 func IsOzonPriceStrategy(strategyType string) bool {
-	return strategyType == StrategyTypeOzonPriceMarginFloor || strategyType == StrategyTypeOzonPriceCompetitorFollow
+	switch strategyType {
+	case StrategyTypeOzonPriceMarginFloor,
+		StrategyTypeOzonPriceCompetitorFollow,
+		StrategyTypeOzonPriceInventoryDemand,
+		StrategyTypeOzonPriceAdLinked:
+		return true
+	}
+	return false
 }
 
 // IsPriceStrategy reports whether a strategy type is a WB repricer strategy.

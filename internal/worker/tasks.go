@@ -74,6 +74,13 @@ const (
 	TaskOzonRepricerSweep = "ozon:repricer_sweep"
 	TaskOzonRepricerRun   = "ozon:repricer_run"
 
+	// Ozon module (phase 5: repricer parity). Analytics (/v1/analytics/data)
+	// is limited to 1 request/minute per cabinet — it runs on its own
+	// low-frequency schedule, sequential across cabinets, never inside the
+	// hourly sync. The price calendar executes every 15 minutes.
+	TaskOzonAnalyticsSync    = "ozon:sync_analytics"
+	TaskOzonExecuteSchedules = "ozon:execute_schedules"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"

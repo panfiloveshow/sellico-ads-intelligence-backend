@@ -100,10 +100,13 @@ type economicsSyncRunner interface {
 	SyncWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
-// ozonSyncRunner syncs Ozon cabinets (campaigns + stats + prices).
+// ozonSyncRunner syncs Ozon cabinets (campaigns + stats + prices + stocks;
+// the daily-sales analytics pull runs on its own schedule because of the
+// 1-request-per-minute Ozon limit).
 type ozonSyncRunner interface {
 	SyncCabinet(ctx context.Context, cabinetID uuid.UUID) error
 	ListOzonCabinetIDs(ctx context.Context) ([]uuid.UUID, error)
+	SyncAnalyticsAllCabinets(ctx context.Context) error
 }
 
 // ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
@@ -118,9 +121,11 @@ type ozonAIRunner interface {
 	RunForCabinetID(ctx context.Context, cabinetID uuid.UUID, trigger string) error
 }
 
-// ozonRepricerRunner executes ozon_price_* strategies for a workspace.
+// ozonRepricerRunner executes ozon_price_* strategies for a workspace and
+// the price calendar (schedules) across all cabinets.
 type ozonRepricerRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	ExecuteDueSchedules(ctx context.Context, now time.Time) (int, error)
 }
 
 type semanticsCollector interface {
@@ -572,6 +577,39 @@ func (p *Processor) HandleOzonSyncCabinet(ctx context.Context, task *asynq.Task)
 		return err
 	}
 	p.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("ozon cabinet sync completed")
+	return nil
+}
+
+// HandleOzonAnalyticsSync pulls per-SKU daily sales for every Ozon cabinet
+// sequentially (the 1/min analytics budget makes parallelism pointless).
+func (p *Processor) HandleOzonAnalyticsSync(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping analytics sync")
+		return nil
+	}
+	if err := p.ozonSync.SyncAnalyticsAllCabinets(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon analytics sync finished with errors")
+		return err
+	}
+	p.logger.Info().Msg("ozon analytics sync completed")
+	return nil
+}
+
+// HandleOzonExecuteSchedules applies due Ozon price-calendar entries and
+// reverts expired ones.
+func (p *Processor) HandleOzonExecuteSchedules(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonRepricer == nil {
+		p.logger.Debug().Msg("ozon repricer not configured, skipping schedules")
+		return nil
+	}
+	executed, err := p.ozonRepricer.ExecuteDueSchedules(ctx, time.Now().UTC())
+	if err != nil {
+		p.logger.Error().Err(err).Int("executed", executed).Msg("ozon price schedules finished with errors")
+		return err
+	}
+	if executed > 0 {
+		p.logger.Info().Int("executed", executed).Msg("ozon price schedules executed")
+	}
 	return nil
 }
 
