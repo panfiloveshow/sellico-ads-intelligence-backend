@@ -191,6 +191,12 @@ func (s *OzonCampaignActionsService) UpdateBudget(ctx context.Context, workspace
 // call, applied/failed after; the ozon_campaign_products mirror is updated on
 // success.
 func (s *OzonCampaignActionsService) SetProductBids(ctx context.Context, workspaceID, campaignID uuid.UUID, items []OzonBidInput) ([]domain.OzonBidChange, error) {
+	return s.SetProductBidsWithSource(ctx, workspaceID, campaignID, items, domain.BidSourceManual, "manual bid update")
+}
+
+// SetProductBidsWithSource is the source-aware variant: the AI manager applies
+// approved/auto decisions through the exact same audited path with source='ai'.
+func (s *OzonCampaignActionsService) SetProductBidsWithSource(ctx context.Context, workspaceID, campaignID uuid.UUID, items []OzonBidInput, source, reason string) ([]domain.OzonBidChange, error) {
 	if len(items) == 0 {
 		return nil, apperror.New(apperror.ErrValidation, "items are required")
 	}
@@ -228,8 +234,8 @@ func (s *OzonCampaignActionsService) SetProductBids(ctx context.Context, workspa
 			Sku:        pgtype.Int8{Int64: item.SKU, Valid: true},
 			OldBidRub:  oldBid,
 			NewBidRub:  floatToPgNumeric(item.BidRub),
-			Reason:     textToPgtype("manual bid update"),
-			Source:     domain.BidSourceManual,
+			Reason:     textToPgtype(reason),
+			Source:     source,
 			Status:     domain.OzonBidStatusPending,
 		})
 		if insertErr != nil {
@@ -422,15 +428,17 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 
 // EnableCPO enables search promo for the SKUs (audited, mirror updated).
 func (s *OzonCampaignActionsService) EnableCPO(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error {
-	return s.setCPOEnabled(ctx, workspaceID, cabinetID, skus, true)
+	return s.SetCPOEnabledWithSource(ctx, workspaceID, cabinetID, skus, true, domain.BidSourceManual, "manual cpo enable")
 }
 
 // DisableCPO disables search promo for the SKUs (audited, mirror updated).
 func (s *OzonCampaignActionsService) DisableCPO(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error {
-	return s.setCPOEnabled(ctx, workspaceID, cabinetID, skus, false)
+	return s.SetCPOEnabledWithSource(ctx, workspaceID, cabinetID, skus, false, domain.BidSourceManual, "manual cpo disable")
 }
 
-func (s *OzonCampaignActionsService) setCPOEnabled(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64, enabled bool) error {
+// SetCPOEnabledWithSource is the source-aware CPO toggle used by both the
+// manual endpoints and the AI manager (source='ai').
+func (s *OzonCampaignActionsService) SetCPOEnabledWithSource(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64, enabled bool, source, reason string) error {
 	if err := validateCPOSkus(skus); err != nil {
 		return err
 	}
@@ -438,9 +446,9 @@ func (s *OzonCampaignActionsService) setCPOEnabled(ctx context.Context, workspac
 	if err != nil {
 		return err
 	}
-	action, reason := "disable", "manual cpo disable"
+	action := "disable"
 	if enabled {
-		action, reason = "enable", "manual cpo enable"
+		action = "enable"
 	}
 	changeIDs := make([]pgtype.UUID, 0, len(skus))
 	for _, sku := range skus {
@@ -449,7 +457,7 @@ func (s *OzonCampaignActionsService) setCPOEnabled(ctx context.Context, workspac
 			Kind:            domain.OzonBidKindCPO,
 			Sku:             pgtype.Int8{Int64: sku, Valid: true},
 			Reason:          textToPgtype(reason),
-			Source:          domain.BidSourceManual,
+			Source:          source,
 			Status:          domain.OzonBidStatusPending,
 		})
 		if insertErr != nil {
@@ -483,6 +491,11 @@ func (s *OzonCampaignActionsService) setCPOEnabled(ctx context.Context, workspac
 
 // SetCPOBids writes fixed CPO bids (rubles) for a cabinet, audited per SKU.
 func (s *OzonCampaignActionsService) SetCPOBids(ctx context.Context, workspaceID, cabinetID uuid.UUID, bids []OzonCPOBidInput) error {
+	return s.SetCPOBidsWithSource(ctx, workspaceID, cabinetID, bids, domain.BidSourceManual, "manual cpo bid update")
+}
+
+// SetCPOBidsWithSource is the source-aware variant used by the AI manager.
+func (s *OzonCampaignActionsService) SetCPOBidsWithSource(ctx context.Context, workspaceID, cabinetID uuid.UUID, bids []OzonCPOBidInput, source, reason string) error {
 	if len(bids) == 0 {
 		return apperror.New(apperror.ErrValidation, "bids are required")
 	}
@@ -516,8 +529,8 @@ func (s *OzonCampaignActionsService) SetCPOBids(ctx context.Context, workspaceID
 			Sku:             pgtype.Int8{Int64: bid.SKU, Valid: true},
 			OldBidRub:       oldBids[bid.SKU],
 			NewBidRub:       floatToPgNumeric(bid.BidRub),
-			Reason:          textToPgtype("manual cpo bid update"),
-			Source:          domain.BidSourceManual,
+			Reason:          textToPgtype(reason),
+			Source:          source,
 			Status:          domain.OzonBidStatusPending,
 		})
 		if insertErr != nil {

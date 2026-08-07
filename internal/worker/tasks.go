@@ -64,6 +64,11 @@ const (
 	TaskOzonStrategySweep = "ozon:strategy_sweep"
 	TaskOzonStrategyRun   = "ozon:strategy_run"
 
+	// Ozon module (phase 3: AI autopilot). Runs on the ozon-sync queue —
+	// its low concurrency keeps multi-minute LLM cabinet runs sequential.
+	TaskOzonAISweep = "ozon:ai_sweep"
+	TaskOzonAIRun   = "ozon:ai_run"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"
@@ -127,6 +132,21 @@ func NewOzonCabinetTask(cabinetID uuid.UUID) (*asynq.Task, error) {
 		return nil, err
 	}
 	return asynq.NewTask(TaskOzonSyncCabinet, data), nil
+}
+
+// OzonAITaskPayload scopes one AI autopilot run to a cabinet; trigger is
+// 'cron' (sweep) or 'manual' (POST /ozon/ai/run).
+type OzonAITaskPayload struct {
+	CabinetID string `json:"cabinet_id"`
+	Trigger   string `json:"trigger"`
+}
+
+func NewOzonAIRunTask(cabinetID uuid.UUID, trigger string) (*asynq.Task, error) {
+	data, err := json.Marshal(OzonAITaskPayload{CabinetID: cabinetID.String(), Trigger: trigger})
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TaskOzonAIRun, data), nil
 }
 
 func NewExportTask(workspaceID, exportID uuid.UUID) (*asynq.Task, error) {

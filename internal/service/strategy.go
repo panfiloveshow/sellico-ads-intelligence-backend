@@ -250,7 +250,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
 		domain.StrategyTypeSearchPlaybook,
-		domain.StrategyTypeOzonCPCTargetDRR:
+		domain.StrategyTypeOzonCPCTargetDRR,
+		domain.StrategyTypeOzonAIAutopilot:
 	case domain.StrategyTypeRecommendation:
 		return apperror.New(apperror.ErrValidation, "recommendation strategies are not executable; use explicit recommendation approval")
 	case domain.StrategyTypePriceMarginFloor,
@@ -314,6 +315,15 @@ func validateStrategyForSave(input domain.Strategy) error {
 		// target_acos doubles as the target ДРР (ДРР == ACoS semantically).
 		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
 			return apperror.New(apperror.ErrValidation, "target_acos (target ДРР) must be greater than 0 and at most 1000")
+		}
+	case domain.StrategyTypeOzonAIAutopilot:
+		// target_acos doubles as the target ДРР the AI manager optimizes for.
+		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
+			return apperror.New(apperror.ErrValidation, "target_acos (target ДРР) must be greater than 0 and at most 1000")
+		}
+		// AI autopilot has exactly three modes: 1 shadow, 2 copilot, 3 autopilot.
+		if params.AutomationLevel > 3 {
+			return apperror.New(apperror.ErrValidation, "automation_level for ozon_ai_autopilot must be 1..3")
 		}
 	}
 	return nil

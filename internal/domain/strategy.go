@@ -56,12 +56,18 @@ const (
 	// ozon_cpc_target_drr drives Ozon CPC campaign bids toward a target ДРР
 	// (ДРР == ACoS semantically; TargetACoS doubles as the target ДРР).
 	StrategyTypeOzonCPCTargetDRR = "ozon_cpc_target_drr"
+
+	// StrategyTypeOzonAIAutopilot hands the cabinet to the LLM-driven AI
+	// manager (phase 3). Only OzonAIManagerService executes it: the
+	// deterministic Ozon sweep and the WB automations all skip it. TargetACoS
+	// doubles as the target ДРР; AutomationLevel 1..3 = shadow/copilot/auto.
+	StrategyTypeOzonAIAutopilot = "ozon_ai_autopilot"
 )
 
 // IsOzonStrategy reports whether a strategy type belongs to the Ozon module.
 // WB bid automation and the WB repricer must skip these.
 func IsOzonStrategy(strategyType string) bool {
-	return strategyType == StrategyTypeOzonCPCTargetDRR
+	return strategyType == StrategyTypeOzonCPCTargetDRR || strategyType == StrategyTypeOzonAIAutopilot
 }
 
 // IsPriceStrategy reports whether a strategy type is a repricer strategy.
@@ -278,6 +284,9 @@ const (
 	BidSourceStrategy       = "strategy"
 	BidSourceRecommendation = "recommendation"
 	BidSourceManual         = "manual"
+	// BidSourceAI marks writes applied by the Ozon AI manager (only
+	// ozon_bid_changes accepts it; the WB bid_changes table does not).
+	BidSourceAI = "ai"
 )
 
 // CampaignPhrase represents a plus or minus phrase for a campaign.

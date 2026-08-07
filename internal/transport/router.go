@@ -548,6 +548,12 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.With(middleware.RequireWriteAccess()).Post("/cpo/disable", deps.OzonHandler.DisableCPO)
 						oz.With(middleware.RequireWriteAccess()).Post("/cpo/bids", deps.OzonHandler.SetCPOBids)
 						oz.With(middleware.RequireWriteAccess()).Post("/sync", deps.OzonHandler.TriggerSync)
+						// Phase 3: AI autopilot (runs, decisions, copilot approvals)
+						oz.Get("/ai/runs", deps.OzonHandler.AIListRuns)
+						oz.Get("/ai/decisions", deps.OzonHandler.AIListDecisions)
+						oz.With(middleware.RequireWriteAccess()).Post("/ai/run", deps.OzonHandler.AITriggerRun)
+						oz.With(middleware.RequireWriteAccess()).Post("/ai/decisions/{id}/approve", deps.OzonHandler.AIApproveDecision)
+						oz.With(middleware.RequireWriteAccess()).Post("/ai/decisions/{id}/reject", deps.OzonHandler.AIRejectDecision)
 					} else {
 						oz.Get("/campaigns", notImplemented)
 						oz.Get("/campaigns/{id}", notImplemented)

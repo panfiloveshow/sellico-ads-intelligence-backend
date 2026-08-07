@@ -15,6 +15,7 @@ import (
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
@@ -153,6 +154,15 @@ func main() {
 	)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonCampaignActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
+	// AI manager in the API process serves listings + copilot approvals; the
+	// LLM client is only used by the worker, so it may be disabled here.
+	ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonCampaignActionsService, llm.NewClient(llm.Config{
+		BaseURL:   cfg.LLMBaseURL,
+		APIKey:    cfg.LLMAPIKey,
+		Model:     cfg.LLMModel,
+		Timeout:   cfg.LLMTimeout,
+		MaxTokens: cfg.LLMMaxTokens,
+	}, deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)
@@ -294,6 +304,16 @@ func main() {
 				return taskErr
 			}
 			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueOzonSync), asynq.MaxRetry(3), asynq.Timeout(30*time.Minute), asynq.Unique(5*time.Minute))
+			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+				return nil // already queued — treat repeated clicks as success
+			}
+			return taskErr
+		}).WithAI(ozonAIManager, func(cabinetID uuid.UUID) error {
+			task, taskErr := worker.NewOzonAIRunTask(cabinetID, "manual")
+			if taskErr != nil {
+				return taskErr
+			}
+			_, taskErr = asynqClient.Enqueue(task, asynq.Queue(worker.QueueOzonSync), asynq.MaxRetry(1), asynq.Timeout(45*time.Minute), asynq.Unique(5*time.Minute))
 			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
 				return nil // already queued — treat repeated clicks as success
 			}

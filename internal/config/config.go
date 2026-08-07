@@ -51,6 +51,16 @@ type Config struct {
 	OzonSellerAPIBaseURL string // env: OZON_SELLER_API_BASE_URL, default: "https://api-seller.ozon.ru"
 	OzonPerfAPIBaseURL   string // env: OZON_PERF_API_BASE_URL, default: "https://api-performance.ozon.ru"
 
+	// LLM (Ozon AI autopilot; provider-agnostic OpenAI-compatible endpoint).
+	// Empty LLM_API_KEY disables the AI module entirely (no scheduling, runs
+	// recorded as 'skipped'). The default free-tier provider has multi-minute
+	// latency per request — hence the 10m default timeout.
+	LLMBaseURL   string        // env: LLM_BASE_URL, default: "https://integrate.api.nvidia.com/v1"
+	LLMAPIKey    string        // env: LLM_API_KEY, empty = AI disabled
+	LLMModel     string        // env: LLM_MODEL, default: "z-ai/glm-5.2"
+	LLMTimeout   time.Duration // env: LLM_TIMEOUT, default: 10m
+	LLMMaxTokens int           // env: LLM_MAX_TOKENS, default: 8192
+
 	// WB Catalog Parser
 	WBParserMinDelay time.Duration // env: WB_PARSER_MIN_DELAY, default: 2s
 	WBParserProxies  []string      // env: WB_PARSER_PROXIES, comma-separated
@@ -108,6 +118,7 @@ type Config struct {
 	RepricerScheduleInterval string // env: REPRICER_SCHEDULE_INTERVAL, default: "@every 15m"
 	OzonSyncInterval         string // env: OZON_SYNC_INTERVAL, default: "@every 1h"
 	OzonStrategyInterval     string // env: OZON_STRATEGY_INTERVAL, default: "@every 1h"
+	OzonAIInterval           string // env: OZON_AI_INTERVAL, default: "@every 4h"
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -136,6 +147,11 @@ func Load() *Config {
 		AdsReadStatsLimit:                  getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
 		OzonSellerAPIBaseURL:               getEnvOrDefault("OZON_SELLER_API_BASE_URL", "https://api-seller.ozon.ru"),
 		OzonPerfAPIBaseURL:                 getEnvOrDefault("OZON_PERF_API_BASE_URL", "https://api-performance.ozon.ru"),
+		LLMBaseURL:                         getEnvOrDefault("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		LLMAPIKey:                          getEnvOrDefault("LLM_API_KEY", ""),
+		LLMModel:                           getEnvOrDefault("LLM_MODEL", "z-ai/glm-5.2"),
+		LLMTimeout:                         getEnvAsDuration("LLM_TIMEOUT", 10*time.Minute),
+		LLMMaxTokens:                       getEnvAsInt("LLM_MAX_TOKENS", 8192),
 		WBParserMinDelay:                   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
 		WBParserProxies:                    getEnvAsSlice("WB_PARSER_PROXIES", ","),
 		ExportStoragePath:                  getEnvOrDefault("EXPORT_STORAGE_PATH", "./exports"),
@@ -165,6 +181,7 @@ func Load() *Config {
 		RepricerScheduleInterval:           getEnvOrDefault("REPRICER_SCHEDULE_INTERVAL", "@every 15m"),
 		OzonSyncInterval:                   getEnvOrDefault("OZON_SYNC_INTERVAL", "@every 1h"),
 		OzonStrategyInterval:               getEnvOrDefault("OZON_STRATEGY_INTERVAL", "@every 1h"),
+		OzonAIInterval:                     getEnvOrDefault("OZON_AI_INTERVAL", "@every 4h"),
 		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),

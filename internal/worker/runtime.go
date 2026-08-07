@@ -35,6 +35,7 @@ type RuntimeOption func(*runtimeOptions)
 type runtimeOptions struct {
 	ozonSync     ozonSyncRunner
 	ozonStrategy ozonStrategyRunner
+	ozonAI       ozonAIRunner
 }
 
 // WithOzonSyncService enables the Ozon sync module: a dedicated low-concurrency
@@ -52,6 +53,16 @@ func WithOzonSyncService(r ozonSyncRunner) RuntimeOption {
 func WithOzonStrategyService(r ozonStrategyRunner) RuntimeOption {
 	return func(o *runtimeOptions) {
 		o.ozonStrategy = r
+	}
+}
+
+// WithOzonAIManager enables the AI autopilot sweep (queue ozon-sync).
+// Requires WithOzonSyncService. Callers must only pass this option when the
+// LLM is actually configured — an absent option means no ozon:ai_* handlers
+// and no schedule at all.
+func WithOzonAIManager(r ozonAIRunner) RuntimeOption {
+	return func(o *runtimeOptions) {
+		o.ozonAI = r
 	}
 }
 
@@ -127,6 +138,11 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		processor = processor.WithOzonStrategy(options.ozonStrategy)
 		mux.HandleFunc(TaskOzonStrategySweep, processor.HandleOzonStrategySweep)
 		mux.HandleFunc(TaskOzonStrategyRun, processor.HandleOzonStrategyRun)
+	}
+	if options.ozonAI != nil && options.ozonSync != nil {
+		processor = processor.WithOzonAIManager(options.ozonAI)
+		mux.HandleFunc(TaskOzonAISweep, processor.HandleOzonAISweep)
+		mux.HandleFunc(TaskOzonAIRun, processor.HandleOzonAIRun)
 	}
 
 	// WB queues are all weight 1 and the server runs with Concurrency 1 so WB
@@ -242,6 +258,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 				taskType string
 				queue    string
 			}{strategyInterval, TaskOzonStrategySweep, QueueOzonSync})
+		}
+		if options.ozonAI != nil {
+			aiInterval := cfg.OzonAIInterval
+			if aiInterval == "" {
+				aiInterval = "@every 4h"
+			}
+			sweepEntries = append(sweepEntries, struct {
+				cron     string
+				taskType string
+				queue    string
+			}{aiInterval, TaskOzonAISweep, QueueOzonSync})
 		}
 	}
 	for _, entry := range sweepEntries {

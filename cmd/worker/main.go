@@ -10,6 +10,7 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
 	emailclient "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/email"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/telegram"
@@ -119,9 +120,29 @@ func main() {
 	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonStrategyService := service.NewOzonStrategyService(deps.Queries, ozonPerfClient, service.NewBidEngine(deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
-	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger,
+	ozonRuntimeOpts := []worker.RuntimeOption{
 		worker.WithOzonSyncService(ozonSyncService),
-		worker.WithOzonStrategyService(ozonStrategyService))
+		worker.WithOzonStrategyService(ozonStrategyService),
+	}
+	// AI autopilot is scheduled only when an LLM key is configured — the
+	// module is otherwise fully absent (no handlers, no cron entries).
+	if cfg.LLMAPIKey != "" {
+		llmClient := llm.NewClient(llm.Config{
+			BaseURL:   cfg.LLMBaseURL,
+			APIKey:    cfg.LLMAPIKey,
+			Model:     cfg.LLMModel,
+			Timeout:   cfg.LLMTimeout,
+			MaxTokens: cfg.LLMMaxTokens,
+		}, deps.Logger)
+		ozonActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
+		ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonActionsService, llmClient, []byte(cfg.EncryptionKey), deps.Logger)
+		ozonRuntimeOpts = append(ozonRuntimeOpts, worker.WithOzonAIManager(ozonAIManager))
+		deps.Logger.Info().Str("model", cfg.LLMModel).Msg("ozon ai autopilot enabled")
+	} else {
+		deps.Logger.Info().Msg("LLM_API_KEY not set; ozon ai autopilot disabled")
+	}
+	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger,
+		ozonRuntimeOpts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap worker runtime: %v\n", err)
 		os.Exit(1)

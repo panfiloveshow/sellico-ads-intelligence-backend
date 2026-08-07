@@ -3445,6 +3445,117 @@ paths:
         "202": { description: Sync enqueued }
         "403": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/runs:
+    get:
+      tags: [Ozon]
+      summary: List AI autopilot runs of a cabinet (newest first)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: AI run page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIRunListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/run:
+    post:
+      tags: [Ozon]
+      summary: Enqueue a manual AI autopilot run for a cabinet
+      description: Returns 409 when a run is already in progress for the cabinet.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+      responses:
+        "202": { description: AI run enqueued }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "409": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/decisions:
+    get:
+      tags: [Ozon]
+      summary: List AI decisions of a cabinet with optional status/run filters
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [shadow, proposed, approved, auto_applied, applied, failed, rejected_by_user, rejected_by_guardrail]
+        - name: run_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: AI decision page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIDecisionListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/decisions/{id}/approve:
+    post:
+      tags: [Ozon]
+      summary: Approve a proposed AI decision (guardrails re-run before apply)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Applied decision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIDecisionEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "409": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/decisions/{id}/reject:
+    post:
+      tags: [Ozon]
+      summary: Reject a proposed AI decision
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rejected decision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIDecisionEnvelope" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "409": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/prices:
     get:
       tags: [Repricer]
@@ -5207,7 +5318,7 @@ components:
         old_bid_rub: { type: number, nullable: true }
         new_bid_rub: { type: number, nullable: true }
         reason: { type: string }
-        source: { type: string, enum: [strategy, manual] }
+        source: { type: string, enum: [strategy, manual, ai] }
         status: { type: string, enum: [pending, applied, failed, rolled_back, shadow] }
         decision_context: { type: object, nullable: true }
         error: { type: string }
@@ -5251,6 +5362,72 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OzonCPOProduct"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    AIRun:
+      type: object
+      description: One AI autopilot execution over a cabinet
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        strategy_id: { type: string, format: uuid, nullable: true }
+        status: { type: string, enum: [running, completed, failed, skipped] }
+        trigger: { type: string, enum: [cron, manual] }
+        summary: { type: string }
+        error: { type: string }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+    AIRunListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AIRun"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    AIDecision:
+      type: object
+      description: One audited AI proposal with guardrail verdict and outcome
+      properties:
+        id: { type: string, format: uuid }
+        run_id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        action_type:
+          type: string
+          enum: [bid_change, budget_change, campaign_pause, campaign_activate, cpo_bid, cpo_enable, cpo_disable]
+        target:
+          type: object
+          description: "{ozon_campaign_id?, sku?}"
+        proposal:
+          type: object
+          description: "{action_type, new_value}"
+        rationale: { type: string }
+        expected_effect: { type: string }
+        guardrail_verdict: { type: string }
+        status:
+          type: string
+          enum: [shadow, proposed, approved, auto_applied, applied, failed, rejected_by_user, rejected_by_guardrail]
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        applied_at: { type: string, format: date-time, nullable: true }
+        applied_by: { type: string, format: uuid, nullable: true }
+    AIDecisionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/AIDecision"
+    AIDecisionListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AIDecision"
         meta:
           $ref: "#/components/schemas/Meta"
     CampaignEnvelope:

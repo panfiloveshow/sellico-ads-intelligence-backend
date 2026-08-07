@@ -8,6 +8,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AiDecision struct {
+	ID               pgtype.UUID        `json:"id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	SellerCabinetID  pgtype.UUID        `json:"seller_cabinet_id"`
+	ActionType       string             `json:"action_type"`
+	Target           []byte             `json:"target"`
+	Proposal         []byte             `json:"proposal"`
+	Rationale        pgtype.Text        `json:"rationale"`
+	ExpectedEffect   pgtype.Text        `json:"expected_effect"`
+	GuardrailVerdict string             `json:"guardrail_verdict"`
+	Status           string             `json:"status"`
+	Error            pgtype.Text        `json:"error"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	AppliedAt        pgtype.Timestamptz `json:"applied_at"`
+	AppliedBy        pgtype.UUID        `json:"applied_by"`
+}
+
+type AiRun struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	SellerCabinetID  pgtype.UUID        `json:"seller_cabinet_id"`
+	StrategyID       pgtype.UUID        `json:"strategy_id"`
+	Status           string             `json:"status"`
+	Trigger          string             `json:"trigger"`
+	Summary          pgtype.Text        `json:"summary"`
+	Error            pgtype.Text        `json:"error"`
+	PromptTokens     pgtype.Int4        `json:"prompt_tokens"`
+	CompletionTokens pgtype.Int4        `json:"completion_tokens"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+}
+
 type AuditLog struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

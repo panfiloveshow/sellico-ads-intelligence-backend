@@ -77,6 +77,11 @@ func (s *OzonStrategyService) RunForWorkspace(ctx context.Context, workspaceID u
 		if !domain.IsOzonStrategy(strategy.Type) {
 			continue
 		}
+		// AI autopilot strategies are executed exclusively by the AI manager
+		// (ozon:ai_run); the deterministic sweep must never touch them.
+		if strategy.Type == domain.StrategyTypeOzonAIAutopilot {
+			continue
+		}
 		count, strategyErr := s.runStrategy(ctx, workspaceID, strategy)
 		applied += count
 		if strategyErr != nil {

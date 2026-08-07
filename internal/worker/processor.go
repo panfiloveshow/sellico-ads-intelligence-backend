@@ -111,6 +111,13 @@ type ozonStrategyRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
 }
 
+// ozonAIRunner is the AI autopilot: sweep fan-out enumeration + one cabinet
+// run (which resolves workspace/strategy internally).
+type ozonAIRunner interface {
+	ListAICabinetIDs(ctx context.Context) ([]uuid.UUID, error)
+	RunForCabinetID(ctx context.Context, cabinetID uuid.UUID, trigger string) error
+}
+
 type semanticsCollector interface {
 	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
@@ -154,6 +161,7 @@ type Processor struct {
 	seo                  seoAnalyzer
 	ozonSync             ozonSyncRunner
 	ozonStrategy         ozonStrategyRunner
+	ozonAI               ozonAIRunner
 	logger               zerolog.Logger
 }
 
@@ -600,6 +608,77 @@ func (p *Processor) HandleOzonStrategyRun(ctx context.Context, task *asynq.Task)
 			Msg("ozon strategy run completed")
 		return map[string]any{"campaigns_applied": applied}, nil
 	})
+}
+
+// WithOzonAIManager sets the AI autopilot runner.
+func (p *Processor) WithOzonAIManager(r ozonAIRunner) *Processor {
+	p.ozonAI = r
+	return p
+}
+
+// HandleOzonAISweep enqueues one ozon:ai_run per cabinet that has an active
+// ozon_ai_autopilot strategy. The queue's low concurrency keeps the
+// multi-minute LLM runs effectively sequential — by design for the free-tier
+// RPM budget.
+func (p *Processor) HandleOzonAISweep(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonAI == nil {
+		p.logger.Debug().Msg("ozon ai manager not configured, skipping sweep")
+		return nil
+	}
+	cabinetIDs, err := p.ozonAI.ListAICabinetIDs(ctx)
+	if err != nil {
+		return err
+	}
+	enqueued := 0
+	for _, cabinetID := range cabinetIDs {
+		task, taskErr := NewOzonAIRunTask(cabinetID, "cron")
+		if taskErr != nil {
+			return taskErr
+		}
+		if _, taskErr := p.client.Enqueue(task,
+			asynq.Queue(QueueOzonSync),
+			asynq.MaxRetry(1),
+			// Two LLM calls at up to 10 minutes each plus data work.
+			asynq.Timeout(45*time.Minute),
+			asynq.Unique(2*time.Hour),
+		); taskErr != nil {
+			if errors.Is(taskErr, asynq.ErrDuplicateTask) {
+				continue
+			}
+			return taskErr
+		}
+		enqueued++
+	}
+	p.logger.Info().Int("cabinets", len(cabinetIDs)).Int("enqueued", enqueued).Msg("ozon ai sweep scheduled")
+	return nil
+}
+
+// HandleOzonAIRun executes one AI autopilot run for one cabinet. Run failures
+// are recorded on the ai_runs row by the manager; the handler never retries
+// them — an LLM cabinet run is too expensive to repeat blindly.
+func (p *Processor) HandleOzonAIRun(ctx context.Context, task *asynq.Task) error {
+	if p.ozonAI == nil {
+		p.logger.Debug().Msg("ozon ai manager not configured, skipping")
+		return nil
+	}
+	var payload OzonAITaskPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		return fmt.Errorf("parse ozon ai payload: %w", err)
+	}
+	cabinetID, err := uuid.Parse(payload.CabinetID)
+	if err != nil {
+		return fmt.Errorf("invalid ozon cabinet id %q: %w", payload.CabinetID, err)
+	}
+	trigger := payload.Trigger
+	if trigger == "" {
+		trigger = "cron"
+	}
+	if err := p.ozonAI.RunForCabinetID(ctx, cabinetID, trigger); err != nil {
+		p.logger.Error().Err(err).Str("cabinet_id", cabinetID.String()).Msg("ozon ai run failed")
+		return nil // failure already persisted on ai_runs; no asynq retry
+	}
+	p.logger.Info().Str("cabinet_id", cabinetID.String()).Str("trigger", trigger).Msg("ozon ai run completed")
+	return nil
 }
 
 func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task) error {
