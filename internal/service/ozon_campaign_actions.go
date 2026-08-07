@@ -310,13 +310,34 @@ func (s *OzonCampaignActionsService) GetCompetitiveBids(ctx context.Context, wor
 	}
 	bids, err := s.perfClient.GetCompetitiveBids(ctx, creds, campaign.OzonCampaignID, skus)
 	if err != nil {
-		return nil, fmt.Errorf("ozon competitive bids: %w", err)
+		s.logger.Warn().Err(err).
+			Int64("ozon_campaign_id", campaign.OzonCampaignID).
+			Int("skus", len(skus)).
+			Msg("ozon competitive bids request failed")
+		// Ozon отдаёт конкурентные ставки не для всех типов кампаний/стратегий —
+		// это ошибка апстрима, а не наша: 502 с читаемым сообщением вместо 500.
+		return nil, apperror.New(apperror.ErrOzonAPIError, "Ozon не отдал конкурентные ставки для этой кампании")
 	}
 	return bids, nil
 }
 
 // ListBidChanges returns the ozon_bid_changes audit page for a cabinet.
+// cabinetID may be uuid.Nil when campaignID is given — the cabinet is then
+// resolved from the campaign (campaign detail page passes only campaign_id).
 func (s *OzonCampaignActionsService) ListBidChanges(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaignID *uuid.UUID, limit, offset int32) ([]domain.OzonBidChange, int64, error) {
+	if cabinetID == uuid.Nil {
+		if campaignID == nil {
+			return nil, 0, apperror.New(apperror.ErrValidation, "cabinet_id or campaign_id is required")
+		}
+		row, err := s.queries.GetOzonCampaignByID(ctx, uuidToPgtype(*campaignID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, 0, apperror.New(apperror.ErrNotFound, "ozon campaign not found")
+		}
+		if err != nil {
+			return nil, 0, apperror.New(apperror.ErrInternal, "failed to load ozon campaign")
+		}
+		cabinetID = uuidFromPgtype(row.SellerCabinetID)
+	}
 	if _, _, err := s.resolveCabinetReadOnly(ctx, workspaceID, cabinetID); err != nil {
 		return nil, 0, err
 	}

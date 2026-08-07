@@ -346,12 +346,14 @@ func (h *OzonHandler) CompetitiveBids(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListBidChanges handles GET /ozon/bid-changes?cabinet_id=&campaign_id=&page=.
+// cabinet_id is optional when campaign_id is given (campaign detail page).
 func (h *OzonHandler) ListBidChanges(w http.ResponseWriter, r *http.Request) {
 	if !h.requireActions(w) {
 		return
 	}
-	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
 	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
 		return
 	}
 	var campaignID *uuid.UUID
@@ -362,6 +364,19 @@ func (h *OzonHandler) ListBidChanges(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		campaignID = &parsed
+	}
+	cabinetID := uuid.Nil
+	if raw := r.URL.Query().Get("cabinet_id"); raw != "" {
+		parsed, err := parseNonNilUUID(raw)
+		if err != nil {
+			dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid cabinet_id")
+			return
+		}
+		cabinetID = parsed
+	}
+	if cabinetID == uuid.Nil && campaignID == nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "cabinet_id or campaign_id is required")
+		return
 	}
 	pg := pagination.Parse(r)
 	items, total, err := h.actions.ListBidChanges(r.Context(), workspaceID, cabinetID, campaignID, int32(pg.PerPage), int32(pg.Offset()))

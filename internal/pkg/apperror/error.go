@@ -22,6 +22,7 @@ var (
 	ErrConflict       = &AppError{Code: "CONFLICT", Message: "resource already exists", Status: 409}
 	ErrInternal       = &AppError{Code: "INTERNAL_ERROR", Message: "internal server error", Status: 500}
 	ErrWBAPIError     = &AppError{Code: "WB_API_ERROR", Message: "wildberries api error", Status: 502}
+	ErrOzonAPIError   = &AppError{Code: "OZON_API_ERROR", Message: "ozon api error", Status: 502}
 	ErrDecryptionFail = &AppError{Code: "DECRYPTION_ERROR", Message: "failed to process credentials", Status: 500}
 	ErrRateLimited    = &AppError{Code: "RATE_LIMITED", Message: "too many requests", Status: 429}
 )
