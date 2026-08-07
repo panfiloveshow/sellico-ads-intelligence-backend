@@ -91,6 +91,49 @@ type OzonProductPrice struct {
 	SyncedAt                *time.Time `json:"synced_at,omitempty"`
 }
 
+// Ozon bid-change audit constants (ozon_bid_changes.kind / source / status).
+const (
+	OzonBidKindCPC = "cpc"
+	OzonBidKindCPO = "cpo"
+
+	OzonBidStatusPending    = "pending"
+	OzonBidStatusApplied    = "applied"
+	OzonBidStatusFailed     = "failed"
+	OzonBidStatusRolledBack = "rolled_back"
+	OzonBidStatusShadow     = "shadow"
+)
+
+// OzonBidChange is one audited Ozon bid write (manual or strategy-driven).
+// CPC rows carry CampaignID; CPO rows carry SellerCabinetID + kind='cpo'.
+type OzonBidChange struct {
+	ID              uuid.UUID  `json:"id"`
+	CampaignID      *uuid.UUID `json:"campaign_id,omitempty"`
+	SellerCabinetID *uuid.UUID `json:"seller_cabinet_id,omitempty"`
+	Kind            string     `json:"kind"`
+	SKU             *int64     `json:"sku,omitempty"`
+	OldBidRub       *float64   `json:"old_bid_rub,omitempty"`
+	NewBidRub       *float64   `json:"new_bid_rub,omitempty"`
+	Reason          string     `json:"reason,omitempty"`
+	Source          string     `json:"source"`
+	Status          string     `json:"status"`
+	DecisionContext any        `json:"decision_context,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	AppliedAt       *time.Time `json:"applied_at,omitempty"`
+}
+
+// OzonCPOProduct is the per-SKU CPO (search promo) state mirrored from
+// search_promo/v2/products.
+type OzonCPOProduct struct {
+	ID              uuid.UUID `json:"id"`
+	SellerCabinetID uuid.UUID `json:"seller_cabinet_id"`
+	SKU             int64     `json:"sku"`
+	Enabled         bool      `json:"enabled"`
+	Bid             *float64  `json:"bid,omitempty"`
+	BidKind         string    `json:"bid_kind,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
 // OzonCampaignWithStats is a campaign plus its recent aggregate statistics
 // (used by the campaigns list endpoint; window is the last 7 days).
 type OzonCampaignWithStats struct {

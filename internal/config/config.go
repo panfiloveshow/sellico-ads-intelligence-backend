@@ -107,6 +107,7 @@ type Config struct {
 	RepricerPollInterval     string // env: REPRICER_POLL_INTERVAL, default: "@every 5m"
 	RepricerScheduleInterval string // env: REPRICER_SCHEDULE_INTERVAL, default: "@every 15m"
 	OzonSyncInterval         string // env: OZON_SYNC_INTERVAL, default: "@every 1h"
+	OzonStrategyInterval     string // env: OZON_STRATEGY_INTERVAL, default: "@every 1h"
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -163,6 +164,7 @@ func Load() *Config {
 		RepricerPollInterval:               getEnvOrDefault("REPRICER_POLL_INTERVAL", "@every 5m"),
 		RepricerScheduleInterval:           getEnvOrDefault("REPRICER_SCHEDULE_INTERVAL", "@every 15m"),
 		OzonSyncInterval:                   getEnvOrDefault("OZON_SYNC_INTERVAL", "@every 1h"),
+		OzonStrategyInterval:               getEnvOrDefault("OZON_STRATEGY_INTERVAL", "@every 1h"),
 		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),

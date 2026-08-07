@@ -464,6 +464,33 @@ type SellerCabinet struct {
 	EncryptedCredentials  pgtype.Text        `json:"encrypted_credentials"`
 }
 
+type OzonBidChange struct {
+	ID              pgtype.UUID        `json:"id"`
+	CampaignID      pgtype.UUID        `json:"campaign_id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Kind            string             `json:"kind"`
+	Sku             pgtype.Int8        `json:"sku"`
+	OldBidRub       pgtype.Numeric     `json:"old_bid_rub"`
+	NewBidRub       pgtype.Numeric     `json:"new_bid_rub"`
+	Reason          pgtype.Text        `json:"reason"`
+	Source          string             `json:"source"`
+	Status          string             `json:"status"`
+	DecisionContext []byte             `json:"decision_context"`
+	Error           pgtype.Text        `json:"error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	AppliedAt       pgtype.Timestamptz `json:"applied_at"`
+}
+
+type OzonCpoProduct struct {
+	ID              pgtype.UUID        `json:"id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Sku             int64              `json:"sku"`
+	Enabled         bool               `json:"enabled"`
+	Bid             pgtype.Numeric     `json:"bid"`
+	BidKind         pgtype.Text        `json:"bid_kind"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OzonCampaign struct {
 	ID                pgtype.UUID        `json:"id"`
 	SellerCabinetID   pgtype.UUID        `json:"seller_cabinet_id"`

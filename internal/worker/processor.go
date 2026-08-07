@@ -106,6 +106,11 @@ type ozonSyncRunner interface {
 	ListOzonCabinetIDs(ctx context.Context) ([]uuid.UUID, error)
 }
 
+// ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
+type ozonStrategyRunner interface {
+	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+}
+
 type semanticsCollector interface {
 	CollectFromPhrases(ctx context.Context, workspaceID, sellerCabinetID uuid.UUID) (int, error)
 	CollectFromSERP(ctx context.Context, workspaceID uuid.UUID) (int, error)
@@ -148,6 +153,7 @@ type Processor struct {
 	delivery             deliveryCollector
 	seo                  seoAnalyzer
 	ozonSync             ozonSyncRunner
+	ozonStrategy         ozonStrategyRunner
 	logger               zerolog.Logger
 }
 
@@ -553,6 +559,47 @@ func (p *Processor) HandleOzonSyncCabinet(ctx context.Context, task *asynq.Task)
 	}
 	p.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("ozon cabinet sync completed")
 	return nil
+}
+
+// WithOzonStrategy sets the deterministic Ozon strategy runner.
+func (p *Processor) WithOzonStrategy(r ozonStrategyRunner) *Processor {
+	p.ozonStrategy = r
+	return p
+}
+
+// HandleOzonStrategySweep fans one ozon:strategy_run task out per workspace
+// (mirrors bid:sweep_automation — the per-workspace run is a cheap no-op when
+// the workspace has no active ozon strategies).
+func (p *Processor) HandleOzonStrategySweep(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonStrategy == nil {
+		p.logger.Debug().Msg("ozon strategy runner not configured, skipping sweep")
+		return nil
+	}
+	return p.runSweep(ctx, TaskOzonStrategySweep, TaskOzonStrategyRun, QueueOzonSync)
+}
+
+// HandleOzonStrategyRun executes deterministic ozon strategies for one workspace.
+func (p *Processor) HandleOzonStrategyRun(ctx context.Context, task *asynq.Task) error {
+	payload, workspaceID, err := parseWorkspacePayload(task.Payload())
+	if err != nil {
+		return err
+	}
+	if p.ozonStrategy == nil {
+		p.logger.Debug().Msg("ozon strategy runner not configured, skipping")
+		return nil
+	}
+	return p.runWithJobRun(ctx, TaskOzonStrategyRun, &workspaceID, payload, func() (map[string]any, error) {
+		applied, runErr := p.ozonStrategy.RunForWorkspace(ctx, workspaceID)
+		if runErr != nil {
+			p.logger.Error().Err(runErr).Str("workspace_id", workspaceID.String()).Msg("ozon strategy run failed")
+			return map[string]any{"campaigns_applied": applied}, runErr
+		}
+		p.logger.Info().
+			Str("workspace_id", workspaceID.String()).
+			Int("campaigns_applied", applied).
+			Msg("ozon strategy run completed")
+		return map[string]any{"campaigns_applied": applied}, nil
+	})
 }
 
 func (p *Processor) HandleSweepPollPriceTasks(ctx context.Context, _ *asynq.Task) error {

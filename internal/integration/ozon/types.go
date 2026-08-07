@@ -14,6 +14,7 @@ package ozon
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,18 @@ func MicroRubToRubFloat(raw string) (float64, error) {
 		return 0, fmt.Errorf("ozon: parse micro-ruble value %q: %w", raw, err)
 	}
 	return micro / microPerRuble, nil
+}
+
+// RubToMicroRub converts whole rubles to the Performance API micro-ruble
+// string form (inverse of MicroRubToRub).
+func RubToMicroRub(rub int64) string {
+	return strconv.FormatInt(rub*microPerRuble, 10)
+}
+
+// RubFloatToMicroRub converts rubles (with kopecks) to the micro-ruble string
+// form, rounding to the nearest micro-ruble (inverse of MicroRubToRubFloat).
+func RubFloatToMicroRub(rub float64) string {
+	return strconv.FormatInt(int64(math.Round(rub*microPerRuble)), 10)
 }
 
 // ParsePriceString parses the Seller API's decimal-string money values
@@ -112,6 +125,54 @@ type Campaign struct {
 // CampaignProduct is one SKU row from GET /api/client/campaign/{id}/v2/products,
 // bid converted from micro-rubles to rubles.
 type CampaignProduct struct {
+	SKU    int64
+	BidRub float64
+}
+
+// CampaignPatch carries the mutable campaign fields for
+// PATCH /api/client/campaign/{campaignId}. Nil fields are omitted. Budgets
+// are whole rubles and converted to micro-ruble strings at the wire boundary.
+// Note: dailyBudget is deprecated by Ozon (2026-05-22) in favor of
+// weeklyBudget but is still accepted.
+type CampaignPatch struct {
+	DailyBudgetRub  *int64
+	WeeklyBudgetRub *int64
+	FromDate        *time.Time
+	ToDate          *time.Time
+}
+
+// ProductBid is one per-SKU bid for PUT /api/client/campaign/{id}/products.
+// BidRub is rubles (kopecks allowed) and converted to micro-rubles on write.
+type ProductBid struct {
+	SKU       int64
+	BidRub    float64
+	TargetCIR *float64
+}
+
+// CompetitiveBid is one row of GET .../products/bids/competitive, bid already
+// converted from micro-rubles to rubles.
+type CompetitiveBid struct {
+	SKU    int64   `json:"sku"`
+	BidRub float64 `json:"bid_rub"`
+}
+
+// MinSKUBid is one row of POST /api/client/min/sku, bid converted from
+// micro-rubles to rubles.
+type MinSKUBid struct {
+	SKU    int64   `json:"sku"`
+	BidRub float64 `json:"bid_rub"`
+}
+
+// CPOProduct is one row of POST /api/client/campaign/search_promo/v2/products.
+// CPO (search promo) bids are plain rubles on the wire, not micro-rubles.
+type CPOProduct struct {
+	SKU     int64   `json:"sku"`
+	BidRub  float64 `json:"bid_rub"`
+	Enabled bool    `json:"enabled"`
+}
+
+// CPOBid is one per-SKU fixed bid for search_promo/v2/bids/set (rubles).
+type CPOBid struct {
 	SKU    int64
 	BidRub float64
 }

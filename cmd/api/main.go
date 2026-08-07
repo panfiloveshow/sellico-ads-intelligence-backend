@@ -152,6 +152,7 @@ func main() {
 		service.WithRepricerEngine(service.NewPriceEngine(deps.Logger)),
 	)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
+	ozonCampaignActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)
@@ -287,7 +288,7 @@ func main() {
 				}
 				return taskErr
 			}),
-		OzonHandler: handler.NewOzonHandler(ozonSyncService, func(cabinetID uuid.UUID) error {
+		OzonHandler: handler.NewOzonHandler(ozonSyncService, ozonCampaignActionsService, func(cabinetID uuid.UUID) error {
 			task, taskErr := worker.NewOzonCabinetTask(cabinetID)
 			if taskErr != nil {
 				return taskErr

@@ -119,6 +119,10 @@ func (e *BidEngine) CalculateBid(strategy domain.Strategy, ctx BidContext) *BidD
 		newBid, reason = e.calculateDaypartingBid(params, ctx)
 	case domain.StrategyTypeSearchPlaybook:
 		newBid, reason = e.calculateSearchPlaybookBid(params, ctx)
+	case domain.StrategyTypeOzonCPCTargetDRR:
+		// Ozon target-ДРР reuses the ACoS math 1:1 (ДРР == ACoS): TargetACoS
+		// is the target ДРР in percent, bids are integer rubles.
+		newBid, reason, acos = e.calculateACoSBid(params, ctx)
 	default:
 		return nil
 	}

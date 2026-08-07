@@ -60,6 +60,10 @@ const (
 	TaskOzonSyncCabinet = "ozon:sync_cabinet"
 	QueueOzonSync       = "ozon-sync"
 
+	// Ozon module (phase 2: deterministic strategies).
+	TaskOzonStrategySweep = "ozon:strategy_sweep"
+	TaskOzonStrategyRun   = "ozon:strategy_run"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"

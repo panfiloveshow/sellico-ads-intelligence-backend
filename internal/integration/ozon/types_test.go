@@ -47,6 +47,58 @@ func TestMicroRubToRubFloat(t *testing.T) {
 	}
 }
 
+func TestRubToMicroRub(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0"},
+		{1, "1000000"},
+		{530, "530000000"},
+	}
+	for _, tc := range cases {
+		if got := RubToMicroRub(tc.in); got != tc.want {
+			t.Fatalf("RubToMicroRub(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	// Round trip through the parser.
+	for _, rub := range []int64{0, 1, 37, 5000, 123456} {
+		back, err := MicroRubToRub(RubToMicroRub(rub))
+		if err != nil {
+			t.Fatalf("round trip %d: unexpected error: %v", rub, err)
+		}
+		if back != rub {
+			t.Fatalf("round trip %d = %d", rub, back)
+		}
+	}
+}
+
+func TestRubFloatToMicroRubRoundTrip(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{0, "0"},
+		{1.25, "1250000"},
+		{37.5, "37500000"},
+		{0.01, "10000"},
+		{530, "530000000"},
+	}
+	for _, tc := range cases {
+		got := RubFloatToMicroRub(tc.in)
+		if got != tc.want {
+			t.Fatalf("RubFloatToMicroRub(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+		back, err := MicroRubToRubFloat(got)
+		if err != nil {
+			t.Fatalf("round trip %v: unexpected error: %v", tc.in, err)
+		}
+		if back != tc.in {
+			t.Fatalf("round trip %v = %v", tc.in, back)
+		}
+	}
+}
+
 func TestParsePriceString(t *testing.T) {
 	got, err := ParsePriceString("1990.0000")
 	if err != nil {

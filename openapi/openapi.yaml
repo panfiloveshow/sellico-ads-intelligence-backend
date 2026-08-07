@@ -3162,6 +3162,250 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OzonCampaignStatListEnvelope" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/activate:
+    post:
+      tags: [Ozon]
+      summary: Activate (start) an Ozon campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Campaign activated }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/deactivate:
+    post:
+      tags: [Ozon]
+      summary: Deactivate (stop) an Ozon campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Campaign deactivated }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/budget:
+    patch:
+      tags: [Ozon]
+      summary: Update Ozon campaign budgets (whole rubles; weekly is Ozon's primary parameter)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                daily_budget_rub: { type: integer, format: int64, nullable: true }
+                weekly_budget_rub: { type: integer, format: int64, nullable: true }
+      responses:
+        "200": { description: Budget updated }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/products/bids:
+    put:
+      tags: [Ozon]
+      summary: Set per-SKU bids of an Ozon campaign (audited in ozon_bid_changes, source=manual)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [sku, bid_rub]
+                    properties:
+                      sku: { type: integer, format: int64 }
+                      bid_rub: { type: number }
+                      target_cir: { type: number, nullable: true }
+      responses:
+        "200":
+          description: Audit rows for the write (status applied or failed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonBidChangeListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/bids/competitive:
+    get:
+      tags: [Ozon]
+      summary: Competitive bid levels for the campaign's SKUs (live Performance API passthrough)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Competitive bids
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCompetitiveBidListEnvelope" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/bid-changes:
+    get:
+      tags: [Ozon]
+      summary: Ozon bid-change audit trail of a cabinet (CPC + CPO, manual + strategy)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: campaign_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Bid change page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonBidChangeListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/products:
+    get:
+      tags: [Ozon]
+      summary: CPO (search promo) per-SKU state; refreshes the mirror from Ozon before serving
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: CPO product page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCPOProductListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/enable:
+    post:
+      tags: [Ozon]
+      summary: Enable CPO (search promo) for SKUs
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, skus]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                skus:
+                  type: array
+                  maxItems: 1000
+                  items: { type: integer, format: int64 }
+      responses:
+        "200": { description: CPO enabled }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/disable:
+    post:
+      tags: [Ozon]
+      summary: Disable CPO (search promo) for SKUs
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, skus]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                skus:
+                  type: array
+                  maxItems: 1000
+                  items: { type: integer, format: int64 }
+      responses:
+        "200": { description: CPO disabled }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/bids:
+    post:
+      tags: [Ozon]
+      summary: Set fixed CPO bids (rubles) per SKU (audited, kind=cpo)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, bids]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                bids:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [sku, bid]
+                    properties:
+                      sku: { type: integer, format: int64 }
+                      bid: { type: number }
+      responses:
+        "200": { description: CPO bids applied }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/limits:
+    get:
+      tags: [Ozon]
+      summary: Ozon bid limits reference (GET /api/client/limits/list passthrough, cached 1h)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Raw limits payload as returned by Ozon
+          content:
+            application/json:
+              schema: { type: object }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/prices:
     get:
       tags: [Ozon]
@@ -4949,6 +5193,64 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OzonProductPrice"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonBidChange:
+      type: object
+      description: One audited Ozon bid write (manual or strategy-driven)
+      properties:
+        id: { type: string, format: uuid }
+        campaign_id: { type: string, format: uuid, nullable: true }
+        seller_cabinet_id: { type: string, format: uuid, nullable: true }
+        kind: { type: string, enum: [cpc, cpo] }
+        sku: { type: integer, format: int64, nullable: true }
+        old_bid_rub: { type: number, nullable: true }
+        new_bid_rub: { type: number, nullable: true }
+        reason: { type: string }
+        source: { type: string, enum: [strategy, manual] }
+        status: { type: string, enum: [pending, applied, failed, rolled_back, shadow] }
+        decision_context: { type: object, nullable: true }
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        applied_at: { type: string, format: date-time, nullable: true }
+    OzonBidChangeListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonBidChange"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonCompetitiveBid:
+      type: object
+      properties:
+        sku: { type: integer, format: int64 }
+        bid_rub: { type: number }
+    OzonCompetitiveBidListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonCompetitiveBid"
+    OzonCPOProduct:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        sku: { type: integer, format: int64 }
+        enabled: { type: boolean }
+        bid: { type: number, nullable: true }
+        bid_kind: { type: string, enum: [percent, fixed_rub], nullable: true }
+        updated_at: { type: string, format: date-time }
+    OzonCPOProductListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonCPOProduct"
         meta:
           $ref: "#/components/schemas/Meta"
     CampaignEnvelope:

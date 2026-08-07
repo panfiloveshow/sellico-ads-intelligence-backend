@@ -51,7 +51,18 @@ const (
 	StrategyTypePriceAdLinked         = "price_ad_linked"
 	StrategyTypePricePeakHours        = "price_peak_hours"
 	StrategyTypePriceCompetitorFollow = "price_competitor_follow"
+
+	// Ozon strategy types (ozon_* prefix — WB bid automation skips these).
+	// ozon_cpc_target_drr drives Ozon CPC campaign bids toward a target ДРР
+	// (ДРР == ACoS semantically; TargetACoS doubles as the target ДРР).
+	StrategyTypeOzonCPCTargetDRR = "ozon_cpc_target_drr"
 )
+
+// IsOzonStrategy reports whether a strategy type belongs to the Ozon module.
+// WB bid automation and the WB repricer must skip these.
+func IsOzonStrategy(strategyType string) bool {
+	return strategyType == StrategyTypeOzonCPCTargetDRR
+}
 
 // IsPriceStrategy reports whether a strategy type is a repricer strategy.
 func IsPriceStrategy(strategyType string) bool {
@@ -205,13 +216,16 @@ func (p StrategyParams) MergedPriceParams() StrategyParams {
 	return p
 }
 
-// StrategyBinding links a strategy to a campaign or product.
+// StrategyBinding links a strategy to a campaign or product. WB strategies
+// use CampaignID/ProductID; Ozon strategies use OzonCampaignID (a separate FK
+// because campaign_id references the WB campaigns table).
 type StrategyBinding struct {
-	ID         uuid.UUID  `json:"id"`
-	StrategyID uuid.UUID  `json:"strategy_id"`
-	CampaignID *uuid.UUID `json:"campaign_id,omitempty"`
-	ProductID  *uuid.UUID `json:"product_id,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID             uuid.UUID  `json:"id"`
+	StrategyID     uuid.UUID  `json:"strategy_id"`
+	CampaignID     *uuid.UUID `json:"campaign_id,omitempty"`
+	ProductID      *uuid.UUID `json:"product_id,omitempty"`
+	OzonCampaignID *uuid.UUID `json:"ozon_campaign_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // BidChange records a single bid modification (audit trail).

@@ -118,8 +118,10 @@ func main() {
 	ozonSellerClient := ozon.NewSellerClient(cfg, deps.Logger)
 	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
+	ozonStrategyService := service.NewOzonStrategyService(deps.Queries, ozonPerfClient, service.NewBidEngine(deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
 	runtime, err := worker.NewRuntime(cfg, syncService, deps.Queries, engine, extendedEngine, exportGenerator, notificationService, integrationRefreshService, bidAutomationService, repricerService, economicsSyncService, semanticsService, competitorService, deliveryService, seoAnalyzerService, adsReadService, recommendationService, deps.Logger,
-		worker.WithOzonSyncService(ozonSyncService))
+		worker.WithOzonSyncService(ozonSyncService),
+		worker.WithOzonStrategyService(ozonStrategyService))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap worker runtime: %v\n", err)
 		os.Exit(1)

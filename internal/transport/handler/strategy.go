@@ -61,9 +61,10 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 		domain.StrategyTypeROAS,
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
-		domain.StrategyTypeSearchPlaybook:
+		domain.StrategyTypeSearchPlaybook,
+		domain.StrategyTypeOzonCPCTargetDRR:
 	default:
-		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, search_playbook"
+		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, search_playbook, ozon_cpc_target_drr"
 	}
 	params := input.Params
 	if params.MinBid < 0 {
@@ -120,6 +121,11 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	case domain.StrategyTypeAntiSliv:
 		if params.MaxACoS <= 0 {
 			errors["params.max_acos"] = "must be greater than 0"
+		}
+	case domain.StrategyTypeOzonCPCTargetDRR:
+		// target_acos doubles as the target ДРР for the Ozon strategy.
+		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
+			errors["params.target_acos"] = "must be greater than 0 and at most 1000"
 		}
 	}
 	return errors

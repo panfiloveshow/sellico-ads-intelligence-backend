@@ -529,13 +529,24 @@ func NewRouter(deps RouterDeps) chi.Router {
 					}
 				})
 
-				// Ozon module (phase 1: read-only)
+				// Ozon module (phase 1: reads; phase 2: management writes)
 				scoped.Route("/ozon", func(oz chi.Router) {
 					if deps.OzonHandler != nil {
 						oz.Get("/campaigns", deps.OzonHandler.ListCampaigns)
 						oz.Get("/campaigns/{id}", deps.OzonHandler.GetCampaign)
 						oz.Get("/campaigns/{id}/stats", deps.OzonHandler.CampaignStats)
+						oz.Get("/campaigns/{id}/bids/competitive", deps.OzonHandler.CompetitiveBids)
 						oz.Get("/prices", deps.OzonHandler.ListPrices)
+						oz.Get("/bid-changes", deps.OzonHandler.ListBidChanges)
+						oz.Get("/cpo/products", deps.OzonHandler.ListCPOProducts)
+						oz.Get("/limits", deps.OzonHandler.BidLimits)
+						oz.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/activate", deps.OzonHandler.ActivateCampaign)
+						oz.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/deactivate", deps.OzonHandler.DeactivateCampaign)
+						oz.With(middleware.RequireWriteAccess()).Patch("/campaigns/{id}/budget", deps.OzonHandler.UpdateBudget)
+						oz.With(middleware.RequireWriteAccess()).Put("/campaigns/{id}/products/bids", deps.OzonHandler.SetProductBids)
+						oz.With(middleware.RequireWriteAccess()).Post("/cpo/enable", deps.OzonHandler.EnableCPO)
+						oz.With(middleware.RequireWriteAccess()).Post("/cpo/disable", deps.OzonHandler.DisableCPO)
+						oz.With(middleware.RequireWriteAccess()).Post("/cpo/bids", deps.OzonHandler.SetCPOBids)
 						oz.With(middleware.RequireWriteAccess()).Post("/sync", deps.OzonHandler.TriggerSync)
 					} else {
 						oz.Get("/campaigns", notImplemented)

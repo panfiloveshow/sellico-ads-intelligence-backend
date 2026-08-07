@@ -108,6 +108,11 @@ func (s *BidAutomationService) RunForWorkspace(ctx context.Context, workspaceID 
 		if domain.IsPriceStrategy(strategy.Type) {
 			continue
 		}
+		// Ozon (ozon_*) strategies run in OzonStrategyService on the ozon
+		// worker — the WB bid automation path must never touch them.
+		if domain.IsOzonStrategy(strategy.Type) {
+			continue
+		}
 		if reason := strategyAutomationSkipReason(strategy); reason != "" {
 			s.logger.Info().
 				Str("workspace_id", workspaceID.String()).

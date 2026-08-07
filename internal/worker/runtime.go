@@ -33,7 +33,8 @@ type Runtime struct {
 type RuntimeOption func(*runtimeOptions)
 
 type runtimeOptions struct {
-	ozonSync ozonSyncRunner
+	ozonSync     ozonSyncRunner
+	ozonStrategy ozonStrategyRunner
 }
 
 // WithOzonSyncService enables the Ozon sync module: a dedicated low-concurrency
@@ -42,6 +43,15 @@ type runtimeOptions struct {
 func WithOzonSyncService(r ozonSyncRunner) RuntimeOption {
 	return func(o *runtimeOptions) {
 		o.ozonSync = r
+	}
+}
+
+// WithOzonStrategyService enables the deterministic Ozon strategy sweep on
+// the ozon asynq server (queue ozon-sync). Requires WithOzonSyncService —
+// the strategy tasks run on the same dedicated server.
+func WithOzonStrategyService(r ozonStrategyRunner) RuntimeOption {
+	return func(o *runtimeOptions) {
+		o.ozonStrategy = r
 	}
 }
 
@@ -112,6 +122,11 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		processor = processor.WithOzonSync(options.ozonSync)
 		mux.HandleFunc(TaskOzonSweepSync, processor.HandleOzonSweepSync)
 		mux.HandleFunc(TaskOzonSyncCabinet, processor.HandleOzonSyncCabinet)
+	}
+	if options.ozonStrategy != nil && options.ozonSync != nil {
+		processor = processor.WithOzonStrategy(options.ozonStrategy)
+		mux.HandleFunc(TaskOzonStrategySweep, processor.HandleOzonStrategySweep)
+		mux.HandleFunc(TaskOzonStrategyRun, processor.HandleOzonStrategyRun)
 	}
 
 	// WB queues are all weight 1 and the server runs with Concurrency 1 so WB
@@ -217,6 +232,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 			taskType string
 			queue    string
 		}{ozonInterval, TaskOzonSweepSync, QueueOzonSync})
+		if options.ozonStrategy != nil {
+			strategyInterval := cfg.OzonStrategyInterval
+			if strategyInterval == "" {
+				strategyInterval = "@every 1h"
+			}
+			sweepEntries = append(sweepEntries, struct {
+				cron     string
+				taskType string
+				queue    string
+			}{strategyInterval, TaskOzonStrategySweep, QueueOzonSync})
+		}
 	}
 	for _, entry := range sweepEntries {
 		if _, err := scheduler.Register(entry.cron, NewSweepTask(entry.taskType), asynq.Queue(entry.queue)); err != nil {

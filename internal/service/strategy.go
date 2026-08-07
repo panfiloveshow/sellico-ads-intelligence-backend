@@ -249,7 +249,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeROAS,
 		domain.StrategyTypeAntiSliv,
 		domain.StrategyTypeDayparting,
-		domain.StrategyTypeSearchPlaybook:
+		domain.StrategyTypeSearchPlaybook,
+		domain.StrategyTypeOzonCPCTargetDRR:
 	case domain.StrategyTypeRecommendation:
 		return apperror.New(apperror.ErrValidation, "recommendation strategies are not executable; use explicit recommendation approval")
 	case domain.StrategyTypePriceMarginFloor,
@@ -309,6 +310,11 @@ func validateStrategyForSave(input domain.Strategy) error {
 		return validateDaypartingStrategy(params)
 	case domain.StrategyTypeSearchPlaybook:
 		return validateSearchPlaybookStrategy(params)
+	case domain.StrategyTypeOzonCPCTargetDRR:
+		// target_acos doubles as the target ДРР (ДРР == ACoS semantically).
+		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
+			return apperror.New(apperror.ErrValidation, "target_acos (target ДРР) must be greater than 0 and at most 1000")
+		}
 	}
 	return nil
 }
@@ -433,6 +439,39 @@ func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strate
 		return nil, apperror.New(apperror.ErrInternal, "failed to load strategy for ownership check")
 	}
 	strategy := strategyFromSqlc(strategyRow)
+	if domain.IsOzonStrategy(strategy.Type) {
+		// Ozon strategies bind to ozon_campaigns via the dedicated FK column;
+		// campaignID carries the ozon campaign UUID here. The WB live-ownership
+		// machinery does not apply — Ozon writes are serialized per cabinet by
+		// the ozon worker and audited in ozon_bid_changes.
+		if productID != nil {
+			return nil, apperror.New(apperror.ErrValidation, "ozon strategies bind to ozon campaigns only")
+		}
+		if campaignID == nil {
+			return nil, apperror.New(apperror.ErrValidation, "campaign_id (ozon campaign) is required for ozon strategies")
+		}
+		row, bindErr := qtx.CreateOzonStrategyBindingInWorkspace(ctx, sqlcgen.CreateOzonStrategyBindingInWorkspaceParams{
+			WorkspaceID:    uuidToPgtype(workspaceID),
+			StrategyID:     uuidToPgtype(strategyID),
+			OzonCampaignID: uuidToPgtype(*campaignID),
+		})
+		if bindErr != nil {
+			if errors.Is(bindErr, pgx.ErrNoRows) {
+				return nil, apperror.New(apperror.ErrNotFound, "strategy or ozon campaign not found")
+			}
+			return nil, apperror.New(apperror.ErrInternal, "failed to attach ozon strategy binding")
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, apperror.New(apperror.ErrInternal, "failed to commit strategy binding ownership")
+		}
+		ozonCampaign := uuidFromPgtype(row.OzonCampaignID)
+		return &domain.StrategyBinding{
+			ID:             uuidFromPgtype(row.ID),
+			StrategyID:     uuidFromPgtype(row.StrategyID),
+			OzonCampaignID: &ozonCampaign,
+			CreatedAt:      row.CreatedAt.Time,
+		}, nil
+	}
 	if strategyRequiresLiveOwnership(strategy.IsActive, strategy.Params.AutomationLevel) {
 		conflict, conflictErr := qtx.HasLiveStrategyOwnershipConflictForScope(ctx, sqlcgen.HasLiveStrategyOwnershipConflictForScopeParams{
 			WorkspaceID: uuidToPgtype(workspaceID), StrategyID: uuidToPgtype(strategyID),
