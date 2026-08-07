@@ -31,13 +31,21 @@ type aiChatClient interface {
 	Model() string
 }
 
+// aiManagerPerfClient is the narrow Performance-API surface the AI manager needs
+// directly (apply-time Ozon minimum-bid lookups). *ozon.PerfClient satisfies it
+// in production; tests supply a fake so the autopilot apply path is testable.
+type aiManagerPerfClient interface {
+	GetMinSKUBids(ctx context.Context, creds ozon.Credentials, skus []int64, paymentType string) ([]ozon.MinSKUBid, error)
+	GetCPOMinBids(ctx context.Context, creds ozon.Credentials, skus []int64) ([]ozon.MinSKUBid, error)
+}
+
 // OzonAIManagerService is the phase-3 AI autopilot: it packs cabinet context,
 // asks the LLM for proposals, validates every proposal with deterministic
 // guardrails, and applies the survivors through the same audited write paths
 // the manual endpoints use. The LLM never touches Ozon directly.
 type OzonAIManagerService struct {
 	queries       *sqlcgen.Queries
-	perfClient    *ozon.PerfClient
+	perfClient    aiManagerPerfClient
 	actions       *OzonCampaignActionsService
 	llm           aiChatClient
 	encryptionKey []byte

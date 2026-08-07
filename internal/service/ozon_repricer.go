@@ -37,6 +37,14 @@ const (
 	minOzonPriceDeltaRub = 1.0
 )
 
+// ozonPriceWriter is the narrow Seller-API surface the repricer needs to ship
+// price writes. *ozon.SellerClient satisfies it in production; tests supply a
+// fake so the audited apply/rollback/schedule paths can be exercised without a
+// live Ozon call.
+type ozonPriceWriter interface {
+	UpdatePrices(ctx context.Context, creds ozon.Credentials, items []ozon.PriceUpdate) ([]ozon.PriceUpdateResult, error)
+}
+
 // OzonManualPriceInput is one manual price write coming from the API layer.
 type OzonManualPriceInput struct {
 	SKU         int64    `json:"sku"`
@@ -54,7 +62,7 @@ type OzonManualPriceInput struct {
 // 10-changes-per-hour budget.
 type OzonRepricerService struct {
 	queries       *sqlcgen.Queries
-	sellerClient  *ozon.SellerClient
+	sellerClient  ozonPriceWriter
 	encryptionKey []byte
 	logger        zerolog.Logger
 }

@@ -46,13 +46,30 @@ type ozonBidLimitsCacheEntry struct {
 	expiresAt time.Time
 }
 
+// ozonCampaignPerfClient is the narrow Performance-API surface the campaign
+// actions service needs. *ozon.PerfClient satisfies it in production; tests
+// supply a fake so the audited write paths (activate/budget/bids/CPO) can be
+// exercised without a live Ozon call.
+type ozonCampaignPerfClient interface {
+	ActivateCampaign(ctx context.Context, creds ozon.Credentials, campaignID int64) error
+	DeactivateCampaign(ctx context.Context, creds ozon.Credentials, campaignID int64) error
+	UpdateCampaign(ctx context.Context, creds ozon.Credentials, campaignID int64, patch ozon.CampaignPatch) error
+	SetCampaignProductBids(ctx context.Context, creds ozon.Credentials, campaignID int64, bids []ozon.ProductBid) error
+	GetCompetitiveBids(ctx context.Context, creds ozon.Credentials, campaignID int64, skus []int64) ([]ozon.CompetitiveBid, error)
+	ListSearchPromoProducts(ctx context.Context, creds ozon.Credentials) ([]ozon.CPOProduct, error)
+	EnableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
+	DisableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
+	SetSearchPromoBids(ctx context.Context, creds ozon.Credentials, bids []ozon.CPOBid) error
+	GetBidLimits(ctx context.Context, creds ozon.Credentials) (json.RawMessage, error)
+}
+
 // OzonCampaignActionsService performs phase-2 writes towards Ozon: campaign
 // activate/deactivate, budget updates, manual per-SKU bids, and CPO (search
 // promo) management. Every bid write is audited in ozon_bid_changes
 // (source='manual', pending → applied/failed).
 type OzonCampaignActionsService struct {
 	queries       *sqlcgen.Queries
-	perfClient    *ozon.PerfClient
+	perfClient    ozonCampaignPerfClient
 	encryptionKey []byte
 	logger        zerolog.Logger
 

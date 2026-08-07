@@ -24,10 +24,12 @@ import (
 // --- fakes ---
 
 type fakeOzonService struct {
-	resolveFn       func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.SellerCabinet, error)
-	listCampaignsFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.OzonCampaignWithStats, int64, error)
-	getCampaignFn   func(ctx context.Context, workspaceID, campaignID uuid.UUID) (*domain.OzonCampaign, []domain.OzonCampaignProduct, error)
-	listStatsFn     func(ctx context.Context, workspaceID, campaignID uuid.UUID, from, to time.Time) ([]domain.OzonCampaignStat, error)
+	resolveFn         func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.SellerCabinet, error)
+	listCampaignsFn   func(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.OzonCampaignWithStats, int64, error)
+	getCampaignFn     func(ctx context.Context, workspaceID, campaignID uuid.UUID) (*domain.OzonCampaign, []domain.OzonCampaignProduct, error)
+	listStatsFn       func(ctx context.Context, workspaceID, campaignID uuid.UUID, from, to time.Time) ([]domain.OzonCampaignStat, error)
+	listPricesFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, search string, limit, offset int32) ([]domain.OzonProductPrice, int64, error)
+	listSearchQueryFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, search string, days int, limit, offset int32) ([]domain.OzonSearchQueryStat, int64, error)
 }
 
 func (f *fakeOzonService) ResolveOzonCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.SellerCabinet, error) {
@@ -58,12 +60,18 @@ func (f *fakeOzonService) ListCampaignStats(ctx context.Context, workspaceID, ca
 	return f.listStatsFn(ctx, workspaceID, campaignID, from, to)
 }
 
-func (f *fakeOzonService) ListPrices(context.Context, uuid.UUID, uuid.UUID, string, int32, int32) ([]domain.OzonProductPrice, int64, error) {
-	return nil, 0, nil
+func (f *fakeOzonService) ListPrices(ctx context.Context, workspaceID, cabinetID uuid.UUID, search string, limit, offset int32) ([]domain.OzonProductPrice, int64, error) {
+	if f.listPricesFn == nil {
+		return nil, 0, nil
+	}
+	return f.listPricesFn(ctx, workspaceID, cabinetID, search, limit, offset)
 }
 
-func (f *fakeOzonService) ListSearchQueries(context.Context, uuid.UUID, uuid.UUID, *int64, string, int, int32, int32) ([]domain.OzonSearchQueryStat, int64, error) {
-	return nil, 0, nil
+func (f *fakeOzonService) ListSearchQueries(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, search string, days int, limit, offset int32) ([]domain.OzonSearchQueryStat, int64, error) {
+	if f.listSearchQueryFn == nil {
+		return nil, 0, nil
+	}
+	return f.listSearchQueryFn(ctx, workspaceID, cabinetID, sku, search, days, limit, offset)
 }
 
 type fakeOzonActions struct {
@@ -71,6 +79,13 @@ type fakeOzonActions struct {
 	listBidChangesFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, campaignID *uuid.UUID, limit, offset int32) ([]domain.OzonBidChange, int64, error)
 	competitiveFn    func(ctx context.Context, workspaceID, campaignID uuid.UUID) ([]ozon.CompetitiveBid, error)
 	activateFn       func(ctx context.Context, workspaceID, campaignID uuid.UUID) error
+	deactivateFn     func(ctx context.Context, workspaceID, campaignID uuid.UUID) error
+	updateBudgetFn   func(ctx context.Context, workspaceID, campaignID uuid.UUID, dailyRub, weeklyRub *int64) error
+	listCPOFn        func(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.OzonCPOProduct, int64, error)
+	enableCPOFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error
+	disableCPOFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error
+	setCPOBidsFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID, bids []service.OzonCPOBidInput) error
+	bidLimitsFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (json.RawMessage, error)
 }
 
 func (f *fakeOzonActions) ActivateCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error {
@@ -79,9 +94,17 @@ func (f *fakeOzonActions) ActivateCampaign(ctx context.Context, workspaceID, cam
 	}
 	return f.activateFn(ctx, workspaceID, campaignID)
 }
-func (f *fakeOzonActions) DeactivateCampaign(context.Context, uuid.UUID, uuid.UUID) error { return nil }
-func (f *fakeOzonActions) UpdateBudget(context.Context, uuid.UUID, uuid.UUID, *int64, *int64) error {
-	return nil
+func (f *fakeOzonActions) DeactivateCampaign(ctx context.Context, workspaceID, campaignID uuid.UUID) error {
+	if f.deactivateFn == nil {
+		return nil
+	}
+	return f.deactivateFn(ctx, workspaceID, campaignID)
+}
+func (f *fakeOzonActions) UpdateBudget(ctx context.Context, workspaceID, campaignID uuid.UUID, dailyRub, weeklyRub *int64) error {
+	if f.updateBudgetFn == nil {
+		return nil
+	}
+	return f.updateBudgetFn(ctx, workspaceID, campaignID, dailyRub, weeklyRub)
 }
 
 func (f *fakeOzonActions) SetProductBids(ctx context.Context, workspaceID, campaignID uuid.UUID, items []service.OzonBidInput) ([]domain.OzonBidChange, error) {
@@ -105,26 +128,44 @@ func (f *fakeOzonActions) ListBidChanges(ctx context.Context, workspaceID, cabin
 	return f.listBidChangesFn(ctx, workspaceID, cabinetID, campaignID, limit, offset)
 }
 
-func (f *fakeOzonActions) ListCPOProducts(context.Context, uuid.UUID, uuid.UUID, int32, int32) ([]domain.OzonCPOProduct, int64, error) {
-	return nil, 0, nil
+func (f *fakeOzonActions) ListCPOProducts(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.OzonCPOProduct, int64, error) {
+	if f.listCPOFn == nil {
+		return nil, 0, nil
+	}
+	return f.listCPOFn(ctx, workspaceID, cabinetID, limit, offset)
 }
-func (f *fakeOzonActions) EnableCPO(context.Context, uuid.UUID, uuid.UUID, []int64) error {
-	return nil
+func (f *fakeOzonActions) EnableCPO(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error {
+	if f.enableCPOFn == nil {
+		return nil
+	}
+	return f.enableCPOFn(ctx, workspaceID, cabinetID, skus)
 }
-func (f *fakeOzonActions) DisableCPO(context.Context, uuid.UUID, uuid.UUID, []int64) error {
-	return nil
+func (f *fakeOzonActions) DisableCPO(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error {
+	if f.disableCPOFn == nil {
+		return nil
+	}
+	return f.disableCPOFn(ctx, workspaceID, cabinetID, skus)
 }
-func (f *fakeOzonActions) SetCPOBids(context.Context, uuid.UUID, uuid.UUID, []service.OzonCPOBidInput) error {
-	return nil
+func (f *fakeOzonActions) SetCPOBids(ctx context.Context, workspaceID, cabinetID uuid.UUID, bids []service.OzonCPOBidInput) error {
+	if f.setCPOBidsFn == nil {
+		return nil
+	}
+	return f.setCPOBidsFn(ctx, workspaceID, cabinetID, bids)
 }
-func (f *fakeOzonActions) GetBidLimits(context.Context, uuid.UUID, uuid.UUID) (json.RawMessage, error) {
-	return json.RawMessage(`{}`), nil
+func (f *fakeOzonActions) GetBidLimits(ctx context.Context, workspaceID, cabinetID uuid.UUID) (json.RawMessage, error) {
+	if f.bidLimitsFn == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	return f.bidLimitsFn(ctx, workspaceID, cabinetID)
 }
 
 type fakeOzonAI struct {
-	checkManualFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
-	approveFn     func(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
-	listRunsFn    func(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.AIRun, int64, error)
+	checkManualFn   func(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
+	approveFn       func(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
+	rejectFn        func(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
+	listRunsFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.AIRun, int64, error)
+	listDecisionsFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, runID *uuid.UUID, limit, offset int32) ([]domain.AIDecision, int64, error)
+	getImpactFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIImpactSummary, error)
 }
 
 func (f *fakeOzonAI) ListRuns(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.AIRun, int64, error) {
@@ -134,8 +175,11 @@ func (f *fakeOzonAI) ListRuns(ctx context.Context, workspaceID, cabinetID uuid.U
 	return f.listRunsFn(ctx, workspaceID, cabinetID, limit, offset)
 }
 
-func (f *fakeOzonAI) ListDecisions(context.Context, uuid.UUID, uuid.UUID, string, *uuid.UUID, int32, int32) ([]domain.AIDecision, int64, error) {
-	return nil, 0, nil
+func (f *fakeOzonAI) ListDecisions(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, runID *uuid.UUID, limit, offset int32) ([]domain.AIDecision, int64, error) {
+	if f.listDecisionsFn == nil {
+		return nil, 0, nil
+	}
+	return f.listDecisionsFn(ctx, workspaceID, cabinetID, status, runID, limit, offset)
 }
 
 func (f *fakeOzonAI) CheckManualRunAllowed(ctx context.Context, workspaceID, cabinetID uuid.UUID) error {
@@ -152,27 +196,45 @@ func (f *fakeOzonAI) ApproveDecision(ctx context.Context, workspaceID, decisionI
 	return f.approveFn(ctx, workspaceID, decisionID, userID)
 }
 
-func (f *fakeOzonAI) RejectDecision(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*domain.AIDecision, error) {
-	return &domain.AIDecision{}, nil
+func (f *fakeOzonAI) RejectDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error) {
+	if f.rejectFn == nil {
+		return &domain.AIDecision{}, nil
+	}
+	return f.rejectFn(ctx, workspaceID, decisionID, userID)
 }
 
-func (f *fakeOzonAI) GetImpact(context.Context, uuid.UUID, uuid.UUID) (*domain.AIImpactSummary, error) {
-	return &domain.AIImpactSummary{}, nil
+func (f *fakeOzonAI) GetImpact(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIImpactSummary, error) {
+	if f.getImpactFn == nil {
+		return &domain.AIImpactSummary{}, nil
+	}
+	return f.getImpactFn(ctx, workspaceID, cabinetID)
 }
 
 type fakeOzonRepricer struct {
-	applyManualFn   func(ctx context.Context, workspaceID, cabinetID uuid.UUID, items []service.OzonManualPriceInput, userID uuid.UUID) ([]domain.OzonPriceChange, error)
-	resolveFn       func(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
-	listSchedulesFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, limit, offset int32) ([]domain.OzonPriceScheduleEntry, int64, error)
-	heatmapFn       func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku int64, metric string) (*domain.OrdersHeatmap, error)
+	applyManualFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, items []service.OzonManualPriceInput, userID uuid.UUID) ([]domain.OzonPriceChange, error)
+	resolveFn          func(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
+	listSchedulesFn    func(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, limit, offset int32) ([]domain.OzonPriceScheduleEntry, int64, error)
+	heatmapFn          func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku int64, metric string) (*domain.OrdersHeatmap, error)
+	listPriceChangesFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, limit, offset int32) ([]domain.OzonPriceChange, int64, error)
+	rollbackFn         func(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error)
+	createScheduleFn   func(ctx context.Context, workspaceID, cabinetID uuid.UUID, in domain.OzonPriceScheduleInput) (*domain.OzonPriceScheduleEntry, error)
+	cancelScheduleFn   func(ctx context.Context, workspaceID, entryID uuid.UUID) error
+	setPauseFn         func(ctx context.Context, workspaceID, cabinetID uuid.UUID, hours int) (*time.Time, error)
+	healthFn           func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonRepricerHealth, error)
 }
 
-func (f *fakeOzonRepricer) ListPriceChanges(context.Context, uuid.UUID, uuid.UUID, *int64, int32, int32) ([]domain.OzonPriceChange, int64, error) {
-	return nil, 0, nil
+func (f *fakeOzonRepricer) ListPriceChanges(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, limit, offset int32) ([]domain.OzonPriceChange, int64, error) {
+	if f.listPriceChangesFn == nil {
+		return nil, 0, nil
+	}
+	return f.listPriceChangesFn(ctx, workspaceID, cabinetID, sku, limit, offset)
 }
 
-func (f *fakeOzonRepricer) Rollback(context.Context, uuid.UUID, uuid.UUID) (*domain.OzonPriceChange, error) {
-	return &domain.OzonPriceChange{}, nil
+func (f *fakeOzonRepricer) Rollback(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error) {
+	if f.rollbackFn == nil {
+		return &domain.OzonPriceChange{}, nil
+	}
+	return f.rollbackFn(ctx, workspaceID, changeID)
 }
 
 func (f *fakeOzonRepricer) ApplyManual(ctx context.Context, workspaceID, cabinetID uuid.UUID, items []service.OzonManualPriceInput, userID uuid.UUID) ([]domain.OzonPriceChange, error) {
@@ -189,8 +251,11 @@ func (f *fakeOzonRepricer) ResolveWorkspaceCabinet(ctx context.Context, workspac
 	return f.resolveFn(ctx, workspaceID, cabinetID)
 }
 
-func (f *fakeOzonRepricer) CreateSchedule(context.Context, uuid.UUID, uuid.UUID, domain.OzonPriceScheduleInput) (*domain.OzonPriceScheduleEntry, error) {
-	return &domain.OzonPriceScheduleEntry{}, nil
+func (f *fakeOzonRepricer) CreateSchedule(ctx context.Context, workspaceID, cabinetID uuid.UUID, in domain.OzonPriceScheduleInput) (*domain.OzonPriceScheduleEntry, error) {
+	if f.createScheduleFn == nil {
+		return &domain.OzonPriceScheduleEntry{}, nil
+	}
+	return f.createScheduleFn(ctx, workspaceID, cabinetID, in)
 }
 
 func (f *fakeOzonRepricer) ListSchedules(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, limit, offset int32) ([]domain.OzonPriceScheduleEntry, int64, error) {
@@ -200,14 +265,25 @@ func (f *fakeOzonRepricer) ListSchedules(ctx context.Context, workspaceID, cabin
 	return f.listSchedulesFn(ctx, workspaceID, cabinetID, status, limit, offset)
 }
 
-func (f *fakeOzonRepricer) CancelSchedule(context.Context, uuid.UUID, uuid.UUID) error { return nil }
-
-func (f *fakeOzonRepricer) SetPause(context.Context, uuid.UUID, uuid.UUID, int) (*time.Time, error) {
-	return nil, nil
+func (f *fakeOzonRepricer) CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error {
+	if f.cancelScheduleFn == nil {
+		return nil
+	}
+	return f.cancelScheduleFn(ctx, workspaceID, entryID)
 }
 
-func (f *fakeOzonRepricer) Health(context.Context, uuid.UUID, uuid.UUID) (*domain.OzonRepricerHealth, error) {
-	return &domain.OzonRepricerHealth{}, nil
+func (f *fakeOzonRepricer) SetPause(ctx context.Context, workspaceID, cabinetID uuid.UUID, hours int) (*time.Time, error) {
+	if f.setPauseFn == nil {
+		return nil, nil
+	}
+	return f.setPauseFn(ctx, workspaceID, cabinetID, hours)
+}
+
+func (f *fakeOzonRepricer) Health(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonRepricerHealth, error) {
+	if f.healthFn == nil {
+		return &domain.OzonRepricerHealth{}, nil
+	}
+	return f.healthFn(ctx, workspaceID, cabinetID)
 }
 
 func (f *fakeOzonRepricer) OrdersHeatmap(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku int64, metric string) (*domain.OrdersHeatmap, error) {

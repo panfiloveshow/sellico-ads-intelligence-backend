@@ -27,13 +27,15 @@ import (
 const (
 	// phrasesCampaignChunk is the documented campaign cap per statistics report.
 	phrasesCampaignChunk = 10
-	// phrasesPollInterval is how often the report state is polled.
-	phrasesPollInterval = 5 * time.Second
 	// phrasesPollTimeout bounds one report's generation wait.
 	phrasesPollTimeout = 5 * time.Minute
 	// rawSnippetLimit is how many raw bytes are logged on a decode failure.
 	rawSnippetLimit = 300
 )
+
+// phrasesPollInterval is how often the report state is polled. It is a var
+// (not a const) only so tests can shorten it; production never mutates it.
+var phrasesPollInterval = 5 * time.Second
 
 // PhraseStatRow is one parsed row of the phrases report: a search query with
 // its performance counters, optionally attributed to a SKU (0 = unknown).

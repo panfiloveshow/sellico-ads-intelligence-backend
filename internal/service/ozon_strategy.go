@@ -28,9 +28,17 @@ const ozonCampaignStateRunning = "CAMPAIGN_STATE_RUNNING"
 // shared BidEngine for a campaign-level decision (ДРР == ACoS math), applies
 // deterministic guardrails, and scales every per-SKU bid by the decision's
 // multiplier. AutomationLevel < 3 records shadow rows only.
+// ozonStrategyPerfClient is the narrow Performance-API surface the deterministic
+// bid sweep needs. *ozon.PerfClient satisfies it in production; tests supply a
+// fake so the live (level-3) write path can be exercised without a live call.
+type ozonStrategyPerfClient interface {
+	SetCampaignProductBids(ctx context.Context, creds ozon.Credentials, campaignID int64, bids []ozon.ProductBid) error
+	GetMinSKUBids(ctx context.Context, creds ozon.Credentials, skus []int64, paymentType string) ([]ozon.MinSKUBid, error)
+}
+
 type OzonStrategyService struct {
 	queries       *sqlcgen.Queries
-	perfClient    *ozon.PerfClient
+	perfClient    ozonStrategyPerfClient
 	engine        *BidEngine
 	encryptionKey []byte
 	logger        zerolog.Logger
