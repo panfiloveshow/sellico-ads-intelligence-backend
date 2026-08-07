@@ -117,10 +117,24 @@ func (s *SellerCabinetService) List(ctx context.Context, token, workspaceRef str
 		if !filter.matches(*cabinet) {
 			continue
 		}
+		s.fillOzonCapabilities(cabinet)
 		result = append(result, *cabinet)
 	}
 
 	return paginateCabinets(result, limit, offset), nil
+}
+
+// fillOzonCapabilities sets HasPerformanceAPI on Ozon cabinets so the
+// frontend can hide shops that cannot run ads (prices-only mode).
+func (s *SellerCabinetService) fillOzonCapabilities(cabinet *domain.SellerCabinet) {
+	if cabinet == nil || cabinet.Marketplace != domain.MarketplaceOzon {
+		return
+	}
+	has := false
+	if creds, err := decryptOzonCredentialsBlob(cabinet.EncryptedCredentials, s.encryptionKey); err == nil {
+		has = creds.HasPerformanceAPI()
+	}
+	cabinet.HasPerformanceAPI = &has
 }
 
 // Get resolves a seller cabinet by public ref (Sellico integration id or local UUID).
@@ -473,6 +487,7 @@ func (s *SellerCabinetService) listLocalCabinets(ctx context.Context, workspaceI
 		if !filter.matches(cabinet) {
 			continue
 		}
+		s.fillOzonCapabilities(&cabinet)
 		result = append(result, cabinet)
 	}
 	return paginateCabinets(result, limit, offset), nil

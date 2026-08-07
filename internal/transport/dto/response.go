@@ -134,6 +134,7 @@ type SellerCabinetResponse struct {
 	// keeps the legacy Sellico integration-type value ('WildBerries' | 'OZON')
 	// so existing consumers stay unbroken.
 	MarketplaceCode       string                         `json:"marketplace_code"`
+	HasPerformanceAPI     *bool                          `json:"has_performance_api,omitempty"`
 	Status                string                         `json:"status"`
 	Source                string                         `json:"source"`
 	ExternalIntegrationID *string                        `json:"integration_id,omitempty"`
@@ -263,6 +264,7 @@ func SellerCabinetFromDomain(sc domain.SellerCabinet) SellerCabinetResponse {
 		Name:                  sc.Name,
 		Marketplace:           marketplace,
 		MarketplaceCode:       sc.Marketplace,
+		HasPerformanceAPI:     sc.HasPerformanceAPI,
 		Status:                sc.Status,
 		Source:                sc.Source,
 		ExternalIntegrationID: sc.ExternalIntegrationID,

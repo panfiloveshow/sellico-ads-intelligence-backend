@@ -265,6 +265,9 @@ type SellerCabinet struct {
 	Marketplace           string                        `json:"marketplace"`
 	EncryptedToken        string                        `json:"-"`
 	EncryptedCredentials  string                        `json:"-"`
+	// HasPerformanceAPI is set for Ozon cabinets only: whether the Sellico
+	// integration carries Performance API credentials (ads management).
+	HasPerformanceAPI *bool `json:"has_performance_api,omitempty"`
 	Status                string                        `json:"status"`
 	ExternalIntegrationID *string                       `json:"external_integration_id,omitempty"`
 	Source                string                        `json:"source"`

@@ -4181,6 +4181,11 @@ components:
           type: string
           enum: [wb, ozon]
           description: Canonical marketplace code
+        has_performance_api:
+          type: boolean
+          description: >-
+            Ozon cabinets only: whether Performance API credentials are
+            present (ads management available). Absent for WB cabinets.
         status:
           type: string
         last_synced_at:
