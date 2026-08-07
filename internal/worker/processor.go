@@ -107,6 +107,7 @@ type ozonSyncRunner interface {
 	SyncCabinet(ctx context.Context, cabinetID uuid.UUID) error
 	ListOzonCabinetIDs(ctx context.Context) ([]uuid.UUID, error)
 	SyncAnalyticsAllCabinets(ctx context.Context) error
+	SyncPostingsAllCabinets(ctx context.Context) error
 }
 
 // ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
@@ -592,6 +593,21 @@ func (p *Processor) HandleOzonAnalyticsSync(ctx context.Context, _ *asynq.Task) 
 		return err
 	}
 	p.logger.Info().Msg("ozon analytics sync completed")
+	return nil
+}
+
+// HandleOzonPostingsSync rebuilds the 7×24 orders heatmap for every Ozon
+// cabinet sequentially from FBO+FBS postings (feeds ozon_price_peak_hours).
+func (p *Processor) HandleOzonPostingsSync(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping postings sync")
+		return nil
+	}
+	if err := p.ozonSync.SyncPostingsAllCabinets(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon postings sync finished with errors")
+		return err
+	}
+	p.logger.Info().Msg("ozon postings sync completed")
 	return nil
 }
 

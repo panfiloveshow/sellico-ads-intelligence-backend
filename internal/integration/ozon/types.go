@@ -164,6 +164,17 @@ type SalesDaily struct {
 	RevenueRub   float64
 }
 
+// PostingSale is one flat (sku, order timestamp, quantity) record extracted
+// from an FBO/FBS posting: one posting with N products yields N records
+// sharing the posting's creation time. SKU is the SALES sku (the same key
+// space as SalesDaily / ozon_sales_daily). CreatedAt keeps the timezone the
+// API sent (RFC3339, normally UTC) — callers convert to MSK before bucketing.
+type PostingSale struct {
+	SKU       int64
+	CreatedAt time.Time
+	Quantity  int64
+}
+
 // Campaign is one campaign from GET /api/client/campaign, with budgets
 // already converted from micro-rubles to whole rubles.
 type Campaign struct {

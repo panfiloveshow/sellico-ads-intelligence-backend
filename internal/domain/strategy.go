@@ -75,6 +75,11 @@ const (
 	// derived from ozon_campaign_stats via ozon_campaign_products.
 	StrategyTypeOzonPriceInventoryDemand = "ozon_price_inventory_demand"
 	StrategyTypeOzonPriceAdLinked        = "ozon_price_ad_linked"
+
+	// Phase 6: «Цена по спросу» on the ozon_orders_hourly 7×24 heatmap built
+	// from FBO/FBS postings. Reuses the pure WB DecidePeakHours engine with
+	// per-SKU slot intensity (cabinet-aggregated fallback for thin SKUs).
+	StrategyTypeOzonPricePeakHours = "ozon_price_peak_hours"
 )
 
 // IsOzonStrategy reports whether a strategy type belongs to the Ozon module.
@@ -92,7 +97,8 @@ func IsOzonPriceStrategy(strategyType string) bool {
 	case StrategyTypeOzonPriceMarginFloor,
 		StrategyTypeOzonPriceCompetitorFollow,
 		StrategyTypeOzonPriceInventoryDemand,
-		StrategyTypeOzonPriceAdLinked:
+		StrategyTypeOzonPriceAdLinked,
+		StrategyTypeOzonPricePeakHours:
 		return true
 	}
 	return false

@@ -235,6 +235,7 @@ func TestNewRouter_OzonRepricerParityRoutes(t *testing.T) {
 	assert.True(t, set["DELETE /api/v1/ozon/price-schedules/{id}"], "missing DELETE /api/v1/ozon/price-schedules/{id}")
 	assert.True(t, set["POST /api/v1/ozon/prices/pause"], "missing POST /api/v1/ozon/prices/pause")
 	assert.True(t, set["GET /api/v1/ozon/repricer/health"], "missing GET /api/v1/ozon/repricer/health")
+	assert.True(t, set["GET /api/v1/ozon/prices/heatmap"], "missing GET /api/v1/ozon/prices/heatmap")
 }
 
 func TestPublicRoutes_NoAuth(t *testing.T) {

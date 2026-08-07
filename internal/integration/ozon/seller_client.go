@@ -549,6 +549,152 @@ func (c *SellerClient) GetAnalyticsSalesDaily(ctx context.Context, creds Credent
 	}
 }
 
+// postingsPageSize is the Ozon limit for one posting/fbo|fbs/list request.
+const postingsPageSize = 1000
+
+// postingWireItem is one posting from /v2/posting/fbo/list or
+// /v3/posting/fbs/list, parsed defensively: numbers may arrive as strings and
+// only the fields the heatmap needs are read. in_process_at is when the order
+// actually entered processing (payment) — it is preferred over created_at.
+type postingWireItem struct {
+	InProcessAt string `json:"in_process_at"`
+	CreatedAt   string `json:"created_at"`
+	Products    []struct {
+		SKU      flexInt64 `json:"sku"`
+		Quantity flexInt64 `json:"quantity"`
+	} `json:"products"`
+}
+
+// orderedAt picks the posting's order timestamp: in_process_at first,
+// created_at as fallback. RFC3339 with or without fractional seconds.
+func (w postingWireItem) orderedAt() (time.Time, bool) {
+	for _, raw := range []string{w.InProcessAt, w.CreatedAt} {
+		if raw == "" {
+			continue
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			return parsed, true
+		}
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// postingsWireResponse accepts both posting list shapes: FBO returns
+// {"result":[...]} while FBS returns {"result":{"postings":[...]}} — and the
+// docs have drifted between them, so both endpoints are parsed with both
+// wrappers.
+type postingsWireResponse struct {
+	Result json.RawMessage `json:"result"`
+}
+
+// items extracts the posting array from either wrapper shape.
+func (r postingsWireResponse) items() []postingWireItem {
+	if len(r.Result) == 0 {
+		return nil
+	}
+	var direct []postingWireItem
+	if err := json.Unmarshal(r.Result, &direct); err == nil {
+		return direct
+	}
+	var wrapped struct {
+		Postings []postingWireItem `json:"postings"`
+	}
+	if err := json.Unmarshal(r.Result, &wrapped); err == nil {
+		return wrapped.Postings
+	}
+	return nil
+}
+
+// flattenPostings converts postings into flat PostingSale records (one per
+// product line). Postings without a parseable timestamp or without a sales
+// SKU are dropped; zero/negative quantities count as 1 defensively.
+func flattenPostings(items []postingWireItem) []PostingSale {
+	var out []PostingSale
+	for _, item := range items {
+		createdAt, ok := item.orderedAt()
+		if !ok {
+			continue
+		}
+		for _, product := range item.Products {
+			if product.SKU == 0 {
+				continue
+			}
+			quantity := int64(product.Quantity)
+			if quantity <= 0 {
+				quantity = 1
+			}
+			out = append(out, PostingSale{
+				SKU:       int64(product.SKU),
+				CreatedAt: createdAt,
+				Quantity:  quantity,
+			})
+		}
+	}
+	return out
+}
+
+// listPostingsPath pages one posting list endpoint (offset pagination) and
+// returns the flattened records.
+func (c *SellerClient) listPostingsPath(ctx context.Context, creds Credentials, path string, since, to time.Time) ([]PostingSale, error) {
+	type filter struct {
+		Since string `json:"since"`
+		To    string `json:"to"`
+	}
+	type request struct {
+		Dir    string   `json:"dir"`
+		Filter filter   `json:"filter"`
+		Limit  int      `json:"limit"`
+		Offset int      `json:"offset"`
+		With   struct{} `json:"with"`
+	}
+
+	var out []PostingSale
+	for offset := 0; ; offset += postingsPageSize {
+		req := request{
+			Dir: "ASC",
+			Filter: filter{
+				Since: since.UTC().Format(time.RFC3339),
+				To:    to.UTC().Format(time.RFC3339),
+			},
+			Limit:  postingsPageSize,
+			Offset: offset,
+		}
+		body, err := c.do(ctx, creds, path, req)
+		if err != nil {
+			return nil, err
+		}
+		var resp postingsWireResponse
+		if err := decodeJSON(body, &resp, path); err != nil {
+			return nil, err
+		}
+		items := resp.items()
+		out = append(out, flattenPostings(items)...)
+		if len(items) < postingsPageSize {
+			return out, nil
+		}
+	}
+}
+
+// ListPostings pulls FBO + FBS postings for [since, to] via
+// POST /v2/posting/fbo/list and POST /v3/posting/fbs/list (offset pagination,
+// 1000 per page) and returns the merged flat (sku, created_at, quantity)
+// records for heatmap aggregation. A failure on either endpoint fails the
+// whole pull — a half-merged heatmap would silently skew intensities.
+func (c *SellerClient) ListPostings(ctx context.Context, creds Credentials, since, to time.Time) ([]PostingSale, error) {
+	fbo, err := c.listPostingsPath(ctx, creds, "/v2/posting/fbo/list", since, to)
+	if err != nil {
+		return nil, fmt.Errorf("posting/fbo/list: %w", err)
+	}
+	fbs, err := c.listPostingsPath(ctx, creds, "/v3/posting/fbs/list", since, to)
+	if err != nil {
+		return nil, fmt.Errorf("posting/fbs/list: %w", err)
+	}
+	return append(fbo, fbs...), nil
+}
+
 // do executes one Seller API POST with rate limiting, retry (429 honors
 // Retry-After, 5xx uses exponential backoff — these are idempotent reads)
 // and Prometheus metrics.

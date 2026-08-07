@@ -262,7 +262,8 @@ func validateStrategyForSave(input domain.Strategy) error {
 		domain.StrategyTypeOzonPriceMarginFloor,
 		domain.StrategyTypeOzonPriceCompetitorFollow,
 		domain.StrategyTypeOzonPriceInventoryDemand,
-		domain.StrategyTypeOzonPriceAdLinked:
+		domain.StrategyTypeOzonPriceAdLinked,
+		domain.StrategyTypeOzonPricePeakHours:
 		return validatePriceStrategy(input)
 	default:
 		return apperror.New(apperror.ErrValidation, "invalid strategy type")

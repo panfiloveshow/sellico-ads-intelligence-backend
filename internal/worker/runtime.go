@@ -146,6 +146,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		mux.HandleFunc(TaskOzonSweepSync, processor.HandleOzonSweepSync)
 		mux.HandleFunc(TaskOzonSyncCabinet, processor.HandleOzonSyncCabinet)
 		mux.HandleFunc(TaskOzonAnalyticsSync, processor.HandleOzonAnalyticsSync)
+		mux.HandleFunc(TaskOzonPostingsSync, processor.HandleOzonPostingsSync)
 	}
 	if options.ozonStrategy != nil && options.ozonSync != nil {
 		processor = processor.WithOzonStrategy(options.ozonStrategy)
@@ -281,6 +282,18 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 			taskType string
 			queue    string
 		}{analyticsInterval, TaskOzonAnalyticsSync, QueueOzonSync})
+		// Postings heatmap: full 28-day rewrite per cabinet — 6h keeps the
+		// matrix fresh without hammering the posting list endpoints. No
+		// startup kick: the heatmap only shifts materially day-over-day.
+		postingsInterval := cfg.OzonPostingsInterval
+		if postingsInterval == "" {
+			postingsInterval = "@every 6h"
+		}
+		sweepEntries = append(sweepEntries, struct {
+			cron     string
+			taskType string
+			queue    string
+		}{postingsInterval, TaskOzonPostingsSync, QueueOzonSync})
 		if options.ozonStrategy != nil {
 			strategyInterval := cfg.OzonStrategyInterval
 			if strategyInterval == "" {
@@ -430,6 +443,12 @@ func (r *Runtime) Start() error {
 				asynq.Queue(QueueOzonSync), asynq.ProcessIn(2*time.Minute), asynq.Unique(30*time.Minute)); err != nil {
 				r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon ai sweep")
 			}
+		}
+		// Postings (orders heatmap) — read-only pull; without a kick the first
+		// 7×24 demand matrix appears only OZON_POSTINGS_INTERVAL after deploy.
+		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonPostingsSync),
+			asynq.Queue(QueueOzonSync), asynq.ProcessIn(90*time.Second), asynq.Unique(30*time.Minute)); err != nil {
+			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon postings sync")
 		}
 	}
 	return nil

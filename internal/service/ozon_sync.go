@@ -486,6 +486,110 @@ func (s *OzonSyncService) SyncSalesDaily(ctx context.Context, cabinet domain.Sel
 	return nil
 }
 
+// ozonPostingsWindowDays is the postings heatmap aggregation window: 4 full
+// weeks, so every (day-of-week × hour) slot averages exactly 4 samples.
+const ozonPostingsWindowDays = 28
+
+// ozonMSKSlot converts an order timestamp to its MSK heatmap slot:
+// dow 0=Пн .. 6=Вс (ISO day-of-week − 1) and hour 0..23. Same timezone
+// convention as the WB heatmap (parseReportDateTime → mskLocation).
+func ozonMSKSlot(t time.Time) (dow, hour int16) {
+	msk := t.In(mskLocation)
+	iso := int(msk.Weekday())
+	if iso == 0 {
+		iso = 7 // ISO: Sunday = 7
+	}
+	return int16(iso - 1), int16(msk.Hour())
+}
+
+// aggregateOzonPostings buckets flat posting records into the 7×24 MSK matrix
+// per sales SKU. Pure (unit-tested); records without a SKU or timestamp are
+// dropped. Output order is deterministic (first-seen).
+func aggregateOzonPostings(postings []ozon.PostingSale) []sqlcgen.OzonOrdersHourlyRow {
+	type slotKey struct {
+		sku       int64
+		dow, hour int16
+	}
+	agg := map[slotKey]*sqlcgen.OzonOrdersHourlyRow{}
+	var order []slotKey
+	for _, posting := range postings {
+		if posting.SKU == 0 || posting.CreatedAt.IsZero() {
+			continue
+		}
+		dow, hour := ozonMSKSlot(posting.CreatedAt)
+		key := slotKey{sku: posting.SKU, dow: dow, hour: hour}
+		row, ok := agg[key]
+		if !ok {
+			row = &sqlcgen.OzonOrdersHourlyRow{Sku: posting.SKU, Dow: dow, Hour: hour}
+			agg[key] = row
+			order = append(order, key)
+		}
+		row.Orders++
+		row.Quantity += clampInt32(posting.Quantity)
+	}
+	out := make([]sqlcgen.OzonOrdersHourlyRow, 0, len(order))
+	for _, key := range order {
+		out = append(out, *agg[key])
+	}
+	return out
+}
+
+// SyncPostings rebuilds one cabinet's 7×24 orders heatmap (ozon_orders_hourly)
+// from the last ozonPostingsWindowDays days of FBO+FBS postings. The rewrite
+// is transactional (delete + insert), so readers never see a half-window.
+func (s *OzonSyncService) SyncPostings(ctx context.Context, cabinet domain.SellerCabinet) error {
+	creds, err := s.credentials(cabinet)
+	if err != nil {
+		return err
+	}
+	if !creds.HasSellerAPI() {
+		return fmt.Errorf("seller api credentials missing")
+	}
+
+	to := time.Now().UTC()
+	since := to.AddDate(0, 0, -ozonPostingsWindowDays)
+	postings, err := s.sellerClient.ListPostings(ctx, ozonClientCreds(creds), since, to)
+	if err != nil {
+		return fmt.Errorf("posting list: %w", err)
+	}
+	rows := aggregateOzonPostings(postings)
+	// An empty pull still rewrites (clears) the heatmap: keeping a stale
+	// matrix would silently drive the peak-hours strategy on dead data.
+	if err := s.queries.ReplaceOzonOrdersHourly(ctx, uuidToPgtype(cabinet.ID), rows); err != nil {
+		return fmt.Errorf("replace orders hourly: %w", err)
+	}
+
+	s.logger.Info().
+		Str("cabinet_id", cabinet.ID.String()).
+		Int("postings", len(postings)).
+		Int("slots", len(rows)).
+		Msg("ozon postings heatmap synced")
+	return nil
+}
+
+// SyncPostingsAllCabinets runs SyncPostings for every active Ozon cabinet
+// SEQUENTIALLY (mirrors SyncAnalyticsAllCabinets): posting lists page at the
+// shared Seller API budget and one slow cabinet must not fail the rest.
+func (s *OzonSyncService) SyncPostingsAllCabinets(ctx context.Context) error {
+	cabinetIDs, err := s.ListOzonCabinetIDs(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, cabinetID := range cabinetIDs {
+		cabinet, loadErr := s.loadOzonCabinet(ctx, cabinetID)
+		if loadErr != nil {
+			errs = append(errs, fmt.Errorf("cabinet %s: %w", cabinetID, loadErr))
+			continue
+		}
+		if syncErr := s.SyncPostings(ctx, *cabinet); syncErr != nil {
+			s.logger.Warn().Err(syncErr).Str("cabinet_id", cabinetID.String()).Msg("ozon postings sync failed for cabinet")
+			errs = append(errs, fmt.Errorf("cabinet %s: %w", cabinetID, syncErr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // SyncAnalyticsAllCabinets runs SyncSalesDaily for every active Ozon cabinet
 // SEQUENTIALLY — the per-cabinet 1/min analytics budget makes parallelism
 // pointless, and one slow cabinet must not fail the rest.

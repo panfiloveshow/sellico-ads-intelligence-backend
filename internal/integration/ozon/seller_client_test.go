@@ -133,3 +133,94 @@ func TestProductInfoWireItem_PrimaryImageVariants(t *testing.T) {
 		})
 	}
 }
+
+// TestPostingsWireResponse_BothWrappers covers the two posting-list response
+// shapes: FBO's {"result":[...]} and FBS's {"result":{"postings":[...]}} —
+// both endpoints are parsed with both wrappers because the docs have drifted.
+func TestPostingsWireResponse_BothWrappers(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    int
+	}{
+		{
+			name:    "fbo: result as array",
+			payload: `{"result": [{"created_at": "2026-08-03T09:00:00Z", "products": [{"sku": 111, "quantity": 1}]}]}`,
+			want:    1,
+		},
+		{
+			name:    "fbs: result.postings",
+			payload: `{"result": {"postings": [{"in_process_at": "2026-08-03T09:00:00Z", "products": [{"sku": 111, "quantity": 2}]}], "has_next": false}}`,
+			want:    1,
+		},
+		{
+			name:    "empty result",
+			payload: `{"result": []}`,
+			want:    0,
+		},
+		{
+			name:    "missing result",
+			payload: `{}`,
+			want:    0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp postingsWireResponse
+			if err := json.Unmarshal([]byte(tc.payload), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got := len(resp.items()); got != tc.want {
+				t.Errorf("items() = %d postings, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFlattenPostings covers the flat-record extraction: in_process_at wins
+// over created_at, string numbers are accepted, product lines fan out, and
+// zero quantity defensively counts as one unit.
+func TestFlattenPostings(t *testing.T) {
+	payload := `{"result": [
+		{
+			"in_process_at": "2026-08-03T12:30:00Z",
+			"created_at": "2026-08-03T09:00:00Z",
+			"products": [
+				{"sku": "111", "quantity": "2"},
+				{"sku": 222, "quantity": 0},
+				{"sku": 0, "quantity": 3}
+			]
+		},
+		{
+			"created_at": "2026-08-04T10:00:00.123Z",
+			"products": [{"sku": 333, "quantity": 1}]
+		},
+		{
+			"products": [{"sku": 444, "quantity": 1}]
+		}
+	]}`
+	var resp postingsWireResponse
+	if err := json.Unmarshal([]byte(payload), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	sales := flattenPostings(resp.items())
+	if len(sales) != 3 {
+		t.Fatalf("sales = %d records (%+v), want 3", len(sales), sales)
+	}
+	first := sales[0]
+	if first.SKU != 111 || first.Quantity != 2 {
+		t.Errorf("first = %+v, want sku=111 quantity=2", first)
+	}
+	wantTime := "2026-08-03T12:30:00Z" // in_process_at preferred over created_at
+	if got := first.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"); got != wantTime {
+		t.Errorf("first.CreatedAt = %s, want %s", got, wantTime)
+	}
+	second := sales[1]
+	if second.SKU != 222 || second.Quantity != 1 {
+		t.Errorf("second = %+v, want sku=222 quantity=1 (zero quantity counts as one)", second)
+	}
+	third := sales[2]
+	if third.SKU != 333 {
+		t.Errorf("third = %+v, want sku=333 (fractional-second timestamp accepted)", third)
+	}
+}

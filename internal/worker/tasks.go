@@ -81,6 +81,11 @@ const (
 	TaskOzonAnalyticsSync    = "ozon:sync_analytics"
 	TaskOzonExecuteSchedules = "ozon:execute_schedules"
 
+	// Ozon module (phase 6: orders heatmap). FBO+FBS postings are aggregated
+	// into the 7×24 ozon_orders_hourly matrix — sequential across cabinets on
+	// its own low-frequency schedule (OZON_POSTINGS_INTERVAL).
+	TaskOzonPostingsSync = "ozon:sync_postings"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"

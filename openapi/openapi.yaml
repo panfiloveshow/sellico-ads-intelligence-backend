@@ -3641,6 +3641,32 @@ paths:
                       paused_until: { type: string, format: date-time, nullable: true }
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/prices/heatmap:
+    get:
+      tags: [Ozon]
+      summary: Get the 7 by 24 order heatmap built from FBO/FBS postings (mirrors the WB /prices/heatmap shape; revenue is always 0)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: sku
+          in: query
+          description: Sales SKU or Seller API product_id (bridged via the product mapping)
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: metric
+          in: query
+          schema: { type: string, enum: [units, orders], default: units }
+      responses:
+        "200":
+          description: Orders heatmap over the last 28 days
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrdersHeatmapEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/repricer/health:
     get:
       tags: [Ozon]
@@ -6223,6 +6249,14 @@ components:
         allow_increase_without_stock:
           type: boolean
           description: Explicit override for increasing bids when stock data is unavailable. Defaults to false.
+        peak_uplift_percent:
+          type: number
+          format: double
+          description: price_peak_hours / ozon_price_peak_hours — percent above the current price at a demand peak. Defaults to 8.
+        dead_discount_percent:
+          type: number
+          format: double
+          description: price_peak_hours / ozon_price_peak_hours — percent below the current price at a dead hour. Defaults to 12.
 
     Strategy:
       type: object
@@ -6251,6 +6285,7 @@ components:
             - ozon_price_competitor_follow
             - ozon_price_inventory_demand
             - ozon_price_ad_linked
+            - ozon_price_peak_hours
         params:
           $ref: "#/components/schemas/StrategyParams"
         is_active: { type: boolean }

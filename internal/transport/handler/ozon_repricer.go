@@ -30,6 +30,7 @@ type ozonRepricerServicer interface {
 	CancelSchedule(ctx context.Context, workspaceID, entryID uuid.UUID) error
 	SetPause(ctx context.Context, workspaceID, cabinetID uuid.UUID, hours int) (*time.Time, error)
 	Health(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonRepricerHealth, error)
+	OrdersHeatmap(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku int64, metric string) (*domain.OrdersHeatmap, error)
 }
 
 // ozonRepricerRunEnqueuer enqueues an async ozon:repricer_run for a workspace.
@@ -230,6 +231,39 @@ func (h *OzonHandler) PauseRepricer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, map[string]*time.Time{"paused_until": until})
+}
+
+// PricesHeatmap handles GET /ozon/prices/heatmap?cabinet_id=&sku=&metric=.
+// The response mirrors WB GET /prices/heatmap (same 7×24 matrix DTO) so the
+// frontend reuses the heatmap component; revenue is not available on Ozon.
+func (h *OzonHandler) PricesHeatmap(w http.ResponseWriter, r *http.Request) {
+	if !h.requireRepricer(w) {
+		return
+	}
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	var sku int64
+	if raw := r.URL.Query().Get("sku"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "sku must be a positive integer")
+			return
+		}
+		sku = parsed
+	}
+	metric := r.URL.Query().Get("metric")
+	if !allowedValue(metric, "", domain.HeatmapMetricUnits, domain.HeatmapMetricOrders) {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "metric must be units or orders")
+		return
+	}
+	hm, err := h.repricer.OrdersHeatmap(r.Context(), workspaceID, cabinetID, sku, metric)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, hm)
 }
 
 // RepricerHealth handles GET /ozon/repricer/health?cabinet_id=.

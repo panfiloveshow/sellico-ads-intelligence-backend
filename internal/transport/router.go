@@ -559,6 +559,8 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.With(middleware.RequireWriteAccess()).Delete("/price-schedules/{id}", deps.OzonHandler.CancelPriceSchedule)
 						oz.With(middleware.RequireWriteAccess()).Post("/prices/pause", deps.OzonHandler.PauseRepricer)
 						oz.Get("/repricer/health", deps.OzonHandler.RepricerHealth)
+						// Phase 6: postings-based 7×24 heatmap (peak-hours strategy)
+						oz.Get("/prices/heatmap", deps.OzonHandler.PricesHeatmap)
 						// Phase 3: AI autopilot (runs, decisions, copilot approvals)
 						oz.Get("/ai/runs", deps.OzonHandler.AIListRuns)
 						oz.Get("/ai/decisions", deps.OzonHandler.AIListDecisions)

@@ -430,6 +430,9 @@ func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uui
 	case domain.StrategyTypeOzonPriceInventoryDemand:
 		stock, stockKnown := aux.presentByProductID[row.Sku]
 		decision = decideOzonInventoryDemand(current, floor, stock, stockKnown, aux.velocityForProduct(row.Sku), strategy.Params)
+	case domain.StrategyTypeOzonPricePeakHours:
+		intensity, hasDemandData := aux.peakIntensityForProduct(row.Sku)
+		decision = decideOzonPeakHours(current, floor, intensity, hasDemandData, strategy.Params)
 	case domain.StrategyTypeOzonPriceAdLinked:
 		salesSKU := aux.salesSKUByProductID[row.Sku]
 		var maxDRRFallback *float64
@@ -502,6 +505,30 @@ type ozonStrategyAux struct {
 	// spendBySalesSKU: ad spend rubles over the window (ad-linked only acts
 	// on SKUs with spend > 0).
 	spendBySalesSKU map[int64]float64
+	// peakIntensityBySalesSKU: current MSK-slot demand intensity (0..1) and
+	// total window orders per sales SKU (ozon_price_peak_hours).
+	peakIntensityBySalesSKU map[int64]sqlcgen.OzonSlotIntensity
+	// peakCabinetIntensity: cabinet-aggregated slot intensity, the fallback
+	// for SKUs with fewer than ozonPeakHoursMinSKUOrders orders in the window.
+	peakCabinetIntensity float64
+	peakCabinetHasData   bool
+}
+
+// ozonPeakHoursMinSKUOrders: below this many orders in the 28-day window a
+// SKU's own heatmap is noise — the cabinet-aggregated matrix decides instead.
+const ozonPeakHoursMinSKUOrders = 20
+
+// peakIntensityForProduct resolves the demand intensity for a price row via
+// the sales-SKU mapping: the SKU's own slot intensity when it has enough
+// orders, the cabinet aggregate otherwise. ok=false → no demand data at all.
+func (a ozonStrategyAux) peakIntensityForProduct(productID int64) (float64, bool) {
+	if slot, ok := a.peakIntensityBySalesSKU[a.salesSKUByProductID[productID]]; ok && slot.TotalOrders >= ozonPeakHoursMinSKUOrders {
+		return slot.Intensity, true
+	}
+	if a.peakCabinetHasData {
+		return a.peakCabinetIntensity, true
+	}
+	return 0, false
 }
 
 // velocityForProduct resolves units/day for a price row via the sales-SKU
@@ -514,22 +541,25 @@ func (a ozonStrategyAux) velocityForProduct(productID int64) float64 {
 // cabinet actually needs them.
 func (s *OzonRepricerService) loadStrategyAux(ctx context.Context, cabinetID uuid.UUID, strategies []domain.Strategy) (ozonStrategyAux, error) {
 	aux := ozonStrategyAux{
-		presentByProductID:  map[int64]int64{},
-		salesSKUByProductID: map[int64]int64{},
-		velocityBySalesSKU:  map[int64]float64{},
-		drrBySalesSKU:       map[int64]float64{},
-		spendBySalesSKU:     map[int64]float64{},
+		presentByProductID:      map[int64]int64{},
+		salesSKUByProductID:     map[int64]int64{},
+		velocityBySalesSKU:      map[int64]float64{},
+		drrBySalesSKU:           map[int64]float64{},
+		spendBySalesSKU:         map[int64]float64{},
+		peakIntensityBySalesSKU: map[int64]sqlcgen.OzonSlotIntensity{},
 	}
-	needsInventory, needsAd := false, false
+	needsInventory, needsAd, needsPeak := false, false, false
 	for _, strategy := range strategies {
 		switch strategy.Type {
 		case domain.StrategyTypeOzonPriceInventoryDemand:
 			needsInventory = true
 		case domain.StrategyTypeOzonPriceAdLinked:
 			needsAd = true
+		case domain.StrategyTypeOzonPricePeakHours:
+			needsPeak = true
 		}
 	}
-	if !needsInventory && !needsAd {
+	if !needsInventory && !needsAd && !needsPeak {
 		return aux, nil
 	}
 
@@ -564,6 +594,21 @@ func (s *OzonRepricerService) loadStrategyAux(ctx context.Context, cabinetID uui
 		for _, row := range salesRows {
 			aux.velocityBySalesSKU[row.Sku] = float64(row.Units) / float64(ozonVelocityLookbackDays)
 		}
+	}
+	if needsPeak {
+		// Current MSK time slot, the same convention as the heatmap sync
+		// (dow 0=Пн..6=Вс) and the WB peak-hours precedent.
+		dow, hour := ozonMSKSlot(time.Now())
+		slotIntensities, err := s.queries.OzonSlotIntensities(ctx, uuidToPgtype(cabinetID), dow, hour)
+		if err != nil {
+			return aux, fmt.Errorf("load slot intensities: %w", err)
+		}
+		aux.peakIntensityBySalesSKU = slotIntensities
+		cabinetIntensity, hasData, err := s.queries.OzonCabinetSlotIntensity(ctx, uuidToPgtype(cabinetID), dow, hour)
+		if err != nil {
+			return aux, fmt.Errorf("load cabinet slot intensity: %w", err)
+		}
+		aux.peakCabinetIntensity, aux.peakCabinetHasData = cabinetIntensity, hasData
 	}
 	if needsAd {
 		adRows, err := s.queries.OzonSkuAdSpendByCabinet(ctx, sqlcgen.OzonSkuAdSpendByCabinetParams{
@@ -663,6 +708,24 @@ func decideOzonAdLinked(currentRub, floorRub float64, drr *float64, spendRub flo
 	}
 	in.Economics.MaxAllowedDRR = maxDRRFallback
 	return ozonDecisionFromEngine(DecideAdLinked(in, ozonEngineParams(params, floorRub)), floorRub)
+}
+
+// decideOzonPeakHours runs «Цена по спросу» for one Ozon product: the target
+// sits between current×(1−dead%) at a dead hour and current×(1+peak%) at a
+// demand peak, interpolated by the current MSK slot's order intensity from
+// ozon_orders_hourly. Reuses the pure WB DecidePeakHours engine (floor clamp,
+// ±step% per-run cap, 1% dead-band, max_price required for auto raises).
+func decideOzonPeakHours(currentRub, floorRub, intensity float64, hasDemandData bool, params domain.StrategyParams) ozonPriceDecision {
+	if currentRub <= 0 {
+		return ozonSkip("invalid_current_price")
+	}
+	if !hasDemandData {
+		return ozonSkip("no_demand_data")
+	}
+	in := PriceEngineInputs{
+		Current: domain.ProductPrice{PriceRub: int64(math.Round(currentRub))},
+	}
+	return ozonDecisionFromEngine(DecidePeakHours(in, ozonEngineParams(params, floorRub), intensity), floorRub)
 }
 
 // ozonCompetitorMin picks the lowest present competitor price: other sellers
