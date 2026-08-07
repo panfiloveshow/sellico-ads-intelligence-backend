@@ -387,8 +387,10 @@ func (r *Runtime) Start() error {
 		r.logger.Warn().Err(err).Msg("failed to enqueue startup price task poll")
 	}
 	// Pull Sellico cost data shortly after boot so margin-floor has numbers.
+	// Poll queue (strict priority), как и cron-запуск: в общей repricer-очереди
+	// задача часами стоит за WB-синками.
 	if _, err := r.client.Enqueue(NewSweepTask(TaskSweepSellicoEconomics),
-		asynq.Queue(QueueRepricer), asynq.ProcessIn(30*time.Second), asynq.Unique(30*time.Minute)); err != nil {
+		asynq.Queue(QueueRepricerPoll), asynq.ProcessIn(30*time.Second), asynq.Unique(30*time.Minute)); err != nil {
 		r.logger.Warn().Err(err).Msg("failed to enqueue startup economics sync")
 	}
 	// Kick the Ozon sweep shortly after boot (repricer precedent) so Ozon data
