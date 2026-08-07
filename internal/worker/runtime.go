@@ -26,6 +26,7 @@ type Runtime struct {
 	metricsCancel  context.CancelFunc
 	logger         zerolog.Logger
 	mux            *asynq.ServeMux
+	ozonAIEnabled  bool
 }
 
 // RuntimeOption configures optional runtime modules without touching the
@@ -329,6 +330,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		queues:         queues,
 		logger:         logger,
 		mux:            mux,
+		ozonAIEnabled:  options.ozonAI != nil,
 	}, nil
 }
 
@@ -399,6 +401,15 @@ func (r *Runtime) Start() error {
 		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonSweepSync),
 			asynq.Queue(QueueOzonSync), asynq.ProcessIn(45*time.Second), asynq.Unique(30*time.Minute)); err != nil {
 			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon sweep")
+		}
+		// AI sweep too: "@every 4h" fires 4h after scheduler start, so without
+		// a kick a deploy delays the next AI run by up to the full interval.
+		// Shadow/copilot levels make this safe; level 3 is cooldown-guarded.
+		if r.ozonAIEnabled {
+			if _, err := r.client.Enqueue(NewSweepTask(TaskOzonAISweep),
+				asynq.Queue(QueueOzonSync), asynq.ProcessIn(2*time.Minute), asynq.Unique(30*time.Minute)); err != nil {
+				r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon ai sweep")
+			}
 		}
 	}
 	return nil
