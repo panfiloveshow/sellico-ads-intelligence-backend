@@ -3407,6 +3407,86 @@ paths:
         "200": { description: CPO bids applied }
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/rate:
+    post:
+      tags: [Ozon]
+      summary: Set the whole-cabinet CPO («Оплата за заказ») rate (all_sku_promo). rate_pct must be one of 5, 7 or 9 percent
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id, rate_pct]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+                rate_pct: { type: integer, enum: [5, 7, 9] }
+      responses:
+        "200":
+          description: CPO rate applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: applied }
+                  rate_pct: { type: integer, example: 5 }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/activate:
+    post:
+      tags: [Ozon]
+      summary: Turn the whole-cabinet CPO («Оплата за заказ») promo on (idempotent when already active)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: CPO promo activated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: activated }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/deactivate:
+    post:
+      tags: [Ozon]
+      summary: Turn the whole-cabinet CPO («Оплата за заказ») promo off
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: "#/components/parameters/WorkspaceHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cabinet_id]
+              properties:
+                cabinet_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: CPO promo deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: deactivated }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/limits:
     get:
       tags: [Ozon]
@@ -5906,7 +5986,7 @@ components:
         promo_campaign_id: { type: integer, format: int64, nullable: true, description: "ozon_campaign_id of the representative promo campaign (null when none)" }
         promo_campaign_title: { type: string }
         products_count: { type: integer, format: int64, description: "Mirrored CPO product count" }
-        rate_pct: { type: number, nullable: true, description: "Global CPO rate (5/7/9 %). Null until the all_sku_promo rate endpoint is verified live (display-only)" }
+        rate_pct: { type: number, nullable: true, description: "Global CPO rate (5/7/9 %), read from the all_sku_promo rate endpoint when the promo is running. Null when the promo is off or the rate could not be read (best-effort)" }
         stats7d: { $ref: "#/components/schemas/OzonCPOStats7d" }
     OzonCPOProductListEnvelope:
       type: object

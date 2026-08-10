@@ -60,6 +60,9 @@ type ozonCampaignPerfClient interface {
 	EnableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
 	DisableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
 	SetSearchPromoBids(ctx context.Context, creds ozon.Credentials, bids []ozon.CPOBid) error
+	GetAllSKUPromoRate(ctx context.Context, creds ozon.Credentials) (int, error)
+	SetAllSKUPromoRate(ctx context.Context, creds ozon.Credentials, ratePct int) error
+	DeactivateAllSKUPromo(ctx context.Context, creds ozon.Credentials) error
 	GetBidLimits(ctx context.Context, creds ozon.Credentials) (json.RawMessage, error)
 }
 
@@ -651,6 +654,49 @@ func (s *OzonCampaignActionsService) SetCPOBidsWithSource(ctx context.Context, w
 			s.logger.Warn().Err(mirrorErr).Int64("sku", bid.SKU).Msg("failed to mirror cpo bid")
 		}
 	}
+	return nil
+}
+
+// --- CPO rate / activation (whole-cabinet «Оплата за заказ») ---
+
+// SetCPORate sets the whole-cabinet CPO rate (5/7/9 %) via all_sku_promo/set_bid.
+// Tenancy-gated; requires Performance API credentials.
+func (s *OzonCampaignActionsService) SetCPORate(ctx context.Context, workspaceID, cabinetID uuid.UUID, ratePct int) error {
+	if ratePct != 5 && ratePct != 7 && ratePct != 9 {
+		return apperror.New(apperror.ErrValidation, "rate_pct must be one of 5, 7 or 9")
+	}
+	_, creds, err := s.resolveCabinet(ctx, workspaceID, cabinetID)
+	if err != nil {
+		return err
+	}
+	if err := s.perfClient.SetAllSKUPromoRate(ctx, creds, ratePct); err != nil {
+		return fmt.Errorf("ozon cpo rate: %w", err)
+	}
+	s.logger.Info().Str("cabinet_id", cabinetID.String()).Int("rate_pct", ratePct).Msg("ozon cpo rate changed")
+	return nil
+}
+
+// SetCPOActive turns the whole-cabinet CPO promo on or off. Activating goes
+// through GetAllSKUPromoRate (the activate endpoint enables the promo and
+// reports the current rate, idempotent when already active); deactivating calls
+// all_sku_promo/deactivate. Tenancy-gated; requires Performance API creds.
+func (s *OzonCampaignActionsService) SetCPOActive(ctx context.Context, workspaceID, cabinetID uuid.UUID, active bool) error {
+	_, creds, err := s.resolveCabinet(ctx, workspaceID, cabinetID)
+	if err != nil {
+		return err
+	}
+	if active {
+		rate, actErr := s.perfClient.GetAllSKUPromoRate(ctx, creds)
+		if actErr != nil {
+			return fmt.Errorf("ozon cpo activate: %w", actErr)
+		}
+		s.logger.Info().Str("cabinet_id", cabinetID.String()).Int("rate_pct", rate).Msg("ozon cpo promo activated")
+		return nil
+	}
+	if err := s.perfClient.DeactivateAllSKUPromo(ctx, creds); err != nil {
+		return fmt.Errorf("ozon cpo deactivate: %w", err)
+	}
+	s.logger.Info().Str("cabinet_id", cabinetID.String()).Msg("ozon cpo promo deactivated")
 	return nil
 }
 

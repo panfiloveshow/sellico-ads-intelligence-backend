@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
@@ -379,8 +379,8 @@ func setCabinetPaused(t *testing.T, db *testutil.TestDB, cabinetID uuid.UUID, un
 // fakePriceWriter is a behaviour-equivalent stand-in for the Seller-API
 // UpdatePrices call. By default every item is reported Updated=true.
 type fakePriceWriter struct {
-	err        error            // transport-level failure (no per-item results)
-	rejectSKUs map[int64]bool   // SKUs to report Updated=false
+	err        error          // transport-level failure (no per-item results)
+	rejectSKUs map[int64]bool // SKUs to report Updated=false
 	calls      [][]ozon.PriceUpdate
 }
 
@@ -425,13 +425,19 @@ type fakePerfClient struct {
 	minBidsErr     error
 	cpoMinBids     map[int64]float64
 
-	activateCalls   []int64
-	deactivateCalls []int64
-	budgetCalls     []int64
-	bidCalls        int
-	enableCalls     int
-	disableCalls    int
-	cpoBidCalls     int
+	cpoRate    int
+	cpoRateErr error
+
+	activateCalls    []int64
+	deactivateCalls  []int64
+	budgetCalls      []int64
+	bidCalls         int
+	enableCalls      int
+	disableCalls     int
+	cpoBidCalls      int
+	cpoRateCalls     []int
+	cpoActivateCalls int
+	cpoDeactivate    int
 }
 
 func (f *fakePerfClient) ActivateCampaign(_ context.Context, _ ozon.Credentials, id int64) error {
@@ -466,6 +472,18 @@ func (f *fakePerfClient) DisableSearchPromo(_ context.Context, _ ozon.Credential
 }
 func (f *fakePerfClient) SetSearchPromoBids(_ context.Context, _ ozon.Credentials, _ []ozon.CPOBid) error {
 	f.cpoBidCalls++
+	return f.writeErr
+}
+func (f *fakePerfClient) GetAllSKUPromoRate(_ context.Context, _ ozon.Credentials) (int, error) {
+	f.cpoActivateCalls++
+	return f.cpoRate, f.cpoRateErr
+}
+func (f *fakePerfClient) SetAllSKUPromoRate(_ context.Context, _ ozon.Credentials, ratePct int) error {
+	f.cpoRateCalls = append(f.cpoRateCalls, ratePct)
+	return f.writeErr
+}
+func (f *fakePerfClient) DeactivateAllSKUPromo(_ context.Context, _ ozon.Credentials) error {
+	f.cpoDeactivate++
 	return f.writeErr
 }
 func (f *fakePerfClient) GetBidLimits(_ context.Context, _ ozon.Credentials) (json.RawMessage, error) {

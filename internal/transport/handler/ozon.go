@@ -42,6 +42,8 @@ type ozonActionsServicer interface {
 	EnableCPO(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error
 	DisableCPO(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error
 	SetCPOBids(ctx context.Context, workspaceID, cabinetID uuid.UUID, bids []service.OzonCPOBidInput) error
+	SetCPORate(ctx context.Context, workspaceID, cabinetID uuid.UUID, ratePct int) error
+	SetCPOActive(ctx context.Context, workspaceID, cabinetID uuid.UUID, active bool) error
 	GetBidLimits(ctx context.Context, workspaceID, cabinetID uuid.UUID) (json.RawMessage, error)
 }
 
@@ -521,6 +523,73 @@ func (h *OzonHandler) SetCPOBids(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, map[string]any{"status": "applied", "bids": len(req.Bids)})
+}
+
+// SetCPORate handles POST /ozon/cpo/rate — sets the whole-cabinet CPO rate
+// (rate_pct must be one of 5, 7 or 9).
+func (h *OzonHandler) SetCPORate(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActions(w) {
+		return
+	}
+	var req struct {
+		CabinetID string `json:"cabinet_id"`
+		RatePct   int    `json:"rate_pct"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	if req.RatePct != 5 && req.RatePct != 7 && req.RatePct != 9 {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "rate_pct must be one of 5, 7 or 9")
+		return
+	}
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, req.CabinetID)
+	if !ok {
+		return
+	}
+	if err := h.actions.SetCPORate(r.Context(), workspaceID, cabinetID, req.RatePct); err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, map[string]any{"status": "applied", "rate_pct": req.RatePct})
+}
+
+type ozonCPOActivateRequest struct {
+	CabinetID string `json:"cabinet_id"`
+}
+
+func (h *OzonHandler) cpoActivate(w http.ResponseWriter, r *http.Request, active bool) {
+	if !h.requireActions(w) {
+		return
+	}
+	var req ozonCPOActivateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, req.CabinetID)
+	if !ok {
+		return
+	}
+	if err := h.actions.SetCPOActive(r.Context(), workspaceID, cabinetID, active); err != nil {
+		writeAppError(w, err)
+		return
+	}
+	status := "deactivated"
+	if active {
+		status = "activated"
+	}
+	dto.WriteJSON(w, http.StatusOK, map[string]any{"status": status})
+}
+
+// ActivateCPO handles POST /ozon/cpo/activate — turns the whole-cabinet CPO
+// promo on (idempotent when already active).
+func (h *OzonHandler) ActivateCPO(w http.ResponseWriter, r *http.Request) { h.cpoActivate(w, r, true) }
+
+// DeactivateCPO handles POST /ozon/cpo/deactivate — turns the whole-cabinet CPO
+// promo off.
+func (h *OzonHandler) DeactivateCPO(w http.ResponseWriter, r *http.Request) {
+	h.cpoActivate(w, r, false)
 }
 
 // BidLimits handles GET /ozon/limits?cabinet_id= (passthrough, cached 1h).

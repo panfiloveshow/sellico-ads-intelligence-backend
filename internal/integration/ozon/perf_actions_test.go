@@ -406,6 +406,101 @@ func TestGetCPOMinBids_ChunksAndRublesFloat(t *testing.T) {
 	assert.InDelta(t, 4.25, out[0].BidRub, 1e-9)
 }
 
+func TestGetAllSKUPromoRate_ParsesSelectedBidString(t *testing.T) {
+	srv, reqs, mu := newPerfActionServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedReq) {
+		w.Write([]byte(`{"selectedBid":"7"}`))
+	})
+	defer srv.Close()
+
+	c := newTestPerfClient(srv.URL)
+	rate, err := c.GetAllSKUPromoRate(context.Background(), testCreds)
+	require.NoError(t, err)
+	assert.Equal(t, 7, rate)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *reqs, 1)
+	assert.Equal(t, http.MethodGet, (*reqs)[0].method)
+	assert.Equal(t, "/api/client/campaign/all_sku_promo/activate", (*reqs)[0].path)
+}
+
+func TestGetAllSKUPromoRate_EmptyOrUnparseableErrors(t *testing.T) {
+	// Missing selectedBid → error (so the overview leaves rate_pct null).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/client/token" {
+			writeToken(w, "tok-1", 1800)
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := newTestPerfClient(srv.URL)
+	_, err := c.GetAllSKUPromoRate(context.Background(), testCreds)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no selectedBid")
+
+	// Non-numeric selectedBid → error.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/client/token" {
+			writeToken(w, "tok-1", 1800)
+			return
+		}
+		w.Write([]byte(`{"selectedBid":"abc"}`))
+	}))
+	defer srv2.Close()
+	c2 := newTestPerfClient(srv2.URL)
+	_, err = c2.GetAllSKUPromoRate(context.Background(), testCreds)
+	require.Error(t, err)
+}
+
+func TestSetAllSKUPromoRate_ValidatesAndSetsBidParam(t *testing.T) {
+	srv, reqs, mu := newPerfActionServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedReq) {
+		w.Write([]byte(`{}`))
+	})
+	defer srv.Close()
+
+	c := newTestPerfClient(srv.URL)
+
+	// Rejects any rate that is not 5/7/9 — no request is made.
+	for _, bad := range []int{0, 4, 6, 8, 10, 100} {
+		err := c.SetAllSKUPromoRate(context.Background(), testCreds, bad)
+		require.Error(t, err, "rate %d must be rejected", bad)
+		assert.Contains(t, err.Error(), "5, 7 or 9")
+	}
+	mu.Lock()
+	assert.Empty(t, *reqs, "invalid rates never hit the API")
+	mu.Unlock()
+
+	// Accepts 5/7/9 and sends GET set_bid?bid=<rate>.
+	for _, ok := range []int{5, 7, 9} {
+		require.NoError(t, c.SetAllSKUPromoRate(context.Background(), testCreds, ok))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *reqs, 3)
+	assert.Equal(t, http.MethodGet, (*reqs)[0].method)
+	assert.Equal(t, "/api/client/campaign/all_sku_promo/set_bid", (*reqs)[0].path)
+	assert.Equal(t, "5", (*reqs)[0].query["bid"][0])
+	assert.Equal(t, "7", (*reqs)[1].query["bid"][0])
+	assert.Equal(t, "9", (*reqs)[2].query["bid"][0])
+}
+
+func TestDeactivateAllSKUPromo_GETPath(t *testing.T) {
+	srv, reqs, mu := newPerfActionServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedReq) {
+		w.Write([]byte(`{}`))
+	})
+	defer srv.Close()
+
+	c := newTestPerfClient(srv.URL)
+	require.NoError(t, c.DeactivateAllSKUPromo(context.Background(), testCreds))
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *reqs, 1)
+	assert.Equal(t, http.MethodGet, (*reqs)[0].method)
+	assert.Equal(t, "/api/client/campaign/all_sku_promo/deactivate", (*reqs)[0].path)
+}
+
 // --- ListCampaignProducts + DailyStats (perf_client.go) ---
 
 func TestListCampaignProducts_MicroRubBids(t *testing.T) {

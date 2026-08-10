@@ -171,6 +171,130 @@ func TestOzonSetCPOBids(t *testing.T) {
 	})
 }
 
+func TestOzonSetCPORate(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	body := `{"cabinet_id":"` + cabinetID.String() + `","rate_pct":7}`
+
+	t.Run("success", func(t *testing.T) {
+		var got int
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{
+			setCPORateFn: func(_ context.Context, _, _ uuid.UUID, ratePct int) error { got = ratePct; return nil },
+		}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/rate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.SetCPORate(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, 7, got)
+		assert.Contains(t, rec.Body.String(), "applied")
+	})
+
+	t.Run("bad rate -> 400", func(t *testing.T) {
+		called := false
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{
+			setCPORateFn: func(context.Context, uuid.UUID, uuid.UUID, int) error { called = true; return nil },
+		}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/rate", `{"cabinet_id":"`+cabinetID.String()+`","rate_pct":6}`, workspaceID)
+		rec := httptest.NewRecorder()
+		h.SetCPORate(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.False(t, called, "invalid rate never reaches the service")
+	})
+
+	t.Run("bad body -> 400", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/rate", "{bad", workspaceID)
+		rec := httptest.NewRecorder()
+		h.SetCPORate(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("not configured -> 503", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/rate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.SetCPORate(rec, req)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	})
+
+	t.Run("tenancy 404", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{
+			setCPORateFn: func(context.Context, uuid.UUID, uuid.UUID, int) error {
+				return apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+			},
+		}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/rate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.SetCPORate(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestOzonCPOActivateDeactivate(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+	body := `{"cabinet_id":"` + cabinetID.String() + `"}`
+
+	t.Run("activate success", func(t *testing.T) {
+		var gotActive bool
+		var called bool
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{
+			setCPOActiveFn: func(_ context.Context, _, _ uuid.UUID, active bool) error {
+				called, gotActive = true, active
+				return nil
+			},
+		}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/activate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.ActivateCPO(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.True(t, called)
+		assert.True(t, gotActive)
+		assert.Contains(t, rec.Body.String(), "activated")
+	})
+
+	t.Run("deactivate success", func(t *testing.T) {
+		var gotActive = true
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{
+			setCPOActiveFn: func(_ context.Context, _, _ uuid.UUID, active bool) error { gotActive = active; return nil },
+		}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/deactivate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.DeactivateCPO(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.False(t, gotActive)
+		assert.Contains(t, rec.Body.String(), "deactivated")
+	})
+
+	t.Run("bad body -> 400", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/activate", "{bad", workspaceID)
+		rec := httptest.NewRecorder()
+		h.ActivateCPO(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("not configured -> 503", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/deactivate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.DeactivateCPO(rec, req)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	})
+
+	t.Run("tenancy 404", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, &fakeOzonActions{
+			setCPOActiveFn: func(context.Context, uuid.UUID, uuid.UUID, bool) error {
+				return apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+			},
+		}, nil)
+		req := ozonReq(t, http.MethodPost, "/ozon/cpo/activate", body, workspaceID)
+		rec := httptest.NewRecorder()
+		h.ActivateCPO(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
 func TestOzonBidLimits(t *testing.T) {
 	workspaceID := uuid.New()
 	cabinetID := uuid.New()

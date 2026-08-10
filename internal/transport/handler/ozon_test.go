@@ -93,6 +93,8 @@ type fakeOzonActions struct {
 	enableCPOFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error
 	disableCPOFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID, skus []int64) error
 	setCPOBidsFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID, bids []service.OzonCPOBidInput) error
+	setCPORateFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID, ratePct int) error
+	setCPOActiveFn   func(ctx context.Context, workspaceID, cabinetID uuid.UUID, active bool) error
 	bidLimitsFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (json.RawMessage, error)
 }
 
@@ -159,6 +161,18 @@ func (f *fakeOzonActions) SetCPOBids(ctx context.Context, workspaceID, cabinetID
 		return nil
 	}
 	return f.setCPOBidsFn(ctx, workspaceID, cabinetID, bids)
+}
+func (f *fakeOzonActions) SetCPORate(ctx context.Context, workspaceID, cabinetID uuid.UUID, ratePct int) error {
+	if f.setCPORateFn == nil {
+		return nil
+	}
+	return f.setCPORateFn(ctx, workspaceID, cabinetID, ratePct)
+}
+func (f *fakeOzonActions) SetCPOActive(ctx context.Context, workspaceID, cabinetID uuid.UUID, active bool) error {
+	if f.setCPOActiveFn == nil {
+		return nil
+	}
+	return f.setCPOActiveFn(ctx, workspaceID, cabinetID, active)
 }
 func (f *fakeOzonActions) GetBidLimits(ctx context.Context, workspaceID, cabinetID uuid.UUID) (json.RawMessage, error) {
 	if f.bidLimitsFn == nil {

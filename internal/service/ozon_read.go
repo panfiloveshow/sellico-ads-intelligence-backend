@@ -88,7 +88,8 @@ func (s *OzonSyncService) ListCampaignsWithStats(ctx context.Context, workspaceI
 // ListCampaignsWithStats). Tenancy-gated like every other Ozon read; when the
 // cabinet has no promo campaign it returns enabled=false with zero stats.
 func (s *OzonSyncService) GetCPOOverview(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonCPOOverview, error) {
-	if _, err := s.ResolveOzonCabinet(ctx, workspaceID, cabinetID); err != nil {
+	cabinet, err := s.ResolveOzonCabinet(ctx, workspaceID, cabinetID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -109,6 +110,21 @@ func (s *OzonSyncService) GetCPOOverview(ctx context.Context, workspaceID, cabin
 			if pgTextValue(c.State) == "CAMPAIGN_STATE_RUNNING" {
 				overview.Enabled = true
 				break
+			}
+		}
+	}
+
+	// When the promo is running, read the current whole-cabinet rate (5/7/9 %).
+	// Best-effort: leave rate_pct null on any error. Never call this when the
+	// promo is off — the activate endpoint used to read the rate would turn the
+	// promo on.
+	if overview.Enabled {
+		if creds, credErr := s.credentials(*cabinet); credErr == nil && creds.HasPerformanceAPI() {
+			if pct, rateErr := s.perfClient.GetAllSKUPromoRate(ctx, ozonClientCreds(creds)); rateErr != nil {
+				s.logger.Warn().Err(rateErr).Str("cabinet_id", cabinetID.String()).Msg("failed to read cpo rate; leaving rate_pct null")
+			} else {
+				rate := float64(pct)
+				overview.RatePct = &rate
 			}
 		}
 	}

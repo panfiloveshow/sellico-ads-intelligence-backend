@@ -126,7 +126,7 @@ type OzonBidChange struct {
 	SKU             *int64     `json:"sku,omitempty"`
 	// Name is read-time enrichment from the ozon_products mapping (empty when
 	// the SKU is unknown or the products sync has not seen it yet).
-	Name string `json:"name,omitempty"`
+	Name            string     `json:"name,omitempty"`
 	OldBidRub       *float64   `json:"old_bid_rub,omitempty"`
 	NewBidRub       *float64   `json:"new_bid_rub,omitempty"`
 	Reason          string     `json:"reason,omitempty"`
@@ -263,14 +263,14 @@ type OzonCPOStats7d struct {
 // backing SEARCH_PROMO/ALL_SKU_PROMO campaign, whether it is running, the
 // mirrored product count and the 7-day stats aggregate.
 type OzonCPOOverview struct {
-	Enabled            bool           `json:"enabled"`
-	PromoCampaignID    *int64         `json:"promo_campaign_id"`
-	PromoCampaignTitle string         `json:"promo_campaign_title"`
-	ProductsCount      int64          `json:"products_count"`
-	// RatePct is the global CPO percentage (5/7/9 %). It is not derivable from
-	// the data we currently mirror, so it stays null until the all_sku_promo
-	// rate-control endpoint is verified live.
-	// TODO(ozon-cpo): populate rate_pct from the all_sku_promo rate endpoint.
+	Enabled            bool   `json:"enabled"`
+	PromoCampaignID    *int64 `json:"promo_campaign_id"`
+	PromoCampaignTitle string `json:"promo_campaign_title"`
+	ProductsCount      int64  `json:"products_count"`
+	// RatePct is the global CPO percentage (5/7/9 %), read from the
+	// all_sku_promo rate endpoint when the promo is running. It is null when the
+	// promo is off or the rate could not be read (best-effort — the overview
+	// never fails on the rate lookup).
 	RatePct *float64       `json:"rate_pct"`
 	Stats7d OzonCPOStats7d `json:"stats7d"`
 }
