@@ -109,6 +109,7 @@ type ozonSyncRunner interface {
 	SyncAnalyticsAllCabinets(ctx context.Context) error
 	SyncPostingsAllCabinets(ctx context.Context) error
 	SyncPhrasesAllCabinets(ctx context.Context) error
+	SyncCPOOrdersAllCabinets(ctx context.Context) error
 }
 
 // ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
@@ -628,6 +629,23 @@ func (p *Processor) HandleOzonPhrasesSync(ctx context.Context, _ *asynq.Task) er
 		return err
 	}
 	p.logger.Info().Msg("ozon phrases sync completed")
+	return nil
+}
+
+// HandleOzonCPOOrdersSync pulls the async CPO promoted-orders report
+// (all_sku_promo) for every Ozon cabinet sequentially — the one-report-
+// generation-at-a-time account budget is shared with the phrases report, and
+// one failed cabinet never fails the rest.
+func (p *Processor) HandleOzonCPOOrdersSync(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping cpo orders sync")
+		return nil
+	}
+	if err := p.ozonSync.SyncCPOOrdersAllCabinets(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon cpo orders sync finished with errors")
+		return err
+	}
+	p.logger.Info().Msg("ozon cpo orders sync completed")
 	return nil
 }
 

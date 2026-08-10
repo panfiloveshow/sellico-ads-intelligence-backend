@@ -522,6 +522,25 @@ type OzonBidChange struct {
 	AppliedAt       pgtype.Timestamptz `json:"applied_at"`
 }
 
+type OzonCpoOrder struct {
+	ID              pgtype.UUID        `json:"id"`
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Date            pgtype.Date        `json:"date"`
+	OrderID         string             `json:"order_id"`
+	OrderNumber     pgtype.Text        `json:"order_number"`
+	Sku             pgtype.Int8        `json:"sku"`
+	AdvSku          pgtype.Int8        `json:"adv_sku"`
+	VendorCode      pgtype.Text        `json:"vendor_code"`
+	Name            pgtype.Text        `json:"name"`
+	Quantity        pgtype.Int4        `json:"quantity"`
+	PriceRub        pgtype.Numeric     `json:"price_rub"`
+	SalePriceRub    pgtype.Numeric     `json:"sale_price_rub"`
+	BidPct          pgtype.Numeric     `json:"bid_pct"`
+	BidRub          pgtype.Numeric     `json:"bid_rub"`
+	SpendRub        pgtype.Numeric     `json:"spend_rub"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OzonCpoProduct struct {
 	ID              pgtype.UUID        `json:"id"`
 	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
@@ -536,6 +555,9 @@ type OzonCpoProduct struct {
 	BidPriceRub     pgtype.Numeric     `json:"bid_price_rub"`
 	ImageUrl        pgtype.Text        `json:"image_url"`
 	VisibilityIndex pgtype.Text        `json:"visibility_index"`
+	PrevBidPct      pgtype.Numeric     `json:"prev_bid_pct"`
+	ViewsThisWeek   pgtype.Int8        `json:"views_this_week"`
+	ViewsPrevWeek   pgtype.Int8        `json:"views_prev_week"`
 }
 
 type OzonCampaign struct {

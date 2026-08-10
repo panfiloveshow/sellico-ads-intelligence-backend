@@ -244,6 +244,14 @@ func (c *PerfClient) ListSearchPromoProducts(ctx context.Context, creds Credenti
 				Enabled           *bool     `json:"enabled"`
 				IsEnabled         *bool     `json:"isEnabled"`
 				SearchPromoStatus string    `json:"searchPromoStatus"`
+				PreviousBid       *struct {
+					Bid      flexFloat `json:"bid"`
+					BidPrice flexFloat `json:"bidPrice"`
+				} `json:"previousBid"`
+				Views *struct {
+					ThisWeek     flexInt64 `json:"thisWeek"`
+					PreviousWeek flexInt64 `json:"previousWeek"`
+				} `json:"views"`
 			} `json:"products"`
 		}
 		if err := decodeJSON(body, &resp, "search promo products"); err != nil {
@@ -262,7 +270,7 @@ func (c *PerfClient) ListSearchPromoProducts(ctx context.Context, creds Credenti
 			case p.SearchPromoStatus != "":
 				enabled = p.SearchPromoStatus == "ENABLED" || p.SearchPromoStatus == "SEARCH_PROMO_STATUS_ENABLED"
 			}
-			out = append(out, CPOProduct{
+			product := CPOProduct{
 				SKU:             int64(p.SKU),
 				OfferID:         p.SourceSku,
 				Name:            p.Title,
@@ -272,7 +280,18 @@ func (c *PerfClient) ListSearchPromoProducts(ctx context.Context, creds Credenti
 				ImageURL:        p.ImageURL,
 				VisibilityIndex: p.VisibilityIndex,
 				Enabled:         enabled,
-			})
+			}
+			if p.PreviousBid != nil {
+				product.PrevBidPct = float64(p.PreviousBid.Bid)
+				product.PrevBidRub = float64(p.PreviousBid.BidPrice)
+			}
+			if p.Views != nil {
+				thisWeek := int64(p.Views.ThisWeek)
+				prevWeek := int64(p.Views.PreviousWeek)
+				product.ViewsThisWeek = &thisWeek
+				product.ViewsPrevWeek = &prevWeek
+			}
+			out = append(out, product)
 		}
 		if len(resp.Products) < searchPromoPageSize {
 			return out, nil

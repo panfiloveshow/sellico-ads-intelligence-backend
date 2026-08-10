@@ -246,6 +246,16 @@ type CPOProduct struct {
 	ImageURL        string  `json:"image_url"`
 	VisibilityIndex string  `json:"visibility_index"`
 	Enabled         bool    `json:"enabled"`
+	// PrevBidPct/PrevBidRub mirror previousBid {bid, bidPrice} — the bid
+	// before the last change (0 = never changed / not reported).
+	PrevBidPct float64 `json:"prev_bid_pct"`
+	PrevBidRub float64 `json:"prev_bid_rub"`
+	// ViewsThisWeek/ViewsPrevWeek mirror views {thisWeek, previousWeek}
+	// (string-encoded counters on the wire). Pointers keep "views object
+	// absent" distinguishable from a real 0, so the mirror's
+	// COALESCE-preserving upsert never clobbers stored counters with zeros.
+	ViewsThisWeek *int64 `json:"views_this_week,omitempty"`
+	ViewsPrevWeek *int64 `json:"views_prev_week,omitempty"`
 }
 
 // CPOBid is one per-SKU fixed bid for search_promo/v2/bids/set (rubles).

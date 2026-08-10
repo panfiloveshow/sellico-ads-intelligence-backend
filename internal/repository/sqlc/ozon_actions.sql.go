@@ -347,7 +347,7 @@ func (q *Queries) ListOzonCampaignBindingsByStrategy(ctx context.Context, strate
 }
 
 const listOzonCpoProducts = `-- name: ListOzonCpoProducts :many
-SELECT id, seller_cabinet_id, sku, enabled, bid, bid_kind, updated_at, offer_id, name, price_rub, bid_price_rub, image_url, visibility_index FROM ozon_cpo_products
+SELECT id, seller_cabinet_id, sku, enabled, bid, bid_kind, updated_at, offer_id, name, price_rub, bid_price_rub, image_url, visibility_index, prev_bid_pct, views_this_week, views_prev_week FROM ozon_cpo_products
 WHERE seller_cabinet_id = $1
 ORDER BY sku
 LIMIT $2 OFFSET $3
@@ -382,6 +382,9 @@ func (q *Queries) ListOzonCpoProducts(ctx context.Context, arg ListOzonCpoProduc
 			&i.BidPriceRub,
 			&i.ImageUrl,
 			&i.VisibilityIndex,
+			&i.PrevBidPct,
+			&i.ViewsThisWeek,
+			&i.ViewsPrevWeek,
 		); err != nil {
 			return nil, err
 		}
@@ -515,13 +518,15 @@ func (q *Queries) UpdateOzonCpoProductBid(ctx context.Context, arg UpdateOzonCpo
 const upsertOzonCpoProduct = `-- name: UpsertOzonCpoProduct :exec
 INSERT INTO ozon_cpo_products (
     seller_cabinet_id, sku, enabled, bid, bid_kind,
-    offer_id, name, price_rub, bid_price_rub, image_url, visibility_index
+    offer_id, name, price_rub, bid_price_rub, image_url, visibility_index,
+    prev_bid_pct, views_this_week, views_prev_week
 )
 VALUES (
     $1, $2, $3,
     $4, $5,
     $6, $7, $8,
-    $9, $10, $11
+    $9, $10, $11,
+    $12, $13, $14
 )
 ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     enabled = EXCLUDED.enabled,
@@ -533,6 +538,9 @@ ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     bid_price_rub = COALESCE(EXCLUDED.bid_price_rub, ozon_cpo_products.bid_price_rub),
     image_url = COALESCE(EXCLUDED.image_url, ozon_cpo_products.image_url),
     visibility_index = COALESCE(EXCLUDED.visibility_index, ozon_cpo_products.visibility_index),
+    prev_bid_pct = COALESCE(EXCLUDED.prev_bid_pct, ozon_cpo_products.prev_bid_pct),
+    views_this_week = COALESCE(EXCLUDED.views_this_week, ozon_cpo_products.views_this_week),
+    views_prev_week = COALESCE(EXCLUDED.views_prev_week, ozon_cpo_products.views_prev_week),
     updated_at = now()
 `
 
@@ -548,8 +556,14 @@ type UpsertOzonCpoProductParams struct {
 	BidPriceRub     pgtype.Numeric `json:"bid_price_rub"`
 	ImageUrl        pgtype.Text    `json:"image_url"`
 	VisibilityIndex pgtype.Text    `json:"visibility_index"`
+	PrevBidPct      pgtype.Numeric `json:"prev_bid_pct"`
+	ViewsThisWeek   pgtype.Int8    `json:"views_this_week"`
+	ViewsPrevWeek   pgtype.Int8    `json:"views_prev_week"`
 }
 
+// The enriched display fields (offer_id/name/price_rub/bid_price_rub/image_url/
+// visibility_index) are COALESCE-preserved so a bare toggle/bid upsert (which
+// passes them as NULL) never wipes values captured by the product refresh.
 func (q *Queries) UpsertOzonCpoProduct(ctx context.Context, arg UpsertOzonCpoProductParams) error {
 	_, err := q.db.Exec(ctx, upsertOzonCpoProduct,
 		arg.SellerCabinetID,
@@ -563,6 +577,9 @@ func (q *Queries) UpsertOzonCpoProduct(ctx context.Context, arg UpsertOzonCpoPro
 		arg.BidPriceRub,
 		arg.ImageUrl,
 		arg.VisibilityIndex,
+		arg.PrevBidPct,
+		arg.ViewsThisWeek,
+		arg.ViewsPrevWeek,
 	)
 	return err
 }

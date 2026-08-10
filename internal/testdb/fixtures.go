@@ -231,6 +231,19 @@ func OzonCPOProduct(t *testing.T, pool *pgxpool.Pool, cabinetID uuid.UUID, sku i
 	}
 }
 
+// OzonCPOOrder inserts one promoted-order mirror row (ozon_cpo_orders).
+func OzonCPOOrder(t *testing.T, pool *pgxpool.Pool, cabinetID uuid.UUID, date time.Time, orderID string, sku int64, quantity int32, salePriceRub, bidPct, spendRub float64) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO ozon_cpo_orders (seller_cabinet_id, date, order_id, sku, quantity, sale_price_rub, bid_pct, spend_rub)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		cabinetID, date, orderID, sku, quantity, salePriceRub, bidPct, spendRub,
+	)
+	if err != nil {
+		t.Fatalf("fixture ozon cpo order: %v", err)
+	}
+}
+
 // OzonSearchQuery inserts one search-query stats row. avgPosition may be nil.
 func OzonSearchQuery(t *testing.T, pool *pgxpool.Pool, cabinetID uuid.UUID, sku int64, query string, date time.Time, views, clicks, orders int64, spendRub float64, avgPosition *float64) {
 	t.Helper()

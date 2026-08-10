@@ -60,6 +60,7 @@ type ozonCampaignPerfClient interface {
 	EnableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
 	DisableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
 	SetSearchPromoBids(ctx context.Context, creds ozon.Credentials, bids []ozon.CPOBid) error
+	GetCPOMinBids(ctx context.Context, creds ozon.Credentials, skus []int64) ([]ozon.MinSKUBid, error)
 	GetAllSKUPromoRate(ctx context.Context, creds ozon.Credentials) (int, error)
 	SetAllSKUPromoRate(ctx context.Context, creds ozon.Credentials, ratePct int) error
 	DeactivateAllSKUPromo(ctx context.Context, creds ozon.Credentials) error
@@ -453,6 +454,9 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 					BidPriceRub:     positiveFloatToPgNumeric(product.BidPriceRub),
 					ImageUrl:        textToPgtype(product.ImageURL),
 					VisibilityIndex: textToPgtype(product.VisibilityIndex),
+					PrevBidPct:      positiveFloatToPgNumeric(product.PrevBidPct),
+					ViewsThisWeek:   int64PtrToPgInt8(product.ViewsThisWeek),
+					ViewsPrevWeek:   int64PtrToPgInt8(product.ViewsPrevWeek),
 				}); upsertErr != nil {
 					return nil, 0, fmt.Errorf("upsert cpo product %d: %w", product.SKU, upsertErr)
 				}
@@ -477,6 +481,7 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 		skus = append(skus, row.Sku)
 	}
 	names := ozonProductInfoBySKU(ctx, s.queries, s.logger, cabinetID, skus)
+	minBids := s.cpoMinBidsBySKU(ctx, cabinet, rawCreds, skus)
 
 	result := make([]domain.OzonCPOProduct, 0, len(rows))
 	for _, row := range rows {
@@ -496,7 +501,20 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 			BidPriceRub:     pgNumericToFloatPtr(row.BidPriceRub),
 			ImageURL:        pgTextValue(row.ImageUrl),
 			VisibilityIndex: pgTextValue(row.VisibilityIndex),
+			PrevBidPct:      pgNumericToFloatPtr(row.PrevBidPct),
 			UpdatedAt:       row.UpdatedAt.Time,
+		}
+		if row.ViewsThisWeek.Valid {
+			views := row.ViewsThisWeek.Int64
+			product.ViewsThisWeek = &views
+		}
+		if row.ViewsPrevWeek.Valid {
+			views := row.ViewsPrevWeek.Int64
+			product.ViewsPrevWeek = &views
+		}
+		if minBid, ok := minBids[row.Sku]; ok {
+			bid := minBid
+			product.MinBidRub = &bid
 		}
 		if info, ok := names[row.Sku]; ok {
 			if name := pgTextValue(info.Name); name != "" {
@@ -509,6 +527,27 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 		result = append(result, product)
 	}
 	return result, total, nil
+}
+
+// cpoMinBidsBySKU fetches minimum fixed CPO bids for one page of SKUs
+// (get_cpo_min_bids, chunked in the client). Best-effort live enrichment:
+// missing Performance creds or an API failure yield an empty map, never an
+// error — the products list must render from the mirror regardless.
+func (s *OzonCampaignActionsService) cpoMinBidsBySKU(ctx context.Context, cabinet *domain.SellerCabinet, rawCreds domain.OzonCredentials, skus []int64) map[int64]float64 {
+	result := map[int64]float64{}
+	if len(skus) == 0 || !rawCreds.HasPerformanceAPI() {
+		return result
+	}
+	bids, err := s.perfClient.GetCPOMinBids(ctx, ozonClientCreds(rawCreds), skus)
+	if err != nil {
+		s.logger.Warn().Err(err).Str("cabinet_id", cabinet.ID.String()).Int("skus", len(skus)).
+			Msg("cpo min bids enrichment failed; serving products without min_bid_rub")
+		return result
+	}
+	for _, bid := range bids {
+		result[bid.SKU] = bid.BidRub
+	}
+	return result
 }
 
 // positiveFloatToPgNumeric returns a NUMERIC for value>0 and a NULL (invalid)

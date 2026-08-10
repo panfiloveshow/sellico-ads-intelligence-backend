@@ -28,6 +28,7 @@ type ozonServicer interface {
 	ListPrices(ctx context.Context, workspaceID, cabinetID uuid.UUID, search string, limit, offset int32) ([]domain.OzonProductPrice, int64, error)
 	ListSearchQueries(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, search string, days int, limit, offset int32) ([]domain.OzonSearchQueryStat, int64, error)
 	GetCPOOverview(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonCPOOverview, error)
+	ListCPOOrders(ctx context.Context, workspaceID, cabinetID uuid.UUID, days int, limit, offset int32) ([]domain.OzonCPOOrder, int64, error)
 }
 
 // ozonActionsServicer is the write/management surface (phase 2).
@@ -455,6 +456,32 @@ func (h *OzonHandler) ListCPOProducts(w http.ResponseWriter, r *http.Request) {
 	}
 	pg := pagination.Parse(r)
 	items, total, err := h.actions.ListCPOProducts(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: total})
+}
+
+// ListCPOOrders handles GET /ozon/cpo/orders?cabinet_id=&page=&days= — the
+// mirrored CPO promoted orders (all_sku_promo report) for the «Заказы
+// продвижения» tab. days defaults to 7.
+func (h *OzonHandler) ListCPOOrders(w http.ResponseWriter, r *http.Request) {
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	days := 7
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "days must be a positive integer")
+			return
+		}
+		days = parsed
+	}
+	pg := pagination.Parse(r)
+	items, total, err := h.svc.ListCPOOrders(r.Context(), workspaceID, cabinetID, days, int32(pg.PerPage), int32(pg.Offset()))
 	if err != nil {
 		writeAppError(w, err)
 		return

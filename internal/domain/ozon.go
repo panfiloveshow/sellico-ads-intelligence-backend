@@ -244,7 +244,37 @@ type OzonCPOProduct struct {
 	BidPriceRub     *float64  `json:"bid_price_rub,omitempty"`
 	ImageURL        string    `json:"image_url,omitempty"`
 	VisibilityIndex string    `json:"visibility_index,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	// PrevBidPct mirrors previousBid.bid — the CPO percent bid before the last
+	// change (null when Ozon reports none).
+	PrevBidPct *float64 `json:"prev_bid_pct,omitempty"`
+	// ViewsThisWeek/ViewsPrevWeek mirror the views counters from the CPO
+	// products response.
+	ViewsThisWeek *int64 `json:"views_this_week,omitempty"`
+	ViewsPrevWeek *int64 `json:"views_prev_week,omitempty"`
+	// MinBidRub is the minimum fixed CPO bid (rubles) from get_cpo_min_bids —
+	// live enrichment, best-effort, never persisted.
+	MinBidRub *float64  `json:"min_bid_rub,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// OzonCPOOrder is one promoted order line mirrored from the async
+// all_sku_promo orders report (ozon_cpo_orders).
+type OzonCPOOrder struct {
+	ID              uuid.UUID `json:"id"`
+	SellerCabinetID uuid.UUID `json:"seller_cabinet_id"`
+	Date            time.Time `json:"date"`
+	OrderID         string    `json:"order_id"`
+	OrderNumber     string    `json:"order_number,omitempty"`
+	SKU             int64     `json:"sku"`
+	AdvSKU          int64     `json:"adv_sku,omitempty"`
+	VendorCode      string    `json:"vendor_code,omitempty"`
+	Name            string    `json:"name,omitempty"`
+	Quantity        int32     `json:"quantity"`
+	PriceRub        *float64  `json:"price_rub,omitempty"`
+	SalePriceRub    *float64  `json:"sale_price_rub,omitempty"`
+	BidPct          *float64  `json:"bid_pct,omitempty"`
+	BidRub          *float64  `json:"bid_rub,omitempty"`
+	SpendRub        *float64  `json:"spend_rub,omitempty"`
 }
 
 // OzonCPOStats7d is the 7-day aggregate for the CPO overview: same
@@ -273,6 +303,22 @@ type OzonCPOOverview struct {
 	// never fails on the rate lookup).
 	RatePct *float64       `json:"rate_pct"`
 	Stats7d OzonCPOStats7d `json:"stats7d"`
+	// The *_7d fields below aggregate the last 7 days of ozon_cpo_orders —
+	// the FACTUAL promoted orders from the async all_sku_promo report.
+	// Stats7d stays sourced from ozon_campaign_stats (the campaign statistics
+	// counters: views/clicks/spend); the two describe the same promo through
+	// different Ozon surfaces and intentionally coexist.
+	//
+	// OrdersCount7d is the number of distinct promoted orders.
+	OrdersCount7d int64 `json:"orders_count_7d"`
+	// SoldUnits7d is the summed quantity across promoted order lines.
+	SoldUnits7d int64 `json:"sold_units_7d"`
+	// PromoRevenue7d is SUM(sale_price_rub * quantity).
+	PromoRevenue7d float64 `json:"promo_revenue_7d"`
+	// PromoSpend7d is SUM(spend_rub) — what the promotion charged.
+	PromoSpend7d float64 `json:"promo_spend_7d"`
+	// AvgBidPct7d is AVG(bid_pct) over the window (null when no orders).
+	AvgBidPct7d *float64 `json:"avg_bid_pct_7d"`
 }
 
 // OzonCampaignWithStats is a campaign plus its recent aggregate statistics

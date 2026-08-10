@@ -3333,6 +3333,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OzonCPOProductListEnvelope" }
         "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/orders:
+    get:
+      tags: [Ozon]
+      summary: CPO promoted orders (all_sku_promo report mirror) — the «Заказы продвижения» list, newest first
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, default: 7, minimum: 1, maximum: 90 }
+          description: Window in days (capped at 90)
+      responses:
+        "200":
+          description: CPO promoted order page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCPOOrderListEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/cpo/enable:
     post:
       tags: [Ozon]
@@ -5967,6 +5993,10 @@ components:
         bid_price_rub: { type: number, nullable: true, description: "bidPrice from the CPO response (rubles)" }
         image_url: { type: string, description: "Product image URL from the CPO response" }
         visibility_index: { type: string, description: "visibilityIndex label from the CPO response (e.g. \"10+\")" }
+        prev_bid_pct: { type: number, nullable: true, description: "previousBid.bid — the CPO percent bid before the last change (null when never changed / not reported)" }
+        views_this_week: { type: integer, format: int64, nullable: true, description: "views.thisWeek counter from the CPO response" }
+        views_prev_week: { type: integer, format: int64, nullable: true, description: "views.previousWeek counter from the CPO response" }
+        min_bid_rub: { type: number, nullable: true, description: "Minimum fixed CPO bid (rubles) from get_cpo_min_bids — live best-effort enrichment, absent when the lookup fails" }
         updated_at: { type: string, format: date-time }
     OzonCPOStats7d:
       type: object
@@ -5988,6 +6018,11 @@ components:
         products_count: { type: integer, format: int64, description: "Mirrored CPO product count" }
         rate_pct: { type: number, nullable: true, description: "Global CPO rate (5/7/9 %), read from the all_sku_promo rate endpoint when the promo is running. Null when the promo is off or the rate could not be read (best-effort)" }
         stats7d: { $ref: "#/components/schemas/OzonCPOStats7d" }
+        orders_count_7d: { type: integer, format: int64, description: "Distinct promoted orders over the last 7 days (ozon_cpo_orders — the FACTUAL all_sku_promo orders report; stats7d stays sourced from campaign statistics counters)" }
+        sold_units_7d: { type: integer, format: int64, description: "Summed quantity across promoted order lines (7 days, from the orders report)" }
+        promo_revenue_7d: { type: number, description: "SUM(sale_price_rub * quantity) over 7 days of promoted orders" }
+        promo_spend_7d: { type: number, description: "SUM(spend_rub) the promotion charged over 7 days of promoted orders" }
+        avg_bid_pct_7d: { type: number, nullable: true, description: "AVG(bid_pct) over 7 days of promoted orders (null when there are none)" }
     OzonCPOProductListEnvelope:
       type: object
       properties:
@@ -5995,6 +6030,34 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OzonCPOProduct"
+        meta:
+          $ref: "#/components/schemas/Meta"
+    OzonCPOOrder:
+      type: object
+      description: One CPO promoted order line mirrored from the async all_sku_promo orders report (Russian «752,00» decimals and DD.MM.YYYY dates parsed at the API boundary)
+      properties:
+        id: { type: string, format: uuid }
+        seller_cabinet_id: { type: string, format: uuid }
+        date: { type: string, format: date-time, description: "Order date (report DD.MM.YYYY, serialised RFC3339 midnight UTC)" }
+        order_id: { type: string, description: "Ozon order id" }
+        order_number: { type: string, description: "Human order number (e.g. 0125476150-1011)" }
+        sku: { type: integer, format: int64, description: "Ordered SKU (0 when the report omitted it)" }
+        adv_sku: { type: integer, format: int64, description: "Promoted SKU the charge was attributed to (omitted when unknown)" }
+        vendor_code: { type: string, description: "Seller article (артикул)" }
+        name: { type: string, description: "Product name from the report" }
+        quantity: { type: integer, description: "Ordered units in this line" }
+        price_rub: { type: number, nullable: true, description: "Unit price (rubles)" }
+        sale_price_rub: { type: number, nullable: true, description: "Unit sale price the buyer paid (rubles)" }
+        bid_pct: { type: number, nullable: true, description: "CPO percent bid at order time (e.g. 5.00)" }
+        bid_rub: { type: number, nullable: true, description: "abs_bid — the per-order promotion charge the bid produced (rubles)" }
+        spend_rub: { type: number, nullable: true, description: "adv_money_spent — what the promotion actually charged (rubles)" }
+    OzonCPOOrderListEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OzonCPOOrder"
         meta:
           $ref: "#/components/schemas/Meta"
     AIRun:

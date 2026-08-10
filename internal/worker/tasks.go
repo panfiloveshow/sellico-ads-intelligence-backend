@@ -97,6 +97,12 @@ const (
 	// cabinets run sequentially on their own low-frequency schedule.
 	TaskOzonPhrasesSync = "ozon:sync_phrases"
 
+	// Ozon module (phase 8: CPO promoted orders). The all_sku_promo orders
+	// report uses the same async statistics flow (and the same one-report-
+	// at-a-time account budget) as phrases — cabinets run sequentially on
+	// their own low-frequency schedule (OZON_CPO_ORDERS_INTERVAL).
+	TaskOzonCPOOrdersSync = "ozon:sync_cpo_orders"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"

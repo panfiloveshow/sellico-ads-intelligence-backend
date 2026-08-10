@@ -153,6 +153,24 @@ func (s *OzonSyncService) GetCPOOverview(ctx context.Context, workspaceID, cabin
 	if overview.Stats7d.RevenueRub > 0 {
 		overview.Stats7d.DRR = overview.Stats7d.SpendRub / overview.Stats7d.RevenueRub * 100
 	}
+
+	// Factual promoted orders over the same 7-day window, sourced from the
+	// async all_sku_promo orders report mirror (ozon_cpo_orders). This is a
+	// DIFFERENT surface than Stats7d: campaign_stats carries the campaign
+	// statistics counters (views/clicks/spend), the orders report carries the
+	// actual orders the promotion charged for. Both are served side by side.
+	ordersAgg, err := s.queries.AggregateOzonCpoOrders(ctx, sqlcgen.AggregateOzonCpoOrdersParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Date:            timePtrToPgDate(&since),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to aggregate cpo orders")
+	}
+	overview.OrdersCount7d = ordersAgg.OrdersCount
+	overview.SoldUnits7d = ordersAgg.SoldUnits
+	overview.PromoRevenue7d = pgNumericToFloat(ordersAgg.RevenueRub)
+	overview.PromoSpend7d = pgNumericToFloat(ordersAgg.SpendRub)
+	overview.AvgBidPct7d = pgNumericToFloatPtr(ordersAgg.AvgBidPct)
 	return overview, nil
 }
 

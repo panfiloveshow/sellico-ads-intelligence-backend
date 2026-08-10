@@ -355,8 +355,14 @@ func TestOzonCampaignActions_ListCPOProducts_PersistsEnrichedFields(t *testing.T
 				"bid":             0,
 				"bidPrice":        "0",
 				"visibilityIndex": "10+",
+				"previousBid":     map[string]any{"bid": 7, "bidPrice": "52.64"},
+				"views":           map[string]any{"thisWeek": "12", "previousWeek": "0"},
 			},
 		},
+	})
+	// Minimum fixed CPO bid enrichment (get_cpo_min_bids, best-effort).
+	env.fake.setJSON("/api/client/search_promo/get_cpo_min_bids", map[string]any{
+		"bids": []map[string]any{{"sku": "2011312046", "bid": 30.0}},
 	})
 
 	products, total, err := env.actionsSvc.ListCPOProducts(ctx, env.workspaceID, env.cabinetID, 50, 0)
@@ -372,9 +378,19 @@ func TestOzonCampaignActions_ListCPOProducts_PersistsEnrichedFields(t *testing.T
 	assert.Equal(t, "10+", p.VisibilityIndex)
 	require.NotNil(t, p.PriceRub)
 	assert.InDelta(t, 752.0, *p.PriceRub, 0.001)
+	require.NotNil(t, p.PrevBidPct)
+	assert.InDelta(t, 7.0, *p.PrevBidPct, 0.001)
+	require.NotNil(t, p.ViewsThisWeek)
+	assert.Equal(t, int64(12), *p.ViewsThisWeek)
+	require.NotNil(t, p.ViewsPrevWeek)
+	assert.Equal(t, int64(0), *p.ViewsPrevWeek) // reported zero persists as zero
+	require.NotNil(t, p.MinBidRub)
+	assert.InDelta(t, 30.0, *p.MinBidRub, 0.001)
 
-	// Enrichment survives an API failure: the mirror still carries the fields.
+	// Enrichment survives an API failure: the mirror still carries the fields
+	// (min_bid_rub is live-only and disappears — by design, never persisted).
 	env.fake.fail("/api/client/campaign/search_promo/v2/products", 400)
+	env.fake.fail("/api/client/search_promo/get_cpo_min_bids", 400)
 	stale, _, err := env.actionsSvc.ListCPOProducts(ctx, env.workspaceID, env.cabinetID, 50, 0)
 	require.NoError(t, err)
 	require.Len(t, stale, 1)
@@ -382,6 +398,11 @@ func TestOzonCampaignActions_ListCPOProducts_PersistsEnrichedFields(t *testing.T
 	assert.Equal(t, "https://cdn/x.jpg", stale[0].ImageURL)
 	require.NotNil(t, stale[0].PriceRub)
 	assert.InDelta(t, 752.0, *stale[0].PriceRub, 0.001)
+	require.NotNil(t, stale[0].PrevBidPct)
+	assert.InDelta(t, 7.0, *stale[0].PrevBidPct, 0.001)
+	require.NotNil(t, stale[0].ViewsThisWeek)
+	assert.Equal(t, int64(12), *stale[0].ViewsThisWeek)
+	assert.Nil(t, stale[0].MinBidRub, "min bid is live enrichment only")
 
 	// ozon_products mapping wins over the CPO API title/sourceSku when present.
 	testdb.OzonProduct(t, env.pool, env.cabinetID, 9001, 2011312046, "ART-MAP", "Имя из каталога")

@@ -148,6 +148,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		mux.HandleFunc(TaskOzonAnalyticsSync, processor.HandleOzonAnalyticsSync)
 		mux.HandleFunc(TaskOzonPostingsSync, processor.HandleOzonPostingsSync)
 		mux.HandleFunc(TaskOzonPhrasesSync, processor.HandleOzonPhrasesSync)
+		mux.HandleFunc(TaskOzonCPOOrdersSync, processor.HandleOzonCPOOrdersSync)
 	}
 	if options.ozonStrategy != nil && options.ozonSync != nil {
 		processor = processor.WithOzonStrategy(options.ozonStrategy)
@@ -308,6 +309,18 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 			taskType string
 			queue    string
 		}{phrasesInterval, TaskOzonPhrasesSync, QueueOzonSync})
+		// CPO promoted orders: same async statistics flow (and the same
+		// one-report-at-a-time account budget) as phrases — sequential across
+		// cabinets on its own low-frequency schedule.
+		cpoOrdersInterval := cfg.OzonCPOOrdersInterval
+		if cpoOrdersInterval == "" {
+			cpoOrdersInterval = "@every 6h"
+		}
+		sweepEntries = append(sweepEntries, struct {
+			cron     string
+			taskType string
+			queue    string
+		}{cpoOrdersInterval, TaskOzonCPOOrdersSync, QueueOzonSync})
 		if options.ozonStrategy != nil {
 			strategyInterval := cfg.OzonStrategyInterval
 			if strategyInterval == "" {
@@ -486,6 +499,12 @@ func (r *Runtime) Start() error {
 		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonPostingsSync),
 			asynq.Queue(QueueOzonSync), asynq.ProcessIn(90*time.Second), asynq.Unique(30*time.Minute)); err != nil {
 			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon postings sync")
+		}
+		// CPO orders report — same reasoning: read-only, first data should not
+		// wait a full OZON_CPO_ORDERS_INTERVAL after deploy.
+		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonCPOOrdersSync),
+			asynq.Queue(QueueOzonSync), asynq.ProcessIn(3*time.Minute), asynq.Unique(30*time.Minute)); err != nil {
+			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon cpo orders sync")
 		}
 	}
 	return nil

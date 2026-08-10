@@ -540,6 +540,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.Get("/bid-changes", deps.OzonHandler.ListBidChanges)
 						oz.Get("/cpo/overview", deps.OzonHandler.CPOOverview)
 						oz.Get("/cpo/products", deps.OzonHandler.ListCPOProducts)
+						oz.Get("/cpo/orders", deps.OzonHandler.ListCPOOrders)
 						oz.Get("/limits", deps.OzonHandler.BidLimits)
 						oz.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/activate", deps.OzonHandler.ActivateCampaign)
 						oz.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/deactivate", deps.OzonHandler.DeactivateCampaign)

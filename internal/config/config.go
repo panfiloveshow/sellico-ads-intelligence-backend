@@ -125,6 +125,7 @@ type Config struct {
 	OzonAIImpactInterval     string // env: OZON_AI_IMPACT_INTERVAL, default: "@every 12h" (before/after evaluation of applied AI decisions)
 	OzonAIWeeklyInterval     string // env: OZON_AI_WEEKLY_INTERVAL, default: "@weekly" (plain-Russian weekly recap per cabinet)
 	OzonPhrasesInterval      string // env: OZON_PHRASES_INTERVAL, default: "@every 12h" (async phrases report — 1 generation per account at a time)
+	OzonCPOOrdersInterval    string // env: OZON_CPO_ORDERS_INTERVAL, default: "@every 6h" (async CPO promoted-orders report — same 1-generation budget)
 
 	// Logging
 	LogLevel string // env: LOG_LEVEL, default: "info"
@@ -194,6 +195,7 @@ func Load() *Config {
 		OzonAIImpactInterval:               getEnvOrDefault("OZON_AI_IMPACT_INTERVAL", "@every 12h"),
 		OzonAIWeeklyInterval:               getEnvOrDefault("OZON_AI_WEEKLY_INTERVAL", "@weekly"),
 		OzonPhrasesInterval:                getEnvOrDefault("OZON_PHRASES_INTERVAL", "@every 12h"),
+		OzonCPOOrdersInterval:              getEnvOrDefault("OZON_CPO_ORDERS_INTERVAL", "@every 6h"),
 		CORSAllowOrigins:                   getEnvAsSlice("CORS_ALLOW_ORIGINS", ","),
 		RateLimitRPS:                       getEnvAsFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst:                     getEnvAsInt("RATE_LIMIT_BURST", 40),

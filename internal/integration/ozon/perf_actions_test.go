@@ -306,6 +306,17 @@ func TestListSearchPromoProducts_EnrichedFields(t *testing.T) {
 				"bid":             0,
 				"bidPrice":        "0",
 				"visibilityIndex": "10+",
+				"previousBid": map[string]any{
+					"bid":       7,
+					"bidPrice":  "52.64",
+					"updatedAt": "2026-08-01T10:00:00Z",
+				},
+				"views": map[string]any{"thisWeek": "12", "previousWeek": "0"},
+			},
+			{
+				// No previousBid/views objects at all — pointers stay nil so the
+				// mirror upsert preserves previously stored counters.
+				"sku": "42", "bid": 1,
 			},
 		}})
 	}))
@@ -314,7 +325,7 @@ func TestListSearchPromoProducts_EnrichedFields(t *testing.T) {
 	c := newTestPerfClient(srv.URL)
 	out, err := c.ListSearchPromoProducts(context.Background(), testCreds)
 	require.NoError(t, err)
-	require.Len(t, out, 1)
+	require.Len(t, out, 2)
 	p := out[0]
 	assert.Equal(t, int64(2011312046), p.SKU) // string sku parsed
 	assert.Equal(t, "A61", p.OfferID)         // sourceSku → offer_id
@@ -325,6 +336,17 @@ func TestListSearchPromoProducts_EnrichedFields(t *testing.T) {
 	assert.InDelta(t, 0.0, p.BidPriceRub, 1e-9) // string bidPrice parsed
 	assert.Equal(t, "10+", p.VisibilityIndex)
 	assert.True(t, p.Enabled) // no flag in the response → presence == in promo
+	assert.InDelta(t, 7.0, p.PrevBidPct, 1e-9)
+	assert.InDelta(t, 52.64, p.PrevBidRub, 1e-9)
+	require.NotNil(t, p.ViewsThisWeek)
+	require.NotNil(t, p.ViewsPrevWeek)
+	assert.Equal(t, int64(12), *p.ViewsThisWeek) // string counter parsed
+	assert.Equal(t, int64(0), *p.ViewsPrevWeek)  // reported zero stays a real zero
+
+	bare := out[1]
+	assert.Zero(t, bare.PrevBidPct)
+	assert.Nil(t, bare.ViewsThisWeek, "absent views object → nil, not zero")
+	assert.Nil(t, bare.ViewsPrevWeek)
 }
 
 func TestEnableDisableSearchPromo(t *testing.T) {

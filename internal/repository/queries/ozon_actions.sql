@@ -78,13 +78,15 @@ WHERE campaign_id = sqlc.arg('campaign_id') AND sku = sqlc.arg('sku');
 -- passes them as NULL) never wipes values captured by the product refresh.
 INSERT INTO ozon_cpo_products (
     seller_cabinet_id, sku, enabled, bid, bid_kind,
-    offer_id, name, price_rub, bid_price_rub, image_url, visibility_index
+    offer_id, name, price_rub, bid_price_rub, image_url, visibility_index,
+    prev_bid_pct, views_this_week, views_prev_week
 )
 VALUES (
     sqlc.arg('seller_cabinet_id'), sqlc.arg('sku'), sqlc.arg('enabled'),
     sqlc.narg('bid'), sqlc.narg('bid_kind'),
     sqlc.narg('offer_id'), sqlc.narg('name'), sqlc.narg('price_rub'),
-    sqlc.narg('bid_price_rub'), sqlc.narg('image_url'), sqlc.narg('visibility_index')
+    sqlc.narg('bid_price_rub'), sqlc.narg('image_url'), sqlc.narg('visibility_index'),
+    sqlc.narg('prev_bid_pct'), sqlc.narg('views_this_week'), sqlc.narg('views_prev_week')
 )
 ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     enabled = EXCLUDED.enabled,
@@ -96,6 +98,9 @@ ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     bid_price_rub = COALESCE(EXCLUDED.bid_price_rub, ozon_cpo_products.bid_price_rub),
     image_url = COALESCE(EXCLUDED.image_url, ozon_cpo_products.image_url),
     visibility_index = COALESCE(EXCLUDED.visibility_index, ozon_cpo_products.visibility_index),
+    prev_bid_pct = COALESCE(EXCLUDED.prev_bid_pct, ozon_cpo_products.prev_bid_pct),
+    views_this_week = COALESCE(EXCLUDED.views_this_week, ozon_cpo_products.views_this_week),
+    views_prev_week = COALESCE(EXCLUDED.views_prev_week, ozon_cpo_products.views_prev_week),
     updated_at = now();
 
 -- name: SetOzonCpoProductsEnabled :exec
