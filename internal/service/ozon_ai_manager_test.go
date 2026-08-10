@@ -19,7 +19,9 @@ func TestAIDecisionStatusFor(t *testing.T) {
 		level   int
 		want    string
 	}{
-		{name: "guardrail verdict rejects on shadow level", verdict: "bid over max", level: 1, want: domain.AIDecisionStatusRejectedByGuardrail},
+		// Shadow (level 1) never applies anything, so write-time guardrails
+		// (cooldown/caps) must NOT mask the recommendation — it stays shadow.
+		{name: "shadow records even with a guardrail verdict", verdict: "cooldown violated", level: 1, want: domain.AIDecisionStatusShadow},
 		{name: "guardrail verdict rejects on copilot level", verdict: "change over max percent", level: 2, want: domain.AIDecisionStatusRejectedByGuardrail},
 		{name: "guardrail verdict rejects on autopilot level", verdict: "cooldown violated", level: 3, want: domain.AIDecisionStatusRejectedByGuardrail},
 		{name: "guardrail verdict rejects campaign not running", verdict: "campaign is not running", level: 3, want: domain.AIDecisionStatusRejectedByGuardrail},
@@ -43,11 +45,13 @@ func TestAIDecisionStatusFor_OnlyAutopilotWrites(t *testing.T) {
 		assert.NotEqual(t, domain.AIDecisionStatusAutoApplied, status,
 			"automation level %d must never map to auto_applied", level)
 	}
-	// A rejected proposal never writes either, regardless of level.
-	for level := 1; level <= 3; level++ {
+	// A rejected proposal never writes either, at copilot/autopilot levels.
+	for level := 2; level <= 3; level++ {
 		status := aiDecisionStatusFor("rejected", level)
 		assert.NotEqual(t, domain.AIDecisionStatusAutoApplied, status)
 	}
+	// Shadow with a verdict stays shadow (never writes, never rejected).
+	assert.Equal(t, domain.AIDecisionStatusShadow, aiDecisionStatusFor("rejected", 1))
 }
 
 func TestParseSubmission(t *testing.T) {

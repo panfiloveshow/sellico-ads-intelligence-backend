@@ -300,17 +300,22 @@ func (s *OzonAIManagerService) execute(ctx context.Context, run sqlcgen.AiRun, w
 // Only auto_applied ever reaches applyProposal — shadow and proposed
 // decisions never trigger writes.
 func aiDecisionStatusFor(guardrailVerdict string, automationLevel int) string {
+	// Shadow (level 1) is a pure "what would the AI do" log — nothing is ever
+	// applied, so write-time guardrails (cooldown, daily/hourly caps) are
+	// meaningless here and must not mask the recommendation as "blocked". The
+	// verdict is still persisted in guardrail_verdict for transparency; the
+	// decision itself is always recorded as shadow.
+	if automationLevel <= 1 {
+		return domain.AIDecisionStatusShadow
+	}
+	// Copilot/autopilot actually act, so a failed guardrail blocks the write.
 	if guardrailVerdict != "" {
 		return domain.AIDecisionStatusRejectedByGuardrail
 	}
-	switch automationLevel {
-	case 1:
-		return domain.AIDecisionStatusShadow
-	case 2:
+	if automationLevel == 2 {
 		return domain.AIDecisionStatusProposed
-	default: // 3 — autopilot
-		return domain.AIDecisionStatusAutoApplied
 	}
+	return domain.AIDecisionStatusAutoApplied // 3 — autopilot
 }
 
 func parseSubmission(arguments string) (*aiSubmission, error) {
@@ -754,7 +759,8 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 - Пиши простым деловым русским. НИКОГДА не используй имена полей и технический жаргон: вместо spend_rub — «расход», orders — «заказы», revenue_rub — «выручка», net_price — «себестоимость», SKU-кампания — «кампания».
 - Числа пиши по-человечески: «116 тыс. показов», «расход 0 ₽».
 - Кампании называй по названию («Общ», «Оплата за заказ»), номер — только если названия нет.
-- Summary — 3–6 коротких предложений: что происходит в кабинете и что ты сделал/почему ничего не сделал. Рекомендации человеку (проверить биллинг, карточки) давай отдельным последним предложением, без нумерованных списков.`,
+- Summary — 3–6 коротких предложений: что происходит в кабинете и что ты ПРЕДЛАГАЕШЬ сделать (или почему предлагать нечего). Рекомендации человеку (проверить биллинг, карточки) давай отдельным последним предложением, без нумерованных списков.
+- КРИТИЧНО: ты только ПРЕДЛАГАЕШЬ действия — их применяет система после проверок и подтверждения. Пиши в форме предложения: «предлагаю снизить ставку до 170 ₽», «стоит приостановить кампанию», НИКОГДА в прошедшем времени как о свершившемся: НЕ «я снизил», НЕ «приостановил», НЕ «включил». Твои слова — это рекомендация, а не отчёт о выполненном.`,
 		params.TargetACoS, params.MaxChangePercent, params.MinBid, params.MaxBid)
 }
 

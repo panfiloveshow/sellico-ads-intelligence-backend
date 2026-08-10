@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
@@ -47,6 +48,13 @@ func (s *OzonSyncService) SyncPhrases(ctx context.Context, cabinet domain.Seller
 	dateFrom := dateTo.AddDate(0, 0, -ozonPhrasesWindowDays)
 	rows, err := s.perfClient.GetPhrasesReport(ctx, ozonClientCreds(creds), campaignIDs, dateFrom, dateTo)
 	if err != nil {
+		if errors.Is(err, ozon.ErrPhrasesUnsupported) {
+			// Ozon doesn't offer phrase reports for this cabinet's campaign
+			// types — expected, not a failure. Skip quietly.
+			s.logger.Info().Str("cabinet_id", cabinet.ID.String()).
+				Msg("ozon phrases report unsupported for this cabinet; skipping")
+			return nil
+		}
 		return fmt.Errorf("statistics/phrases: %w", err)
 	}
 

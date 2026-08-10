@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -13,6 +14,11 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrPhrasesUnsupported means Ozon refuses to generate a phrases report for the
+// given campaigns (the report is forbidden for whole campaign types). It is a
+// permanent, expected condition — callers skip the cabinet, they do not retry.
+var ErrPhrasesUnsupported = errors.New("ozon phrases report unsupported for these campaigns")
 
 // Phrases (search query) statistics via the async report flow of the
 // Performance API:
@@ -98,14 +104,28 @@ func (c *PerfClient) submitPhrasesReport(ctx context.Context, creds Credentials,
 	for _, id := range campaignIDs {
 		campaigns = append(campaigns, strconv.FormatInt(id, 10))
 	}
+	// Live API (verified 2026-08-10): the phrases report uses from/to as
+	// RFC3339 timestamps (protobuf Timestamp), NOT dateFrom/dateTo dates —
+	// dateFrom is rejected as an unknown parameter.
 	payload := map[string]any{
 		"campaigns": campaigns,
-		"dateFrom":  from.Format("2006-01-02"),
-		"dateTo":    to.Format("2006-01-02"),
+		"from":      from.UTC().Format(time.RFC3339),
+		"to":        to.UTC().Format(time.RFC3339),
 		"groupBy":   "DATE",
 	}
 	body, err := c.doJSON(ctx, creds, "POST", "/api/client/statistics/phrases", nil, payload)
 	if err != nil {
+		// Ozon forbids the phrases report for whole campaign types (verified
+		// 2026-08-10: SKU/SEARCH_PROMO/ALL_SKU_PROMO all rejected). Surface
+		// that as a typed "unsupported" so the sync skips quietly instead of
+		// flooding logs and alarming operators with a hard error.
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 400 {
+			msg := strings.ToLower(apiErr.Message)
+			if strings.Contains(msg, "forbidden for the transferred") || strings.Contains(msg, "bad request") {
+				return "", fmt.Errorf("%w: %s", ErrPhrasesUnsupported, apiErr.Message)
+			}
+		}
 		return "", fmt.Errorf("submit phrases report: %w", err)
 	}
 	var parsed struct {
