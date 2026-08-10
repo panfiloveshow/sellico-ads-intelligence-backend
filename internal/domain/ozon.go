@@ -88,6 +88,11 @@ type OzonProductPrice struct {
 	MinPriceRub             *float64   `json:"min_price_rub,omitempty"`
 	NetPriceRub             *float64   `json:"net_price_rub,omitempty"`
 	MarketingSellerPriceRub *float64   `json:"marketing_seller_price_rub,omitempty"`
+	// EffectiveCostRub is the cost the floor math actually uses: Ozon's own
+	// net_price when present, else the Sellico unit-economics cost.
+	EffectiveCostRub *float64 `json:"effective_cost_rub,omitempty"`
+	// CostSource marks where EffectiveCostRub came from: "ozon" | "sellico".
+	CostSource string `json:"cost_source,omitempty"`
 	ColorIndex              string     `json:"color_index,omitempty"`
 	CommissionFBOPct        *float64   `json:"commission_fbo_pct,omitempty"`
 	CommissionFBSPct        *float64   `json:"commission_fbs_pct,omitempty"`
