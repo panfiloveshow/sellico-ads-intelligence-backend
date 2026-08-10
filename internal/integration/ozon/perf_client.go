@@ -272,6 +272,11 @@ func (c *PerfClient) ListCampaignProducts(ctx context.Context, creds Credentials
 		Products []struct {
 			SKU flexInt64 `json:"sku"`
 			Bid string    `json:"bid"`
+			// targetCir arrives as a plain number for TARGET_CIR campaigns
+			// (verified live 2026-08-10: {"targetCir":11}); topPosition mirrors
+			// the docs' TOP_PROMOTION field. Both absent on TARGET_BIDS.
+			TargetCIR   flexFloat `json:"targetCir"`
+			TopPosition flexInt64 `json:"topPosition"`
 		} `json:"products"`
 	}
 	if err := decodeJSON(body, &resp, "campaign products"); err != nil {
@@ -283,7 +288,12 @@ func (c *PerfClient) ListCampaignProducts(ctx context.Context, creds Credentials
 		if convErr != nil {
 			c.logger.Warn().Err(convErr).Int64("campaign_id", campaignID).Int64("sku", int64(p.SKU)).Msg("unparseable bid")
 		}
-		out = append(out, CampaignProduct{SKU: int64(p.SKU), BidRub: bidRub})
+		out = append(out, CampaignProduct{
+			SKU:         int64(p.SKU),
+			BidRub:      bidRub,
+			TargetCIR:   float64(p.TargetCIR),
+			TopPosition: int64(p.TopPosition),
+		})
 	}
 	return out, nil
 }

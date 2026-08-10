@@ -173,12 +173,19 @@ func (s *OzonSyncService) SyncCampaigns(ctx context.Context, cabinet domain.Sell
 			continue
 		}
 		for _, product := range products {
-			if err := s.queries.UpsertOzonCampaignProduct(ctx, sqlcgen.UpsertOzonCampaignProductParams{
+			params := sqlcgen.UpsertOzonCampaignProductParams{
 				CampaignID: row.ID,
 				Sku:        product.SKU,
 				BidRub:     floatToPgNumeric(product.BidRub),
 				IsActive:   true,
-			}); err != nil {
+			}
+			if product.TargetCIR > 0 {
+				params.TargetCir = floatToPgNumeric(product.TargetCIR)
+			}
+			if product.TopPosition > 0 {
+				params.TopPosition = pgtype.Int4{Int32: int32(product.TopPosition), Valid: true}
+			}
+			if err := s.queries.UpsertOzonCampaignProduct(ctx, params); err != nil {
 				return fmt.Errorf("upsert campaign %d product %d: %w", campaign.ID, product.SKU, err)
 			}
 			upsertedProducts++

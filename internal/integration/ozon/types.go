@@ -195,6 +195,10 @@ type Campaign struct {
 type CampaignProduct struct {
 	SKU    int64
 	BidRub float64
+	// TargetCIR is the target ДРР percent (TARGET_CIR campaigns only, 0 = unset).
+	TargetCIR float64
+	// TopPosition is the top slot (4/12/20/30) for TOP_PROMOTION campaigns, 0 = unset.
+	TopPosition int64
 }
 
 // CampaignPatch carries the mutable campaign fields for
