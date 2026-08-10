@@ -221,7 +221,10 @@ func (c *PerfClient) GetBidLimits(ctx context.Context, creds Credentials) (json.
 // CPO bids are plain rubles on this surface.
 func (c *PerfClient) ListSearchPromoProducts(ctx context.Context, creds Credentials) ([]CPOProduct, error) {
 	var out []CPOProduct
-	for page := 1; page <= searchPromoMaxPages; page++ {
+	// Pagination is 0-based (verified live 2026-08-10: page=0 returns the
+	// first page; starting at 1 skipped straight past a single-page result
+	// and returned nothing).
+	for page := 0; page < searchPromoMaxPages; page++ {
 		payload := map[string]any{"page": page, "pageSize": searchPromoPageSize}
 		body, err := c.doJSON(ctx, creds, http.MethodPost, "/api/client/campaign/search_promo/v2/products", nil, payload)
 		if err != nil {

@@ -257,8 +257,8 @@ func TestListSearchPromoProducts_EnabledResolutionAndPaging(t *testing.T) {
 		mu.Lock()
 		pages = append(pages, body.Page)
 		mu.Unlock()
-		if body.Page == 1 {
-			// Full page: mix of enabled resolution paths.
+		if body.Page == 0 {
+			// Full page (0-based): mix of enabled resolution paths.
 			products := make([]map[string]any, searchPromoPageSize)
 			for i := range products {
 				products[i] = map[string]any{"sku": i + 1, "bid": 3.5, "enabled": true}
@@ -277,7 +277,7 @@ func TestListSearchPromoProducts_EnabledResolutionAndPaging(t *testing.T) {
 	c := newTestPerfClient(srv.URL)
 	out, err := c.ListSearchPromoProducts(context.Background(), testCreds)
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2}, pages)
+	assert.Equal(t, []int{0, 1}, pages)
 	require.Len(t, out, searchPromoPageSize+3)
 	assert.True(t, out[0].Enabled)
 	assert.InDelta(t, 3.5, out[0].BidRub, 1e-9)
