@@ -169,6 +169,50 @@ func (q *Queries) GetAIDecisionGuardState(ctx context.Context, arg GetAIDecision
 	return i, err
 }
 
+const getAIReadinessStats = `-- name: GetAIReadinessStats :one
+
+SELECT
+    COUNT(*)::bigint AS decisions_total,
+    COUNT(*) FILTER (WHERE status = 'shadow')::bigint AS shadow_total,
+    COUNT(*) FILTER (WHERE status = 'shadow' AND guardrail_verdict = 'passed')::bigint AS shadow_passed,
+    MIN(created_at) FILTER (WHERE status = 'shadow')::timestamptz AS first_shadow_at,
+    COUNT(*) FILTER (
+        WHERE outcome_status = 'evaluated' AND drr_before IS NOT NULL AND drr_after IS NOT NULL
+    )::bigint AS evaluated_pairs,
+    COALESCE(AVG(drr_after - drr_before) FILTER (
+        WHERE outcome_status = 'evaluated' AND drr_before IS NOT NULL AND drr_after IS NOT NULL
+    ), 0)::numeric AS avg_drr_delta
+FROM ai_decisions
+WHERE seller_cabinet_id = $1
+`
+
+type GetAIReadinessStatsRow struct {
+	DecisionsTotal int64              `json:"decisions_total"`
+	ShadowTotal    int64              `json:"shadow_total"`
+	ShadowPassed   int64              `json:"shadow_passed"`
+	FirstShadowAt  pgtype.Timestamptz `json:"first_shadow_at"`
+	EvaluatedPairs int64              `json:"evaluated_pairs"`
+	AvgDrrDelta    pgtype.Numeric     `json:"avg_drr_delta"`
+}
+
+// --- Shadow → next-level readiness («готов ли к повышению уровня») ---
+// GetAIReadinessStats is a pure aggregate over a cabinet's ai_decisions for the
+// readiness endpoint (no writes). shadow_passed/shadow_total gives the
+// within-guardrails share; the evaluated drr delta feeds projected_drr_delta.
+func (q *Queries) GetAIReadinessStats(ctx context.Context, sellerCabinetID pgtype.UUID) (GetAIReadinessStatsRow, error) {
+	row := q.db.QueryRow(ctx, getAIReadinessStats, sellerCabinetID)
+	var i GetAIReadinessStatsRow
+	err := row.Scan(
+		&i.DecisionsTotal,
+		&i.ShadowTotal,
+		&i.ShadowPassed,
+		&i.FirstShadowAt,
+		&i.EvaluatedPairs,
+		&i.AvgDrrDelta,
+	)
+	return i, err
+}
+
 const getActiveOzonAIStrategyForCabinet = `-- name: GetActiveOzonAIStrategyForCabinet :one
 SELECT id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at FROM strategies
 WHERE seller_cabinet_id = $1
@@ -193,6 +237,31 @@ func (q *Queries) GetActiveOzonAIStrategyForCabinet(ctx context.Context, sellerC
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getLatestOzonAIWeeklyReport = `-- name: GetLatestOzonAIWeeklyReport :one
+SELECT id, seller_cabinet_id, period_start, period_end, drr_start, drr_end, text, generated_at FROM ozon_ai_weekly_reports
+WHERE seller_cabinet_id = $1
+ORDER BY period_start DESC
+LIMIT 1
+`
+
+// GetLatestOzonAIWeeklyReport powers GET /ozon/ai/weekly-report (newest report
+// for a cabinet, or no rows).
+func (q *Queries) GetLatestOzonAIWeeklyReport(ctx context.Context, sellerCabinetID pgtype.UUID) (OzonAiWeeklyReport, error) {
+	row := q.db.QueryRow(ctx, getLatestOzonAIWeeklyReport, sellerCabinetID)
+	var i OzonAiWeeklyReport
+	err := row.Scan(
+		&i.ID,
+		&i.SellerCabinetID,
+		&i.PeriodStart,
+		&i.PeriodEnd,
+		&i.DrrStart,
+		&i.DrrEnd,
+		&i.Text,
+		&i.GeneratedAt,
 	)
 	return i, err
 }
@@ -257,6 +326,34 @@ func (q *Queries) GetOzonAICPOGuardState(ctx context.Context, arg GetOzonAICPOGu
 	row := q.db.QueryRow(ctx, getOzonAICPOGuardState, arg.DayStart, arg.SellerCabinetID, arg.Sku)
 	var i GetOzonAICPOGuardStateRow
 	err := row.Scan(&i.ChangesToday, &i.LastChangeAt)
+	return i, err
+}
+
+const getOzonAIWeeklyReportForPeriod = `-- name: GetOzonAIWeeklyReportForPeriod :one
+SELECT id, seller_cabinet_id, period_start, period_end, drr_start, drr_end, text, generated_at FROM ozon_ai_weekly_reports
+WHERE seller_cabinet_id = $1
+  AND period_start = $2
+`
+
+type GetOzonAIWeeklyReportForPeriodParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	PeriodStart     pgtype.Date `json:"period_start"`
+}
+
+// GetOzonAIWeeklyReportForPeriod is the once-per-ISO-week generation guard.
+func (q *Queries) GetOzonAIWeeklyReportForPeriod(ctx context.Context, arg GetOzonAIWeeklyReportForPeriodParams) (OzonAiWeeklyReport, error) {
+	row := q.db.QueryRow(ctx, getOzonAIWeeklyReportForPeriod, arg.SellerCabinetID, arg.PeriodStart)
+	var i OzonAiWeeklyReport
+	err := row.Scan(
+		&i.ID,
+		&i.SellerCabinetID,
+		&i.PeriodStart,
+		&i.PeriodEnd,
+		&i.DrrStart,
+		&i.DrrEnd,
+		&i.Text,
+		&i.GeneratedAt,
+	)
 	return i, err
 }
 
@@ -472,6 +569,52 @@ func (q *Queries) InsertAIRun(ctx context.Context, arg InsertAIRunParams) (AiRun
 	return i, err
 }
 
+const insertOzonAIWeeklyReport = `-- name: InsertOzonAIWeeklyReport :one
+
+INSERT INTO ozon_ai_weekly_reports (
+    seller_cabinet_id, period_start, period_end, drr_start, drr_end, text
+)
+VALUES (
+    $1, $2, $3,
+    $4, $5, $6
+)
+ON CONFLICT (seller_cabinet_id, period_start) DO NOTHING
+RETURNING id, seller_cabinet_id, period_start, period_end, drr_start, drr_end, text, generated_at
+`
+
+type InsertOzonAIWeeklyReportParams struct {
+	SellerCabinetID pgtype.UUID    `json:"seller_cabinet_id"`
+	PeriodStart     pgtype.Date    `json:"period_start"`
+	PeriodEnd       pgtype.Date    `json:"period_end"`
+	DrrStart        pgtype.Numeric `json:"drr_start"`
+	DrrEnd          pgtype.Numeric `json:"drr_end"`
+	Text            string         `json:"text"`
+}
+
+// --- Weekly natural-language report (ozon_ai_weekly_reports) ---
+func (q *Queries) InsertOzonAIWeeklyReport(ctx context.Context, arg InsertOzonAIWeeklyReportParams) (OzonAiWeeklyReport, error) {
+	row := q.db.QueryRow(ctx, insertOzonAIWeeklyReport,
+		arg.SellerCabinetID,
+		arg.PeriodStart,
+		arg.PeriodEnd,
+		arg.DrrStart,
+		arg.DrrEnd,
+		arg.Text,
+	)
+	var i OzonAiWeeklyReport
+	err := row.Scan(
+		&i.ID,
+		&i.SellerCabinetID,
+		&i.PeriodStart,
+		&i.PeriodEnd,
+		&i.DrrStart,
+		&i.DrrEnd,
+		&i.Text,
+		&i.GeneratedAt,
+	)
+	return i, err
+}
+
 const listAIDecisionImpactRows = `-- name: ListAIDecisionImpactRows :many
 SELECT id, action_type, status, outcome_status, applied_at,
        drr_before, drr_after, spend_before_rub, spend_after_rub,
@@ -668,6 +811,58 @@ func (q *Queries) ListAIDecisionsForImpactEval(ctx context.Context) ([]AiDecisio
 	return items, nil
 }
 
+const listAIDecisionsSince = `-- name: ListAIDecisionsSince :many
+SELECT action_type, status, target, proposal, rationale, created_at
+FROM ai_decisions
+WHERE seller_cabinet_id = $1
+  AND created_at >= $2
+ORDER BY created_at DESC
+LIMIT 200
+`
+
+type ListAIDecisionsSinceParams struct {
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Since           pgtype.Timestamptz `json:"since"`
+}
+
+type ListAIDecisionsSinceRow struct {
+	ActionType string             `json:"action_type"`
+	Status     string             `json:"status"`
+	Target     []byte             `json:"target"`
+	Proposal   []byte             `json:"proposal"`
+	Rationale  pgtype.Text        `json:"rationale"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+// ListAIDecisionsSince returns a cabinet's decisions created since a moment,
+// for the weekly recap's «что ИИ предложил/применил за неделю» summary.
+func (q *Queries) ListAIDecisionsSince(ctx context.Context, arg ListAIDecisionsSinceParams) ([]ListAIDecisionsSinceRow, error) {
+	rows, err := q.db.Query(ctx, listAIDecisionsSince, arg.SellerCabinetID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAIDecisionsSinceRow{}
+	for rows.Next() {
+		var i ListAIDecisionsSinceRow
+		if err := rows.Scan(
+			&i.ActionType,
+			&i.Status,
+			&i.Target,
+			&i.Proposal,
+			&i.Rationale,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAIRunsByCabinet = `-- name: ListAIRunsByCabinet :many
 SELECT id, workspace_id, seller_cabinet_id, strategy_id, status, trigger, summary, error, prompt_tokens, completion_tokens, started_at, finished_at FROM ai_runs
 WHERE workspace_id = $1
@@ -846,6 +1041,76 @@ func (q *Queries) ListOzonProductPricesBySkus(ctx context.Context, arg ListOzonP
 			&i.OzonIndexMinPriceRub,
 			&i.ExternalIndexMinPriceRub,
 			&i.SelfIndexMinPriceRub,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentAppliedAIDecisions = `-- name: ListRecentAppliedAIDecisions :many
+
+SELECT action_type, target, proposal, status, outcome_status, created_at,
+       drr_before, drr_after, spend_before_rub, spend_after_rub,
+       revenue_before_rub, revenue_after_rub
+FROM ai_decisions
+WHERE seller_cabinet_id = $1
+  AND status IN ('applied', 'auto_applied')
+ORDER BY created_at DESC
+LIMIT $2
+`
+
+type ListRecentAppliedAIDecisionsParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Lim             int32       `json:"lim"`
+}
+
+type ListRecentAppliedAIDecisionsRow struct {
+	ActionType       string             `json:"action_type"`
+	Target           []byte             `json:"target"`
+	Proposal         []byte             `json:"proposal"`
+	Status           string             `json:"status"`
+	OutcomeStatus    pgtype.Text        `json:"outcome_status"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	DrrBefore        pgtype.Numeric     `json:"drr_before"`
+	DrrAfter         pgtype.Numeric     `json:"drr_after"`
+	SpendBeforeRub   pgtype.Numeric     `json:"spend_before_rub"`
+	SpendAfterRub    pgtype.Numeric     `json:"spend_after_rub"`
+	RevenueBeforeRub pgtype.Numeric     `json:"revenue_before_rub"`
+	RevenueAfterRub  pgtype.Numeric     `json:"revenue_after_rub"`
+}
+
+// --- Feedback loop: recent applied decisions + their measured outcomes ---
+// ListRecentAppliedAIDecisions feeds the «твои прошлые решения и что вышло»
+// section of the context pack: the cabinet's newest applied/auto_applied
+// decisions with the impact numbers written by the sweep (outcome_status,
+// drr_before/after, spend/revenue before/after). Newest first.
+func (q *Queries) ListRecentAppliedAIDecisions(ctx context.Context, arg ListRecentAppliedAIDecisionsParams) ([]ListRecentAppliedAIDecisionsRow, error) {
+	rows, err := q.db.Query(ctx, listRecentAppliedAIDecisions, arg.SellerCabinetID, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentAppliedAIDecisionsRow{}
+	for rows.Next() {
+		var i ListRecentAppliedAIDecisionsRow
+		if err := rows.Scan(
+			&i.ActionType,
+			&i.Target,
+			&i.Proposal,
+			&i.Status,
+			&i.OutcomeStatus,
+			&i.CreatedAt,
+			&i.DrrBefore,
+			&i.DrrAfter,
+			&i.SpendBeforeRub,
+			&i.SpendAfterRub,
+			&i.RevenueBeforeRub,
+			&i.RevenueAfterRub,
 		); err != nil {
 			return nil, err
 		}

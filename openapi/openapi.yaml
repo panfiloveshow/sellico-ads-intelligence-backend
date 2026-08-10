@@ -3873,6 +3873,99 @@ paths:
               schema: { $ref: "#/components/schemas/AIDecisionEnvelope" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
         "409": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/decisions/approve-batch:
+    post:
+      tags: [Ozon]
+      summary: Bulk-approve proposed AI decisions
+      description: >
+        Approves each id in turn (same guardrail re-check as the single-decision
+        approve). One id failing never aborts the rest — the response reports a
+        per-id result.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AIDecisionBatchRequest" }
+      responses:
+        "200":
+          description: Per-id batch results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIDecisionBatchEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/decisions/reject-batch:
+    post:
+      tags: [Ozon]
+      summary: Bulk-reject proposed AI decisions
+      description: >
+        Rejects each id in turn. One id failing never aborts the rest — the
+        response reports a per-id result.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AIDecisionBatchRequest" }
+      responses:
+        "200":
+          description: Per-id batch results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIDecisionBatchEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/readiness:
+    get:
+      tags: [Ozon]
+      summary: Shadow → next-level readiness stat for the active AI strategy
+      description: >
+        Pure aggregate over the cabinet's AI decisions: how long it has run in
+        shadow, how many decisions it made, the share within the guardrails, the
+        measured ДРР effect, and whether it is safe to raise the automation
+        level. Returns null when the cabinet has no active AI autopilot strategy.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Readiness stat (data null when no active strategy)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIReadinessEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/ai/weekly-report:
+    get:
+      tags: [Ozon]
+      summary: Latest weekly natural-language AI recap of a cabinet
+      description: >
+        The newest plain-Russian weekly recap (summary only, no actions).
+        Returns null when none has been generated yet.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Latest weekly report (data null when none exists)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIWeeklyReportEnvelope" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/prices:
     get:
       tags: [Repricer]
@@ -5868,6 +5961,64 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/AIImpactSummary"
+    AIReadiness:
+      type: object
+      description: >
+        Shadow → next-level readiness for a cabinet's active AI autopilot
+        strategy. recommend_next_level is true only when shadow_days ≥ 5,
+        decisions_total ≥ 10, and within_guardrails_pct ≥ 80.
+      properties:
+        current_level: { type: integer, description: "Current automation level (1 shadow, 2 copilot, 3 autopilot)" }
+        shadow_days: { type: integer, description: "Days since the strategy/first shadow decision" }
+        decisions_total: { type: integer, format: int64 }
+        within_guardrails_pct: { type: number, description: "Share of shadow decisions with guardrail_verdict='passed'" }
+        projected_drr_delta: { type: number, nullable: true, description: "Avg (ДРР после − ДРР до) over evaluated decisions; null when none evaluated" }
+        recommend_next_level: { type: boolean }
+        reason: { type: string, description: "Human-readable Russian explanation" }
+    AIReadinessEnvelope:
+      type: object
+      properties:
+        data:
+          allOf: [{ $ref: "#/components/schemas/AIReadiness" }]
+          nullable: true
+    AIWeeklyReport:
+      type: object
+      description: Manager-facing plain-Russian weekly recap (summary only, no actions).
+      properties:
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        drr_start: { type: number, nullable: true, description: "First-day ДРР of the week" }
+        drr_end: { type: number, nullable: true, description: "Last-day ДРР of the week" }
+        text: { type: string }
+        generated_at: { type: string, format: date-time }
+    AIWeeklyReportEnvelope:
+      type: object
+      properties:
+        data:
+          allOf: [{ $ref: "#/components/schemas/AIWeeklyReport" }]
+          nullable: true
+    AIDecisionBatchRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items: { type: string, format: uuid }
+    AIDecisionBatchResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ok: { type: boolean }
+        error: { type: string, description: "Present only when ok is false" }
+    AIDecisionBatchEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            results:
+              type: array
+              items: { $ref: "#/components/schemas/AIDecisionBatchResult" }
     OzonSearchQueryStat:
       type: object
       description: One aggregated search query (phrases report mirror)

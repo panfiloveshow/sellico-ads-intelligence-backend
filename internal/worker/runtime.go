@@ -159,6 +159,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		mux.HandleFunc(TaskOzonAISweep, processor.HandleOzonAISweep)
 		mux.HandleFunc(TaskOzonAIRun, processor.HandleOzonAIRun)
 		mux.HandleFunc(TaskOzonAIImpactSweep, processor.HandleOzonAIImpactSweep)
+		mux.HandleFunc(TaskOzonAIWeeklyReport, processor.HandleOzonAIWeeklyReport)
 	}
 	if options.ozonRepricer != nil && options.ozonSync != nil {
 		processor = processor.WithOzonRepricer(options.ozonRepricer)
@@ -340,6 +341,17 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 				taskType string
 				queue    string
 			}{impactInterval, TaskOzonAIImpactSweep, QueueOzonSync})
+			// Weekly natural-language recap: one LLM call per cabinet, once per
+			// ISO week (the generator guards duplicates).
+			weeklyInterval := cfg.OzonAIWeeklyInterval
+			if weeklyInterval == "" {
+				weeklyInterval = "@weekly"
+			}
+			sweepEntries = append(sweepEntries, struct {
+				cron     string
+				taskType string
+				queue    string
+			}{weeklyInterval, TaskOzonAIWeeklyReport, QueueOzonSync})
 		}
 		if options.ozonRepricer != nil {
 			repricerInterval := cfg.OzonRepricerInterval

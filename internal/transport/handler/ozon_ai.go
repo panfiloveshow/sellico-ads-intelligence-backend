@@ -22,7 +22,11 @@ type ozonAIServicer interface {
 	CheckManualRunAllowed(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
 	ApproveDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
 	RejectDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error)
+	ApproveDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult
+	RejectDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult
 	GetImpact(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIImpactSummary, error)
+	GetLatestWeeklyReport(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonAIWeeklyReport, error)
+	GetReadiness(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIReadiness, error)
 }
 
 // ozonAIRunEnqueuer enqueues an async ozon:ai_run task (trigger 'manual').
@@ -181,4 +185,95 @@ func (h *OzonHandler) AIApproveDecision(w http.ResponseWriter, r *http.Request) 
 // AIRejectDecision handles POST /ozon/ai/decisions/{id}/reject.
 func (h *OzonHandler) AIRejectDecision(w http.ResponseWriter, r *http.Request) {
 	h.aiDecisionAction(w, r, false)
+}
+
+// aiDecisionsBatch handles POST /ozon/ai/decisions/approve-batch and
+// /reject-batch: {ids:[]} → per-id results {id, ok, error}.
+func (h *OzonHandler) aiDecisionsBatch(w http.ResponseWriter, r *http.Request, approve bool) {
+	if !h.requireAI(w) {
+		return
+	}
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing user id")
+		return
+	}
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid request body")
+		return
+	}
+	if len(req.IDs) == 0 {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "ids must not be empty")
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	for _, raw := range req.IDs {
+		parsed, err := parseNonNilUUID(raw)
+		if err != nil {
+			dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid decision id: "+raw)
+			return
+		}
+		ids = append(ids, parsed)
+	}
+	var results []domain.AIDecisionBatchResult
+	if approve {
+		results = h.ai.ApproveDecisionsBatch(r.Context(), workspaceID, ids, userID)
+	} else {
+		results = h.ai.RejectDecisionsBatch(r.Context(), workspaceID, ids, userID)
+	}
+	dto.WriteJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// AIApproveDecisionsBatch handles POST /ozon/ai/decisions/approve-batch.
+func (h *OzonHandler) AIApproveDecisionsBatch(w http.ResponseWriter, r *http.Request) {
+	h.aiDecisionsBatch(w, r, true)
+}
+
+// AIRejectDecisionsBatch handles POST /ozon/ai/decisions/reject-batch.
+func (h *OzonHandler) AIRejectDecisionsBatch(w http.ResponseWriter, r *http.Request) {
+	h.aiDecisionsBatch(w, r, false)
+}
+
+// AIWeeklyReport handles GET /ozon/ai/weekly-report?cabinet_id= — the latest
+// plain-Russian weekly recap for a cabinet (null when none exists yet).
+func (h *OzonHandler) AIWeeklyReport(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAI(w) {
+		return
+	}
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	report, err := h.ai.GetLatestWeeklyReport(r.Context(), workspaceID, cabinetID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, report)
+}
+
+// AIReadiness handles GET /ozon/ai/readiness?cabinet_id= — the shadow →
+// next-level readiness stat (null when the cabinet has no active AI strategy).
+func (h *OzonHandler) AIReadiness(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAI(w) {
+		return
+	}
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	readiness, err := h.ai.GetReadiness(r.Context(), workspaceID, cabinetID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, readiness)
 }

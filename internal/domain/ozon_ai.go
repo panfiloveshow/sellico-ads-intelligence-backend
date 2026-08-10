@@ -122,6 +122,38 @@ type AIImpactSummary struct {
 	ExtraRevenueRub    float64  `json:"extra_revenue_rub"`
 }
 
+// OzonAIWeeklyReport is a manager-facing plain-Russian recap of a cabinet's
+// last week (no actions — summary only). One per cabinet per ISO week.
+type OzonAIWeeklyReport struct {
+	PeriodStart time.Time `json:"period_start"`
+	PeriodEnd   time.Time `json:"period_end"`
+	DRRStart    *float64  `json:"drr_start,omitempty"`
+	DRREnd      *float64  `json:"drr_end,omitempty"`
+	Text        string    `json:"text"`
+	GeneratedAt time.Time `json:"generated_at"`
+}
+
+// AIReadiness is the shadow → next-level readiness stat for a cabinet's active
+// AI autopilot strategy: how long it has run in shadow, how many decisions it
+// made, how many stayed within the guardrails, the measured ДРР effect so far,
+// and whether it is safe to promote to the next automation level.
+type AIReadiness struct {
+	CurrentLevel        int      `json:"current_level"`
+	ShadowDays          int      `json:"shadow_days"`
+	DecisionsTotal      int64    `json:"decisions_total"`
+	WithinGuardrailsPct float64  `json:"within_guardrails_pct"`
+	ProjectedDRRDelta   *float64 `json:"projected_drr_delta,omitempty"`
+	RecommendNextLevel  bool     `json:"recommend_next_level"`
+	Reason              string   `json:"reason"`
+}
+
+// AIDecisionBatchResult is one entry of a bulk approve/reject response.
+type AIDecisionBatchResult struct {
+	ID    uuid.UUID `json:"id"`
+	OK    bool      `json:"ok"`
+	Error string    `json:"error,omitempty"`
+}
+
 // OzonSearchQueryStat is one aggregated search query row for
 // GET /ozon/search-queries (grouped by query over the requested window).
 type OzonSearchQueryStat struct {

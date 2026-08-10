@@ -218,6 +218,37 @@ func (s *OzonAIManagerService) RejectDecision(ctx context.Context, workspaceID, 
 	return &result, nil
 }
 
+// ApproveDecisionsBatch approves each decision id in turn (same tenancy +
+// guardrail path as ApproveDecision), returning a per-id result. A failure on
+// one id never aborts the rest — the frontend groups the cards and shows which
+// ones went through.
+func (s *OzonAIManagerService) ApproveDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult {
+	return s.decisionsBatch(ctx, workspaceID, ids, userID, true)
+}
+
+// RejectDecisionsBatch is the reject flavor of ApproveDecisionsBatch.
+func (s *OzonAIManagerService) RejectDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult {
+	return s.decisionsBatch(ctx, workspaceID, ids, userID, false)
+}
+
+func (s *OzonAIManagerService) decisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID, approve bool) []domain.AIDecisionBatchResult {
+	results := make([]domain.AIDecisionBatchResult, 0, len(ids))
+	for _, id := range ids {
+		var err error
+		if approve {
+			_, err = s.ApproveDecision(ctx, workspaceID, id, userID)
+		} else {
+			_, err = s.RejectDecision(ctx, workspaceID, id, userID)
+		}
+		res := domain.AIDecisionBatchResult{ID: id, OK: err == nil}
+		if err != nil {
+			res.Error = err.Error()
+		}
+		results = append(results, res)
+	}
+	return results
+}
+
 // loadFreshCabinetData rebuilds the minimal lookup set the guardrails need
 // when a decision is approved later than its run.
 func (s *OzonAIManagerService) loadFreshCabinetData(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal) (*aiCabinetData, error) {

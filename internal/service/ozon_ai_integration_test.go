@@ -639,3 +639,237 @@ func TestOzonAI_Impact(t *testing.T) {
 	assert.EqualValues(t, 1, summary.DecisionsApplied)
 	assert.EqualValues(t, 1, summary.DecisionsEvaluated)
 }
+
+// TestOzonAI_ContextFeedbackAndMargin verifies the feedback-loop section
+// (recent applied decisions + measured outcome) and the per-SKU margin.
+func TestOzonAI_ContextFeedbackAndMargin(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-feedback")
+	defer cleanup()
+	ctx := context.Background()
+	mgr := newAIManager(fx.db, &fakeLLM{})
+
+	// A campaign the recent decision targets + an active bid SKU so it lands in
+	// the economics/skuSet.
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 9100, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	seedOzonCampaignProduct(t, fx.db, c.ID, 501, 20)
+	seedOzonCampaignStat(t, fx.db, c.ID, time.Now().UTC().AddDate(0, 0, -1), 1000, 100, 10, 200, 1000)
+
+	// SKU 501: Ozon net_price present → margin from the price row (cost "ozon").
+	seedOzonPrice(t, fx.db, fx.cabinetID, ozonPriceSeed{
+		SKU: 501, OfferID: "ART-501", Name: "P1", PriceRub: 1000,
+		NetPriceRub: 400, CommissionFBOPct: 15, AcquiringPct: 20,
+	})
+
+	strategyID := seedAIStrategy(t, fx, 3)
+	strategyRow, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
+	require.NoError(t, err)
+	strategy := strategyFromSqlc(strategyRow)
+
+	// Seed one applied+evaluated decision on campaign 9100 with impact numbers.
+	run, err := fx.db.Queries.InsertAIRun(ctx, sqlcgen.InsertAIRunParams{
+		WorkspaceID: uuidToPgtype(fx.workspaceID), SellerCabinetID: uuidToPgtype(fx.cabinetID),
+		StrategyID: uuidToPgtype(strategyID), Status: domain.AIRunStatusCompleted, Trigger: domain.AIRunTriggerManual,
+	})
+	require.NoError(t, err)
+	target, _ := json.Marshal(domain.AIDecisionTarget{OzonCampaignID: 9100, SKU: 501})
+	dec, err := fx.db.Queries.InsertAIDecision(ctx, sqlcgen.InsertAIDecisionParams{
+		RunID: run.ID, WorkspaceID: uuidToPgtype(fx.workspaceID), SellerCabinetID: uuidToPgtype(fx.cabinetID),
+		ActionType: domain.AIActionBidChange, Target: target, Proposal: []byte(`{"new_value":18}`),
+		GuardrailVerdict: "passed", Status: domain.AIDecisionStatusApplied,
+	})
+	require.NoError(t, err)
+	_, err = fx.db.Pool.Exec(ctx, `
+		UPDATE ai_decisions SET outcome_status='evaluated',
+			drr_before=25.0, drr_after=18.0,
+			spend_before_rub=500, spend_after_rub=450,
+			revenue_before_rub=2000, revenue_after_rub=2500
+		WHERE id=$1`, dec.ID)
+	require.NoError(t, err)
+
+	pack, _, err := mgr.buildAIContext(ctx, fx.workspaceID, fx.cabinetID, strategy, strategy.Params.Merged())
+	require.NoError(t, err)
+
+	// Feedback section present with measured outcome + deltas.
+	require.Len(t, pack.RecentDecisions, 1)
+	rd := pack.RecentDecisions[0]
+	assert.Equal(t, domain.AIActionBidChange, rd.Action)
+	assert.EqualValues(t, 501, rd.SKU)
+	assert.Equal(t, domain.AIOutcomeEvaluated, rd.Outcome)
+	require.NotNil(t, rd.DRRBefore)
+	require.NotNil(t, rd.DRRAfter)
+	assert.InDelta(t, 25.0, *rd.DRRBefore, 0.01)
+	assert.InDelta(t, 18.0, *rd.DRRAfter, 0.01)
+	require.NotNil(t, rd.SpendDelta)
+	assert.InDelta(t, -50.0, *rd.SpendDelta, 0.01) // 450-500
+	require.NotNil(t, rd.RevenueDelta)
+	assert.InDelta(t, 500.0, *rd.RevenueDelta, 0.01) // 2500-2000
+
+	// Margin: SKU 501 has Ozon net_price → cost source "ozon", margin 43%.
+	var econ *aiPackEconomics
+	for i := range pack.Economics {
+		if pack.Economics[i].SKU == 501 {
+			econ = &pack.Economics[i]
+		}
+	}
+	require.NotNil(t, econ)
+	assert.Equal(t, "ozon", econ.CostSource)
+	require.NotNil(t, econ.MarginPct)
+	assert.InDelta(t, 43.0, *econ.MarginPct, 0.1)
+}
+
+// TestOzonAI_ContextMarginSellicoFallback verifies the cost fallback path:
+// no Ozon net_price, cost pulled from the Sellico unit-economics mirror.
+func TestOzonAI_ContextMarginSellicoFallback(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-margin-fallback")
+	defer cleanup()
+	ctx := context.Background()
+	mgr := newAIManager(fx.db, &fakeLLM{})
+
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 9200, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	seedOzonCampaignProduct(t, fx.db, c.ID, 601, 20)
+	// Price row without net_price (no Ozon cost), commission + acquiring present.
+	seedOzonPrice(t, fx.db, fx.cabinetID, ozonPriceSeed{
+		SKU: 601, OfferID: "ART-601", Name: "P2", PriceRub: 1000,
+		CommissionFBOPct: 10, AcquiringPct: 0,
+	})
+	// Sellico economics: cost 300 + other 50 = 350.
+	seedOzonEconomics(t, fx.db, fx.cabinetID, "ART-601", 601, 300, 50)
+
+	strategyID := seedAIStrategy(t, fx, 3)
+	strategyRow, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
+	require.NoError(t, err)
+	strategy := strategyFromSqlc(strategyRow)
+
+	pack, _, err := mgr.buildAIContext(ctx, fx.workspaceID, fx.cabinetID, strategy, strategy.Params.Merged())
+	require.NoError(t, err)
+
+	var econ *aiPackEconomics
+	for i := range pack.Economics {
+		if pack.Economics[i].SKU == 601 {
+			econ = &pack.Economics[i]
+		}
+	}
+	require.NotNil(t, econ)
+	assert.Equal(t, "sellico", econ.CostSource)
+	require.NotNil(t, econ.MarginPct)
+	// (1000 - 350 - 1000*10/100 - 0)/1000*100 = 55%.
+	assert.InDelta(t, 55.0, *econ.MarginPct, 0.1)
+}
+
+// TestOzonAI_BatchApproveRejectTenancyAndPartial covers batch approve/reject:
+// per-id results, partial failure, and tenancy isolation.
+func TestOzonAI_BatchApproveRejectTenancyAndPartial(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-batch")
+	defer cleanup()
+	ctx := context.Background()
+	mgr := newAIManager(fx.db, &fakeLLM{})
+
+	weekly := int64(7000)
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 9300, "CAMPAIGN_STATE_RUNNING", nil, &weekly)
+	seedOzonCampaignStat(t, fx.db, c.ID, time.Now().UTC().AddDate(0, 0, -1), 1000, 100, 10, 200, 1000)
+
+	strategyID := seedAIStrategy(t, fx, 2) // copilot
+	run, err := fx.db.Queries.InsertAIRun(ctx, sqlcgen.InsertAIRunParams{
+		WorkspaceID: uuidToPgtype(fx.workspaceID), SellerCabinetID: uuidToPgtype(fx.cabinetID),
+		StrategyID: uuidToPgtype(strategyID), Status: domain.AIRunStatusCompleted, Trigger: domain.AIRunTriggerManual,
+	})
+	require.NoError(t, err)
+
+	// One approvable budget_change on the real campaign.
+	okTarget, _ := json.Marshal(domain.AIDecisionTarget{OzonCampaignID: 9300})
+	okDec, err := fx.db.Queries.InsertAIDecision(ctx, sqlcgen.InsertAIDecisionParams{
+		RunID: run.ID, WorkspaceID: uuidToPgtype(fx.workspaceID), SellerCabinetID: uuidToPgtype(fx.cabinetID),
+		ActionType: domain.AIActionBudgetChange, Target: okTarget, Proposal: []byte(`{"new_value":8000}`),
+		GuardrailVerdict: "passed", Status: domain.AIDecisionStatusProposed,
+	})
+	require.NoError(t, err)
+	_, err = fx.db.Pool.Exec(ctx, `UPDATE ai_decisions SET created_at = now() - interval '3 hours' WHERE id = $1`, okDec.ID)
+	require.NoError(t, err)
+
+	// One that fails the guardrail (campaign not in cabinet).
+	badTarget, _ := json.Marshal(domain.AIDecisionTarget{OzonCampaignID: 999999})
+	badDec, err := fx.db.Queries.InsertAIDecision(ctx, sqlcgen.InsertAIDecisionParams{
+		RunID: run.ID, WorkspaceID: uuidToPgtype(fx.workspaceID), SellerCabinetID: uuidToPgtype(fx.cabinetID),
+		ActionType: domain.AIActionBudgetChange, Target: badTarget, Proposal: []byte(`{"new_value":8000}`),
+		GuardrailVerdict: "passed", Status: domain.AIDecisionStatusProposed,
+	})
+	require.NoError(t, err)
+
+	okID := uuid.UUID(okDec.ID.Bytes)
+	badID := uuid.UUID(badDec.ID.Bytes)
+	results := mgr.ApproveDecisionsBatch(ctx, fx.workspaceID, []uuid.UUID{okID, badID}, uuid.New())
+	require.Len(t, results, 2)
+	byID := map[uuid.UUID]domain.AIDecisionBatchResult{}
+	for _, r := range results {
+		byID[r.ID] = r
+	}
+	assert.True(t, byID[okID].OK, "the valid decision should apply")
+	assert.False(t, byID[badID].OK, "the bad decision should fail")
+	assert.NotEmpty(t, byID[badID].Error)
+
+	t.Run("tenancy: other workspace fails all", func(t *testing.T) {
+		other := newOzonWorkspace(t, fx.db, "ozon-ai-batch-other")
+		// A fresh proposed decision to reject under the wrong workspace.
+		rejTarget, _ := json.Marshal(domain.AIDecisionTarget{OzonCampaignID: 9300})
+		rejDec, err := fx.db.Queries.InsertAIDecision(ctx, sqlcgen.InsertAIDecisionParams{
+			RunID: run.ID, WorkspaceID: uuidToPgtype(fx.workspaceID), SellerCabinetID: uuidToPgtype(fx.cabinetID),
+			ActionType: domain.AIActionBudgetChange, Target: rejTarget, Proposal: []byte(`{"new_value":8000}`),
+			GuardrailVerdict: "passed", Status: domain.AIDecisionStatusProposed,
+		})
+		require.NoError(t, err)
+		res := mgr.RejectDecisionsBatch(ctx, other, []uuid.UUID{uuid.UUID(rejDec.ID.Bytes)}, uuid.New())
+		require.Len(t, res, 1)
+		assert.False(t, res[0].OK, "cross-workspace reject must not succeed")
+	})
+}
+
+// TestOzonAI_WeeklyReportGeneration verifies weekly report gen with a fake LLM,
+// the endpoint, and the once-per-ISO-week guard.
+func TestOzonAI_WeeklyReportGeneration(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-weekly")
+	defer cleanup()
+	ctx := context.Background()
+
+	// Some campaign stats over the trailing week for the DRR trend.
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 9400, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	for i := 1; i <= 6; i++ {
+		seedOzonCampaignStat(t, fx.db, c.ID, time.Now().UTC().AddDate(0, 0, -i), 1000, 100, 10, 100, 1000)
+	}
+	seedAIStrategy(t, fx, 1)
+
+	textResp := &llm.ChatResponse{Message: llm.Message{Role: "assistant", Content: "За неделю расход составил около 600 рублей, выручка держалась стабильно."}}
+	llmClient := &fakeLLM{enabled: true, responses: []*llm.ChatResponse{textResp}}
+	mgr := newAIManager(fx.db, llmClient)
+
+	// Endpoint returns nil before generation.
+	before, err := mgr.GetLatestWeeklyReport(ctx, fx.workspaceID, fx.cabinetID)
+	require.NoError(t, err)
+	assert.Nil(t, before)
+
+	generated, err := mgr.GenerateWeeklyReportForCabinetID(ctx, fx.cabinetID)
+	require.NoError(t, err)
+	assert.True(t, generated)
+	assert.Equal(t, 1, llmClient.calls)
+
+	report, err := mgr.GetLatestWeeklyReport(ctx, fx.workspaceID, fx.cabinetID)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Contains(t, report.Text, "расход")
+	assert.False(t, report.PeriodStart.IsZero())
+
+	// Second run in the same ISO week is a guarded no-op (no extra LLM call).
+	generated2, err := mgr.GenerateWeeklyReportForCabinetID(ctx, fx.cabinetID)
+	require.NoError(t, err)
+	assert.False(t, generated2)
+	assert.Equal(t, 1, llmClient.calls)
+
+	t.Run("disabled llm is a graceful no-op", func(t *testing.T) {
+		fx2, cleanup2 := newOzonFixture(t, "ozon-ai-weekly-off")
+		defer cleanup2()
+		seedAIStrategy(t, fx2, 1)
+		mgrOff := newAIManager(fx2.db, &fakeLLM{enabled: false})
+		gen, err := mgrOff.GenerateWeeklyReportForCabinetID(ctx, fx2.cabinetID)
+		require.NoError(t, err)
+		assert.False(t, gen)
+	})
+}

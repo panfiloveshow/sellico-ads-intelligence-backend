@@ -215,3 +215,76 @@ WHERE workspace_id = sqlc.arg('workspace_id')
   AND seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND status IN ('applied', 'auto_applied')
   AND applied_at >= sqlc.arg('since');
+
+-- --- Feedback loop: recent applied decisions + their measured outcomes ---
+
+-- ListRecentAppliedAIDecisions feeds the «твои прошлые решения и что вышло»
+-- section of the context pack: the cabinet's newest applied/auto_applied
+-- decisions with the impact numbers written by the sweep (outcome_status,
+-- drr_before/after, spend/revenue before/after). Newest first.
+-- name: ListRecentAppliedAIDecisions :many
+SELECT action_type, target, proposal, status, outcome_status, created_at,
+       drr_before, drr_after, spend_before_rub, spend_after_rub,
+       revenue_before_rub, revenue_after_rub
+FROM ai_decisions
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND status IN ('applied', 'auto_applied')
+ORDER BY created_at DESC
+LIMIT sqlc.arg('lim');
+
+-- --- Shadow → next-level readiness («готов ли к повышению уровня») ---
+
+-- GetAIReadinessStats is a pure aggregate over a cabinet's ai_decisions for the
+-- readiness endpoint (no writes). shadow_passed/shadow_total gives the
+-- within-guardrails share; the evaluated drr delta feeds projected_drr_delta.
+-- name: GetAIReadinessStats :one
+SELECT
+    COUNT(*)::bigint AS decisions_total,
+    COUNT(*) FILTER (WHERE status = 'shadow')::bigint AS shadow_total,
+    COUNT(*) FILTER (WHERE status = 'shadow' AND guardrail_verdict = 'passed')::bigint AS shadow_passed,
+    MIN(created_at) FILTER (WHERE status = 'shadow')::timestamptz AS first_shadow_at,
+    COUNT(*) FILTER (
+        WHERE outcome_status = 'evaluated' AND drr_before IS NOT NULL AND drr_after IS NOT NULL
+    )::bigint AS evaluated_pairs,
+    COALESCE(AVG(drr_after - drr_before) FILTER (
+        WHERE outcome_status = 'evaluated' AND drr_before IS NOT NULL AND drr_after IS NOT NULL
+    ), 0)::numeric AS avg_drr_delta
+FROM ai_decisions
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id');
+
+-- ListAIDecisionsSince returns a cabinet's decisions created since a moment,
+-- for the weekly recap's «что ИИ предложил/применил за неделю» summary.
+-- name: ListAIDecisionsSince :many
+SELECT action_type, status, target, proposal, rationale, created_at
+FROM ai_decisions
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND created_at >= sqlc.arg('since')
+ORDER BY created_at DESC
+LIMIT 200;
+
+-- --- Weekly natural-language report (ozon_ai_weekly_reports) ---
+
+-- name: InsertOzonAIWeeklyReport :one
+INSERT INTO ozon_ai_weekly_reports (
+    seller_cabinet_id, period_start, period_end, drr_start, drr_end, text
+)
+VALUES (
+    sqlc.arg('seller_cabinet_id'), sqlc.arg('period_start'), sqlc.arg('period_end'),
+    sqlc.narg('drr_start'), sqlc.narg('drr_end'), sqlc.arg('text')
+)
+ON CONFLICT (seller_cabinet_id, period_start) DO NOTHING
+RETURNING *;
+
+-- GetLatestOzonAIWeeklyReport powers GET /ozon/ai/weekly-report (newest report
+-- for a cabinet, or no rows).
+-- name: GetLatestOzonAIWeeklyReport :one
+SELECT * FROM ozon_ai_weekly_reports
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+ORDER BY period_start DESC
+LIMIT 1;
+
+-- GetOzonAIWeeklyReportForPeriod is the once-per-ISO-week generation guard.
+-- name: GetOzonAIWeeklyReportForPeriod :one
+SELECT * FROM ozon_ai_weekly_reports
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND period_start = sqlc.arg('period_start');

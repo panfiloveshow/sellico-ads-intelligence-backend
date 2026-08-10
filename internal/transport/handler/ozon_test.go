@@ -166,6 +166,10 @@ type fakeOzonAI struct {
 	listRunsFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.AIRun, int64, error)
 	listDecisionsFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, status string, runID *uuid.UUID, limit, offset int32) ([]domain.AIDecision, int64, error)
 	getImpactFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIImpactSummary, error)
+	approveBatchFn  func(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult
+	rejectBatchFn   func(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult
+	weeklyReportFn  func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonAIWeeklyReport, error)
+	readinessFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIReadiness, error)
 }
 
 func (f *fakeOzonAI) ListRuns(ctx context.Context, workspaceID, cabinetID uuid.UUID, limit, offset int32) ([]domain.AIRun, int64, error) {
@@ -208,6 +212,34 @@ func (f *fakeOzonAI) GetImpact(ctx context.Context, workspaceID, cabinetID uuid.
 		return &domain.AIImpactSummary{}, nil
 	}
 	return f.getImpactFn(ctx, workspaceID, cabinetID)
+}
+
+func (f *fakeOzonAI) ApproveDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult {
+	if f.approveBatchFn == nil {
+		return nil
+	}
+	return f.approveBatchFn(ctx, workspaceID, ids, userID)
+}
+
+func (f *fakeOzonAI) RejectDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult {
+	if f.rejectBatchFn == nil {
+		return nil
+	}
+	return f.rejectBatchFn(ctx, workspaceID, ids, userID)
+}
+
+func (f *fakeOzonAI) GetLatestWeeklyReport(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonAIWeeklyReport, error) {
+	if f.weeklyReportFn == nil {
+		return nil, nil
+	}
+	return f.weeklyReportFn(ctx, workspaceID, cabinetID)
+}
+
+func (f *fakeOzonAI) GetReadiness(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIReadiness, error) {
+	if f.readinessFn == nil {
+		return &domain.AIReadiness{}, nil
+	}
+	return f.readinessFn(ctx, workspaceID, cabinetID)
 }
 
 type fakeOzonRepricer struct {
@@ -672,6 +704,92 @@ func TestOzonAIApproveDecision(t *testing.T) {
 		h.AIApproveDecision(rec, newReq(true))
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), decisionID.String())
+	})
+}
+
+func TestOzonAIDecisionsBatch(t *testing.T) {
+	workspaceID := uuid.New()
+	userID := uuid.New()
+	id1 := uuid.New()
+	id2 := uuid.New()
+
+	newReq := func(body string, withUser bool) *http.Request {
+		req := ozonReq(t, http.MethodPost, "/ozon/ai/decisions/approve-batch", body, workspaceID)
+		if withUser {
+			req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, userID))
+		}
+		return req
+	}
+
+	t.Run("missing user id -> 401", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil).WithAI(&fakeOzonAI{}, nil)
+		rec := httptest.NewRecorder()
+		h.AIApproveDecisionsBatch(rec, newReq(`{"ids":["`+id1.String()+`"]}`, false))
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("empty ids -> 400", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil).WithAI(&fakeOzonAI{}, nil)
+		rec := httptest.NewRecorder()
+		h.AIApproveDecisionsBatch(rec, newReq(`{"ids":[]}`, true))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("invalid id -> 400", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil).WithAI(&fakeOzonAI{}, nil)
+		rec := httptest.NewRecorder()
+		h.AIApproveDecisionsBatch(rec, newReq(`{"ids":["not-a-uuid"]}`, true))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("success -> per-id results", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil).WithAI(&fakeOzonAI{
+			approveBatchFn: func(_ context.Context, wsID uuid.UUID, ids []uuid.UUID, uID uuid.UUID) []domain.AIDecisionBatchResult {
+				assert.Equal(t, workspaceID, wsID)
+				assert.Equal(t, userID, uID)
+				require.Len(t, ids, 2)
+				return []domain.AIDecisionBatchResult{
+					{ID: ids[0], OK: true},
+					{ID: ids[1], OK: false, Error: "guardrail rejected"},
+				}
+			},
+		}, nil)
+		rec := httptest.NewRecorder()
+		h.AIApproveDecisionsBatch(rec, newReq(`{"ids":["`+id1.String()+`","`+id2.String()+`"]}`, true))
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), id1.String())
+		assert.Contains(t, rec.Body.String(), "guardrail rejected")
+	})
+}
+
+func TestOzonAIReadinessAndWeeklyReport(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+
+	t.Run("readiness success", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil).WithAI(&fakeOzonAI{
+			readinessFn: func(context.Context, uuid.UUID, uuid.UUID) (*domain.AIReadiness, error) {
+				return &domain.AIReadiness{CurrentLevel: 1, RecommendNextLevel: true, Reason: "ok"}, nil
+			},
+		}, nil)
+		req := ozonReq(t, http.MethodGet, "/ozon/ai/readiness?cabinet_id="+cabinetID.String(), "", workspaceID)
+		rec := httptest.NewRecorder()
+		h.AIReadiness(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "recommend_next_level")
+	})
+
+	t.Run("weekly report null when none", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil).WithAI(&fakeOzonAI{
+			weeklyReportFn: func(context.Context, uuid.UUID, uuid.UUID) (*domain.OzonAIWeeklyReport, error) {
+				return nil, nil
+			},
+		}, nil)
+		req := ozonReq(t, http.MethodGet, "/ozon/ai/weekly-report?cabinet_id="+cabinetID.String(), "", workspaceID)
+		rec := httptest.NewRecorder()
+		h.AIWeeklyReport(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "null")
 	})
 }
 

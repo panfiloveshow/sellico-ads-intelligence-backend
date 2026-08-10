@@ -71,6 +71,9 @@ const (
 	// AI impact sweep: measures applied AI decisions against 7d-before/7d-after
 	// campaign stats windows (no LLM calls — pure local math).
 	TaskOzonAIImpactSweep = "ozon:ai_impact_sweep"
+	// AI weekly report: one plain-Russian recap per cabinet per ISO week (one
+	// LLM call per cabinet, summary only — no actions).
+	TaskOzonAIWeeklyReport = "ozon:ai_weekly_report"
 
 	// Ozon module (phase 4: repricer). Per-workspace runs on the ozon-sync
 	// queue; the service itself paces writes per cabinet.

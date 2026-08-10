@@ -36,6 +36,9 @@ const (
 	// aiPackSearchQueryWindowDays is the search-query lookback window (the
 	// phrases sync requests 7 days at a time; the table accumulates more).
 	aiPackSearchQueryWindowDays = 30
+	// aiPackRecentDecisions caps the feedback-loop section (recent applied
+	// decisions with their measured outcome).
+	aiPackRecentDecisions = 15
 )
 
 type aiPackTotals struct {
@@ -83,7 +86,27 @@ type aiPackEconomics struct {
 	NetPriceRub      *float64 `json:"net_price_rub,omitempty"`
 	CommissionFBOPct *float64 `json:"commission_fbo_pct,omitempty"`
 	CommissionFBSPct *float64 `json:"commission_fbs_pct,omitempty"`
-	ColorIndex       string   `json:"color_index,omitempty"`
+	// MarginPct is the computed approximate margin (see ozonSKUMarginPct);
+	// nil when price or cost is unknown. CostSource says where the cost came
+	// from: "ozon" (net_price) or "sellico" (unit-economics fallback).
+	MarginPct  *float64 `json:"margin_pct,omitempty"`
+	CostSource string   `json:"cost_source,omitempty"`
+	ColorIndex string   `json:"color_index,omitempty"`
+}
+
+// aiPackDecisionOutcome is one past applied decision + its measured result, fed
+// to the model so it learns per-cabinet what worked («что сработало, а что нет»).
+type aiPackDecisionOutcome struct {
+	Action       string   `json:"action"`
+	Campaign     string   `json:"campaign,omitempty"`
+	SKU          int64    `json:"sku,omitempty"`
+	ProposedVal  *float64 `json:"proposed_value,omitempty"`
+	Status       string   `json:"status"`
+	Outcome      string   `json:"outcome,omitempty"`
+	DRRBefore    *float64 `json:"drr_before,omitempty"`
+	DRRAfter     *float64 `json:"drr_after,omitempty"`
+	SpendDelta   *float64 `json:"spend_delta_rub,omitempty"`
+	RevenueDelta *float64 `json:"revenue_delta_rub,omitempty"`
 }
 
 type aiPackRules struct {
@@ -109,15 +132,19 @@ type aiPackSearchQuery struct {
 }
 
 type aiContextPack struct {
-	Rules          aiPackRules         `json:"rules"`
-	Campaigns      []aiPackCampaign    `json:"campaigns"`
-	RestCampaigns  int                 `json:"rest_campaigns_count,omitempty"`
-	RestTotals     *aiPackTotals       `json:"rest_campaigns_totals_14d,omitempty"`
-	CPO            []aiPackCPO         `json:"cpo_products,omitempty"`
-	Economics      []aiPackEconomics   `json:"economics,omitempty"`
-	SearchQueries  []aiPackSearchQuery `json:"search_queries_30d,omitempty"`
-	BidLimits      json.RawMessage     `json:"ozon_bid_limits,omitempty"`
-	BoundCampaigns bool                `json:"bound_campaigns_only,omitempty"`
+	Rules aiPackRules `json:"rules"`
+	// RecentDecisions is the feedback-loop section — placed high (right after
+	// the rules) because it is high-value: it must survive the degradation
+	// ladder before lower-value sections are cut.
+	RecentDecisions []aiPackDecisionOutcome `json:"recent_decisions,omitempty"`
+	Campaigns       []aiPackCampaign        `json:"campaigns"`
+	RestCampaigns   int                     `json:"rest_campaigns_count,omitempty"`
+	RestTotals      *aiPackTotals           `json:"rest_campaigns_totals_14d,omitempty"`
+	CPO             []aiPackCPO             `json:"cpo_products,omitempty"`
+	Economics       []aiPackEconomics       `json:"economics,omitempty"`
+	SearchQueries   []aiPackSearchQuery     `json:"search_queries_30d,omitempty"`
+	BidLimits       json.RawMessage         `json:"ozon_bid_limits,omitempty"`
+	BoundCampaigns  bool                    `json:"bound_campaigns_only,omitempty"`
 }
 
 // aiCabinetData keeps the raw rows the guardrail/apply phases need after the
@@ -348,16 +375,39 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				CommissionFBSPct: pgNumericToFloatPtr(row.CommissionFbsPct),
 				ColorIndex:       pgTextValue(row.ColorIndex),
 			}
+			costSource := ""
+			if entry.NetPriceRub != nil && *entry.NetPriceRub > 0 {
+				costSource = "ozon"
+			}
 			if (entry.NetPriceRub == nil || *entry.NetPriceRub <= 0) && row.OfferID.Valid {
 				if econ, ok := economics[row.OfferID.String]; ok {
 					if cost := ozonEffectiveNetPrice(0, &econ); cost > 0 {
 						entry.NetPriceRub = &cost
+						costSource = "sellico"
 					}
 				}
+			}
+			entry.CostSource = costSource
+			// Per-SKU margin: the model reasons on BOTH margin and ДРР (system
+			// prompt). Uses the conservative max(FBO, FBS) commission and the
+			// same cost resolution as the repricer's ozonEffectiveNetPrice.
+			if entry.PriceRub != nil && entry.NetPriceRub != nil {
+				commission := 0.0
+				if entry.CommissionFBOPct != nil {
+					commission = *entry.CommissionFBOPct
+				}
+				if entry.CommissionFBSPct != nil && *entry.CommissionFBSPct > commission {
+					commission = *entry.CommissionFBSPct
+				}
+				entry.MarginPct = ozonSKUMarginPct(*entry.PriceRub, *entry.NetPriceRub, commission, pgNumericToFloat(row.AcquiringPct))
 			}
 			pack.Economics = append(pack.Economics, entry)
 		}
 	}
+
+	// Feedback loop: the cabinet's recent applied decisions with their measured
+	// outcome — «что из твоих прошлых решений сработало». Best-effort.
+	pack.RecentDecisions = s.recentDecisionOutcomes(ctx, cabinetID, data)
 
 	// Top search queries per SKU from the phrases-report mirror. Non-fatal:
 	// an empty table (sync not run yet) simply leaves the section out.
@@ -479,6 +529,77 @@ func (s *OzonAIManagerService) topSearchQueriesForSKUs(ctx context.Context, cabi
 			SpendRub:    roundRub(pgNumericToFloat(row.SpendRub)),
 			AvgPosition: pgNumericToFloatPtr(row.AvgPosition),
 		})
+	}
+	return out
+}
+
+// ozonSKUMarginPct computes the approximate per-SKU margin percentage fed to
+// the AI context:
+//
+//	маржа% ≈ (price − cost − price × commission%/100 − acquiring) / price × 100
+//
+// cost is the resolved net_price/себестоимость (Ozon or the Sellico fallback),
+// commission the conservative max(FBO, FBS). Returns nil when price or cost is
+// unknown (the model must not scale unknown-margin SKUs); a negative margin is
+// a real value and is returned so the model can steer clear of it.
+func ozonSKUMarginPct(price, cost, commissionPct, acquiringRub float64) *float64 {
+	if price <= 0 || cost <= 0 {
+		return nil
+	}
+	margin := (price - cost - price*commissionPct/100 - acquiringRub) / price * 100
+	v := roundRub(margin)
+	return &v
+}
+
+// recentDecisionOutcomes builds the feedback-loop section: the cabinet's newest
+// applied/auto_applied decisions with the impact numbers the sweep measured.
+// Best-effort — any failure returns nil and the section is simply absent.
+func (s *OzonAIManagerService) recentDecisionOutcomes(ctx context.Context, cabinetID uuid.UUID, data *aiCabinetData) []aiPackDecisionOutcome {
+	rows, err := s.queries.ListRecentAppliedAIDecisions(ctx, sqlcgen.ListRecentAppliedAIDecisionsParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Lim:             aiPackRecentDecisions,
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to load recent ai decisions for context")
+		return nil
+	}
+	out := make([]aiPackDecisionOutcome, 0, len(rows))
+	for _, row := range rows {
+		var target domain.AIDecisionTarget
+		if len(row.Target) > 0 {
+			_ = json.Unmarshal(row.Target, &target)
+		}
+		var payload struct {
+			NewValue *float64 `json:"new_value"`
+		}
+		if len(row.Proposal) > 0 {
+			_ = json.Unmarshal(row.Proposal, &payload)
+		}
+		item := aiPackDecisionOutcome{
+			Action:      row.ActionType,
+			SKU:         target.SKU,
+			ProposedVal: payload.NewValue,
+			Status:      row.Status,
+			Outcome:     pgTextValue(row.OutcomeStatus),
+			DRRBefore:   pgNumericToFloatPtr(row.DrrBefore),
+			DRRAfter:    pgNumericToFloatPtr(row.DrrAfter),
+		}
+		if target.OzonCampaignID > 0 {
+			if c, ok := data.campaignsByOzonID[target.OzonCampaignID]; ok && pgTextValue(c.Title) != "" {
+				item.Campaign = pgTextValue(c.Title)
+			} else {
+				item.Campaign = fmt.Sprintf("%d", target.OzonCampaignID)
+			}
+		}
+		if row.SpendBeforeRub.Valid && row.SpendAfterRub.Valid {
+			d := roundRub(pgNumericToFloat(row.SpendAfterRub) - pgNumericToFloat(row.SpendBeforeRub))
+			item.SpendDelta = &d
+		}
+		if row.RevenueBeforeRub.Valid && row.RevenueAfterRub.Valid {
+			d := roundRub(pgNumericToFloat(row.RevenueAfterRub) - pgNumericToFloat(row.RevenueBeforeRub))
+			item.RevenueDelta = &d
+		}
+		out = append(out, item)
 	}
 	return out
 }

@@ -123,6 +123,7 @@ type ozonAIRunner interface {
 	ListAICabinetIDs(ctx context.Context) ([]uuid.UUID, error)
 	RunForCabinetID(ctx context.Context, cabinetID uuid.UUID, trigger string) error
 	EvaluateImpactSweep(ctx context.Context) error
+	GenerateWeeklyReports(ctx context.Context) error
 }
 
 // ozonRepricerRunner executes ozon_price_* strategies for a workspace and
@@ -639,6 +640,21 @@ func (p *Processor) HandleOzonAIImpactSweep(ctx context.Context, _ *asynq.Task) 
 	}
 	if err := p.ozonAI.EvaluateImpactSweep(ctx); err != nil {
 		p.logger.Error().Err(err).Msg("ozon ai impact sweep finished with errors")
+		return err
+	}
+	return nil
+}
+
+// HandleOzonAIWeeklyReport writes one plain-Russian weekly recap per cabinet
+// with an active AI strategy (guarded to one per cabinet per ISO week). One LLM
+// call per cabinet, summary only — no actions. A disabled LLM is a no-op.
+func (p *Processor) HandleOzonAIWeeklyReport(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonAI == nil {
+		p.logger.Debug().Msg("ozon ai manager not configured, skipping weekly report")
+		return nil
+	}
+	if err := p.ozonAI.GenerateWeeklyReports(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon ai weekly report finished with errors")
 		return err
 	}
 	return nil
