@@ -79,6 +79,31 @@ JOIN ozon_campaigns c ON c.id = s.campaign_id
 WHERE c.seller_cabinet_id = $1 AND s.date >= $2
 GROUP BY s.campaign_id;
 
+-- name: ListOzonPromoCampaigns :many
+-- Promo campaigns backing the CPO («Оплата за заказ») view: ALL_SKU_PROMO or
+-- SEARCH_PROMO advObjectType. Ordered RUNNING-first so the overview can pick a
+-- representative campaign deterministically.
+SELECT id, ozon_campaign_id, title, state, adv_object_type
+FROM ozon_campaigns
+WHERE seller_cabinet_id = $1
+  AND adv_object_type IN ('SEARCH_PROMO', 'ALL_SKU_PROMO')
+ORDER BY (state = 'CAMPAIGN_STATE_RUNNING') DESC, ozon_campaign_id;
+
+-- name: AggregateOzonPromoStats :one
+-- 7-day (window bound by $2) stats aggregate across every promo campaign of a
+-- cabinet — same columns/formula as AggregateOzonCampaignStatsByCabinet.
+SELECT
+    COALESCE(SUM(s.views), 0)::bigint AS views,
+    COALESCE(SUM(s.clicks), 0)::bigint AS clicks,
+    COALESCE(SUM(s.spend_rub), 0)::numeric AS spend_rub,
+    COALESCE(SUM(s.orders), 0)::bigint AS orders,
+    COALESCE(SUM(s.revenue_rub), 0)::numeric AS revenue_rub
+FROM ozon_campaign_stats s
+JOIN ozon_campaigns c ON c.id = s.campaign_id
+WHERE c.seller_cabinet_id = $1
+  AND c.adv_object_type IN ('SEARCH_PROMO', 'ALL_SKU_PROMO')
+  AND s.date >= $2;
+
 -- name: UpsertOzonProductPrice :exec
 INSERT INTO ozon_product_prices (
     seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub,

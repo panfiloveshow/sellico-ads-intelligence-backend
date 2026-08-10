@@ -123,6 +123,41 @@ func TestOzonListPrices(t *testing.T) {
 
 // --- ListSearchQueries ---
 
+func TestOzonCPOOverview(t *testing.T) {
+	workspaceID := uuid.New()
+	cabinetID := uuid.New()
+
+	t.Run("success", func(t *testing.T) {
+		promoID := int64(25626134)
+		h := NewOzonHandler(&fakeOzonService{
+			cpoOverviewFn: func(_ context.Context, _, gotCabinet uuid.UUID) (*domain.OzonCPOOverview, error) {
+				assert.Equal(t, cabinetID, gotCabinet)
+				return &domain.OzonCPOOverview{
+					Enabled:            true,
+					PromoCampaignID:    &promoID,
+					PromoCampaignTitle: "Оплата за заказ",
+					ProductsCount:      3,
+					Stats7d:            domain.OzonCPOStats7d{Views: 300, SpendRub: 150, RevenueRub: 1500, DRR: 10},
+				}, nil
+			},
+		}, nil, nil)
+		req := ozonReq(t, http.MethodGet, "/ozon/cpo/overview?cabinet_id="+cabinetID.String(), "", workspaceID)
+		rec := httptest.NewRecorder()
+		h.CPOOverview(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "25626134")
+		assert.Contains(t, rec.Body.String(), "\"products_count\":3")
+	})
+
+	t.Run("missing cabinet -> 400", func(t *testing.T) {
+		h := NewOzonHandler(&fakeOzonService{}, nil, nil)
+		req := ozonReq(t, http.MethodGet, "/ozon/cpo/overview", "", workspaceID)
+		rec := httptest.NewRecorder()
+		h.CPOOverview(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+}
+
 func TestOzonListSearchQueries(t *testing.T) {
 	workspaceID := uuid.New()
 	cabinetID := uuid.New()

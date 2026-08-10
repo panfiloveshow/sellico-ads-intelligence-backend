@@ -115,6 +115,23 @@ func OzonCampaign(t *testing.T, pool *pgxpool.Pool, cabinetID uuid.UUID, ozonCam
 	return id
 }
 
+// OzonCampaignTyped inserts an ozon_campaigns mirror row with an explicit
+// adv_object_type (e.g. ALL_SKU_PROMO / SEARCH_PROMO for CPO tests) and returns
+// its id.
+func OzonCampaignTyped(t *testing.T, pool *pgxpool.Pool, cabinetID uuid.UUID, ozonCampaignID int64, title, advObjectType, state string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(context.Background(),
+		`INSERT INTO ozon_campaigns (seller_cabinet_id, ozon_campaign_id, title, adv_object_type, state)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		cabinetID, ozonCampaignID, title, advObjectType, state,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("fixture ozon campaign typed: %v", err)
+	}
+	return id
+}
+
 // OzonCampaignProduct inserts a per-SKU bid mirror row.
 func OzonCampaignProduct(t *testing.T, pool *pgxpool.Pool, campaignID uuid.UUID, sku int64, bidRub float64) {
 	t.Helper()

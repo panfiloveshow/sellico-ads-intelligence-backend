@@ -53,6 +53,80 @@ func TestOzonReadService_ListCampaignsWithStats(t *testing.T) {
 	assert.True(t, apperror.Is(err, apperror.ErrNotFound))
 }
 
+func TestOzonReadService_GetCPOOverview_PromoRunning(t *testing.T) {
+	t.Parallel()
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+
+	promo := testdb.OzonCampaignTyped(t, env.pool, env.cabinetID, 25626134, "Оплата за заказ - все товары", "ALL_SKU_PROMO", "CAMPAIGN_STATE_RUNNING")
+	// A non-promo campaign whose stats must NOT leak into the aggregate.
+	other := testdb.OzonCampaign(t, env.pool, env.cabinetID, 999, "Обычная", "CAMPAIGN_STATE_RUNNING")
+
+	now := time.Now().UTC()
+	testdb.OzonCampaignStat(t, env.pool, promo, now.AddDate(0, 0, -1), 100, 10, 50, 1, 500)
+	testdb.OzonCampaignStat(t, env.pool, promo, now.AddDate(0, 0, -3), 200, 20, 100, 2, 1000)
+	testdb.OzonCampaignStat(t, env.pool, promo, now.AddDate(0, 0, -20), 9999, 999, 9999, 99, 99999) // outside window
+	testdb.OzonCampaignStat(t, env.pool, other, now.AddDate(0, 0, -1), 7, 7, 7, 7, 7)               // non-promo
+
+	testdb.OzonCPOProduct(t, env.pool, env.cabinetID, 555, true, 5)
+	testdb.OzonCPOProduct(t, env.pool, env.cabinetID, 777, true, 0)
+
+	ov, err := env.syncSvc.GetCPOOverview(ctx, env.workspaceID, env.cabinetID)
+	require.NoError(t, err)
+	assert.True(t, ov.Enabled)
+	require.NotNil(t, ov.PromoCampaignID)
+	assert.Equal(t, int64(25626134), *ov.PromoCampaignID)
+	assert.Equal(t, "Оплата за заказ - все товары", ov.PromoCampaignTitle)
+	assert.Equal(t, int64(2), ov.ProductsCount)
+	assert.Nil(t, ov.RatePct) // display-only, not derivable yet
+	assert.Equal(t, int64(300), ov.Stats7d.Views)
+	assert.Equal(t, int64(30), ov.Stats7d.Clicks)
+	assert.InDelta(t, 150.0, ov.Stats7d.SpendRub, 0.001)
+	assert.Equal(t, int64(3), ov.Stats7d.Orders)
+	assert.InDelta(t, 1500.0, ov.Stats7d.RevenueRub, 0.001)
+	assert.InDelta(t, 10.0, ov.Stats7d.DRR, 0.001) // 150 / 1500 * 100
+
+	// Tenancy: a foreign workspace is rejected.
+	otherWorkspace := testdb.Workspace(t, env.pool)
+	_, err = env.syncSvc.GetCPOOverview(ctx, otherWorkspace, env.cabinetID)
+	require.Error(t, err)
+	assert.True(t, apperror.Is(err, apperror.ErrNotFound))
+}
+
+func TestOzonReadService_GetCPOOverview_NoPromo(t *testing.T) {
+	t.Parallel()
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+
+	// Only a non-promo campaign exists.
+	testdb.OzonCampaign(t, env.pool, env.cabinetID, 42, "Обычная", "CAMPAIGN_STATE_RUNNING")
+
+	ov, err := env.syncSvc.GetCPOOverview(ctx, env.workspaceID, env.cabinetID)
+	require.NoError(t, err)
+	assert.False(t, ov.Enabled)
+	assert.Nil(t, ov.PromoCampaignID)
+	assert.Empty(t, ov.PromoCampaignTitle)
+	assert.Zero(t, ov.ProductsCount)
+	assert.Nil(t, ov.RatePct)
+	assert.Zero(t, ov.Stats7d.Views)
+	assert.Zero(t, ov.Stats7d.DRR)
+}
+
+func TestOzonReadService_GetCPOOverview_PromoNotRunning(t *testing.T) {
+	t.Parallel()
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+
+	testdb.OzonCampaignTyped(t, env.pool, env.cabinetID, 25626134, "Промо (пауза)", "SEARCH_PROMO", "CAMPAIGN_STATE_INACTIVE")
+
+	ov, err := env.syncSvc.GetCPOOverview(ctx, env.workspaceID, env.cabinetID)
+	require.NoError(t, err)
+	assert.False(t, ov.Enabled) // promo exists but not RUNNING
+	require.NotNil(t, ov.PromoCampaignID)
+	assert.Equal(t, int64(25626134), *ov.PromoCampaignID)
+	assert.Equal(t, "Промо (пауза)", ov.PromoCampaignTitle)
+}
+
 func TestOzonReadService_GetCampaign_EnrichesProductNames(t *testing.T) {
 	t.Parallel()
 	env := newOzonTestEnv(t, testdb.OzonCredentials())

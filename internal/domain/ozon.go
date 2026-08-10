@@ -227,8 +227,10 @@ type OzonRepricerChanges24h struct {
 }
 
 // OzonCPOProduct is the per-SKU CPO (search promo) state mirrored from
-// search_promo/v2/products. Name/OfferID are read-time enrichment from the
-// ozon_products mapping.
+// search_promo/v2/products. Name/OfferID prefer the ozon_products mapping and
+// fall back to the CPO API's own title/sourceSku. PriceRub/BidPriceRub/ImageURL/
+// VisibilityIndex are display-only enrichment carried straight from the CPO
+// response. Enabled is true for every product returned (presence = in promo).
 type OzonCPOProduct struct {
 	ID              uuid.UUID `json:"id"`
 	SellerCabinetID uuid.UUID `json:"seller_cabinet_id"`
@@ -238,7 +240,39 @@ type OzonCPOProduct struct {
 	Enabled         bool      `json:"enabled"`
 	Bid             *float64  `json:"bid,omitempty"`
 	BidKind         string    `json:"bid_kind,omitempty"`
+	PriceRub        *float64  `json:"price_rub,omitempty"`
+	BidPriceRub     *float64  `json:"bid_price_rub,omitempty"`
+	ImageURL        string    `json:"image_url,omitempty"`
+	VisibilityIndex string    `json:"visibility_index,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// OzonCPOStats7d is the 7-day aggregate for the CPO overview: same
+// views/clicks/spend/orders/revenue + DRR shape as OzonCampaignWithStats.
+type OzonCPOStats7d struct {
+	Views      int64   `json:"views"`
+	Clicks     int64   `json:"clicks"`
+	SpendRub   float64 `json:"spend_rub"`
+	Orders     int64   `json:"orders"`
+	RevenueRub float64 `json:"revenue_rub"`
+	// DRR = spend / revenue * 100 (0 when there is no revenue).
+	DRR float64 `json:"drr"`
+}
+
+// OzonCPOOverview summarises the cabinet's CPO («Оплата за заказ») promo: its
+// backing SEARCH_PROMO/ALL_SKU_PROMO campaign, whether it is running, the
+// mirrored product count and the 7-day stats aggregate.
+type OzonCPOOverview struct {
+	Enabled            bool           `json:"enabled"`
+	PromoCampaignID    *int64         `json:"promo_campaign_id"`
+	PromoCampaignTitle string         `json:"promo_campaign_title"`
+	ProductsCount      int64          `json:"products_count"`
+	// RatePct is the global CPO percentage (5/7/9 %). It is not derivable from
+	// the data we currently mirror, so it stays null until the all_sku_promo
+	// rate-control endpoint is verified live.
+	// TODO(ozon-cpo): populate rate_pct from the all_sku_promo rate endpoint.
+	RatePct *float64       `json:"rate_pct"`
+	Stats7d OzonCPOStats7d `json:"stats7d"`
 }
 
 // OzonCampaignWithStats is a campaign plus its recent aggregate statistics

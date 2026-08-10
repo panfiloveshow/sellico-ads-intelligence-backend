@@ -30,6 +30,7 @@ type fakeOzonService struct {
 	listStatsFn       func(ctx context.Context, workspaceID, campaignID uuid.UUID, from, to time.Time) ([]domain.OzonCampaignStat, error)
 	listPricesFn      func(ctx context.Context, workspaceID, cabinetID uuid.UUID, search string, limit, offset int32) ([]domain.OzonProductPrice, int64, error)
 	listSearchQueryFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, search string, days int, limit, offset int32) ([]domain.OzonSearchQueryStat, int64, error)
+	cpoOverviewFn     func(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonCPOOverview, error)
 }
 
 func (f *fakeOzonService) ResolveOzonCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.SellerCabinet, error) {
@@ -72,6 +73,13 @@ func (f *fakeOzonService) ListSearchQueries(ctx context.Context, workspaceID, ca
 		return nil, 0, nil
 	}
 	return f.listSearchQueryFn(ctx, workspaceID, cabinetID, sku, search, days, limit, offset)
+}
+
+func (f *fakeOzonService) GetCPOOverview(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonCPOOverview, error) {
+	if f.cpoOverviewFn == nil {
+		return &domain.OzonCPOOverview{}, nil
+	}
+	return f.cpoOverviewFn(ctx, workspaceID, cabinetID)
 }
 
 type fakeOzonActions struct {

@@ -339,6 +339,62 @@ func TestOzonCampaignActions_ListCPOProducts_RefreshesMirror(t *testing.T) {
 	assert.Len(t, products, 3)
 }
 
+func TestOzonCampaignActions_ListCPOProducts_PersistsEnrichedFields(t *testing.T) {
+	t.Parallel()
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+
+	env.fake.setJSON("/api/client/campaign/search_promo/v2/products", map[string]any{
+		"products": []map[string]any{
+			{
+				"sku":             "2011312046",
+				"sourceSku":       "A61",
+				"title":           "Товар А61",
+				"imageUrl":        "https://cdn/x.jpg",
+				"price":           "752",
+				"bid":             0,
+				"bidPrice":        "0",
+				"visibilityIndex": "10+",
+			},
+		},
+	})
+
+	products, total, err := env.actionsSvc.ListCPOProducts(ctx, env.workspaceID, env.cabinetID, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, products, 1)
+	p := products[0]
+	assert.Equal(t, int64(2011312046), p.SKU)
+	assert.True(t, p.Enabled)
+	assert.Equal(t, "A61", p.OfferID) // sourceSku → offer_id (no ozon_products row)
+	assert.Equal(t, "Товар А61", p.Name)
+	assert.Equal(t, "https://cdn/x.jpg", p.ImageURL)
+	assert.Equal(t, "10+", p.VisibilityIndex)
+	require.NotNil(t, p.PriceRub)
+	assert.InDelta(t, 752.0, *p.PriceRub, 0.001)
+
+	// Enrichment survives an API failure: the mirror still carries the fields.
+	env.fake.fail("/api/client/campaign/search_promo/v2/products", 400)
+	stale, _, err := env.actionsSvc.ListCPOProducts(ctx, env.workspaceID, env.cabinetID, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, stale, 1)
+	assert.Equal(t, "A61", stale[0].OfferID)
+	assert.Equal(t, "https://cdn/x.jpg", stale[0].ImageURL)
+	require.NotNil(t, stale[0].PriceRub)
+	assert.InDelta(t, 752.0, *stale[0].PriceRub, 0.001)
+
+	// ozon_products mapping wins over the CPO API title/sourceSku when present.
+	testdb.OzonProduct(t, env.pool, env.cabinetID, 9001, 2011312046, "ART-MAP", "Имя из каталога")
+	env.fake.setJSON("/api/client/campaign/search_promo/v2/products", map[string]any{
+		"products": []map[string]any{{"sku": "2011312046", "sourceSku": "A61", "title": "Товар А61"}},
+	})
+	mapped, _, err := env.actionsSvc.ListCPOProducts(ctx, env.workspaceID, env.cabinetID, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, mapped, 1)
+	assert.Equal(t, "Имя из каталога", mapped[0].Name)
+	assert.Equal(t, "ART-MAP", mapped[0].OfferID)
+}
+
 func TestOzonCampaignActions_GetBidLimits_CachedPassthrough(t *testing.T) {
 	t.Parallel()
 	env := newOzonTestEnv(t, testdb.OzonCredentials())

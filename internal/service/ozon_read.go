@@ -82,6 +82,64 @@ func (s *OzonSyncService) ListCampaignsWithStats(ctx context.Context, workspaceI
 	return result, total, nil
 }
 
+// GetCPOOverview summarises the cabinet's CPO («Оплата за заказ») promo: the
+// backing SEARCH_PROMO/ALL_SKU_PROMO campaign, whether it is running, the
+// mirrored product count and the 7-day stats aggregate (same window/formula as
+// ListCampaignsWithStats). Tenancy-gated like every other Ozon read; when the
+// cabinet has no promo campaign it returns enabled=false with zero stats.
+func (s *OzonSyncService) GetCPOOverview(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonCPOOverview, error) {
+	if _, err := s.ResolveOzonCabinet(ctx, workspaceID, cabinetID); err != nil {
+		return nil, err
+	}
+
+	overview := &domain.OzonCPOOverview{}
+
+	campaigns, err := s.queries.ListOzonPromoCampaigns(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to list ozon promo campaigns")
+	}
+	// ListOzonPromoCampaigns orders RUNNING-first, so the first row is the most
+	// representative promo campaign for the header.
+	if len(campaigns) > 0 {
+		lead := campaigns[0]
+		id := lead.OzonCampaignID
+		overview.PromoCampaignID = &id
+		overview.PromoCampaignTitle = pgTextValue(lead.Title)
+		for _, c := range campaigns {
+			if pgTextValue(c.State) == "CAMPAIGN_STATE_RUNNING" {
+				overview.Enabled = true
+				break
+			}
+		}
+	}
+
+	count, err := s.queries.CountOzonCpoProducts(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to count cpo products")
+	}
+	overview.ProductsCount = count
+
+	since := time.Now().UTC().AddDate(0, 0, -ozonListStatsWindowDays)
+	agg, err := s.queries.AggregateOzonPromoStats(ctx, sqlcgen.AggregateOzonPromoStatsParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Date:            timePtrToPgDate(&since),
+	})
+	if err != nil {
+		return nil, apperror.New(apperror.ErrInternal, "failed to aggregate ozon promo stats")
+	}
+	overview.Stats7d = domain.OzonCPOStats7d{
+		Views:      agg.Views,
+		Clicks:     agg.Clicks,
+		SpendRub:   pgNumericToFloat(agg.SpendRub),
+		Orders:     agg.Orders,
+		RevenueRub: pgNumericToFloat(agg.RevenueRub),
+	}
+	if overview.Stats7d.RevenueRub > 0 {
+		overview.Stats7d.DRR = overview.Stats7d.SpendRub / overview.Stats7d.RevenueRub * 100
+	}
+	return overview, nil
+}
+
 // GetCampaign returns one campaign with its products/bids after verifying
 // workspace ownership through the cabinet. Products are enriched with
 // name/offer_id from the ozon_products mapping (one batched lookup).

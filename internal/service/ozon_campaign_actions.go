@@ -444,6 +444,12 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 					Enabled:         product.Enabled,
 					Bid:             bid,
 					BidKind:         bidKind,
+					OfferID:         textToPgtype(product.OfferID),
+					Name:            textToPgtype(product.Name),
+					PriceRub:        positiveFloatToPgNumeric(product.PriceRub),
+					BidPriceRub:     positiveFloatToPgNumeric(product.BidPriceRub),
+					ImageUrl:        textToPgtype(product.ImageURL),
+					VisibilityIndex: textToPgtype(product.VisibilityIndex),
 				}); upsertErr != nil {
 					return nil, 0, fmt.Errorf("upsert cpo product %d: %w", product.SKU, upsertErr)
 				}
@@ -478,15 +484,38 @@ func (s *OzonCampaignActionsService) ListCPOProducts(ctx context.Context, worksp
 			Enabled:         row.Enabled,
 			Bid:             pgNumericToFloatPtr(row.Bid),
 			BidKind:         pgTextValue(row.BidKind),
+			// Name/OfferID prefer the ozon_products mapping (below); the CPO row's
+			// own title/sourceSku is the fallback when the products sync has not
+			// yet seen the SKU.
+			Name:            pgTextValue(row.Name),
+			OfferID:         pgTextValue(row.OfferID),
+			PriceRub:        pgNumericToFloatPtr(row.PriceRub),
+			BidPriceRub:     pgNumericToFloatPtr(row.BidPriceRub),
+			ImageURL:        pgTextValue(row.ImageUrl),
+			VisibilityIndex: pgTextValue(row.VisibilityIndex),
 			UpdatedAt:       row.UpdatedAt.Time,
 		}
 		if info, ok := names[row.Sku]; ok {
-			product.Name = pgTextValue(info.Name)
-			product.OfferID = pgTextValue(info.OfferID)
+			if name := pgTextValue(info.Name); name != "" {
+				product.Name = name
+			}
+			if offerID := pgTextValue(info.OfferID); offerID != "" {
+				product.OfferID = offerID
+			}
 		}
 		result = append(result, product)
 	}
 	return result, total, nil
+}
+
+// positiveFloatToPgNumeric returns a NUMERIC for value>0 and a NULL (invalid)
+// numeric otherwise, so a missing/zero enriched value never overwrites a
+// previously mirrored one through the COALESCE upsert.
+func positiveFloatToPgNumeric(value float64) pgtype.Numeric {
+	if value <= 0 {
+		return pgtype.Numeric{}
+	}
+	return floatToPgNumeric(value)
 }
 
 // EnableCPO enables search promo for the SKUs (audited, mirror updated).

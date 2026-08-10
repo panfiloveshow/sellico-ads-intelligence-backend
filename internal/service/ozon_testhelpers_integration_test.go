@@ -32,6 +32,20 @@ var ozonSchemaOnce sync.Once
 // tracking that testutil.NewTestDB assumes (which fails re-running the
 // non-idempotent 000001 base migration against a pre-provisioned DB).
 func ozonEnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	// Targeted, idempotent convergence for columns added AFTER the shared DB was
+	// first provisioned. Unlike re-running whole migration files (which reverts
+	// converged objects — an older idempotent file can DROP+re-ADD a constraint
+	// to a stale list), an "ADD COLUMN IF NOT EXISTS" cannot revert anything, so
+	// it is safe to run every time. Best-effort: on a truly fresh DB the table
+	// does not exist yet and this errors harmlessly before the full run below.
+	_, _ = pool.Exec(ctx, `ALTER TABLE ozon_cpo_products
+        ADD COLUMN IF NOT EXISTS offer_id TEXT,
+        ADD COLUMN IF NOT EXISTS name TEXT,
+        ADD COLUMN IF NOT EXISTS price_rub NUMERIC(12,2),
+        ADD COLUMN IF NOT EXISTS bid_price_rub NUMERIC(12,2),
+        ADD COLUMN IF NOT EXISTS image_url TEXT,
+        ADD COLUMN IF NOT EXISTS visibility_index TEXT`)
+
 	// If the ozon schema is already present the DB is converged — do nothing.
 	// Re-running the whole-file migrations here would roll back partially-
 	// applicable files (they mix already-existing objects with constraint

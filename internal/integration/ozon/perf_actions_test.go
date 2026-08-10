@@ -286,6 +286,47 @@ func TestListSearchPromoProducts_EnabledResolutionAndPaging(t *testing.T) {
 	assert.False(t, out[searchPromoPageSize+2].Enabled)
 }
 
+// TestListSearchPromoProducts_EnrichedFields covers the real v2 response shape:
+// string sku/price/bidPrice, int bid, sourceSku=offer_id, and no per-product
+// enabled flag (presence == in promo → Enabled true).
+func TestListSearchPromoProducts_EnrichedFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/client/token" {
+			writeToken(w, "tok-1", 1800)
+			return
+		}
+		require.Equal(t, "/api/client/campaign/search_promo/v2/products", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{"products": []map[string]any{
+			{
+				"sku":             "2011312046",
+				"sourceSku":       "A61",
+				"title":           "Товар А61",
+				"imageUrl":        "https://cdn/x.jpg",
+				"price":           "752",
+				"bid":             0,
+				"bidPrice":        "0",
+				"visibilityIndex": "10+",
+			},
+		}})
+	}))
+	defer srv.Close()
+
+	c := newTestPerfClient(srv.URL)
+	out, err := c.ListSearchPromoProducts(context.Background(), testCreds)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	p := out[0]
+	assert.Equal(t, int64(2011312046), p.SKU) // string sku parsed
+	assert.Equal(t, "A61", p.OfferID)         // sourceSku → offer_id
+	assert.Equal(t, "Товар А61", p.Name)
+	assert.Equal(t, "https://cdn/x.jpg", p.ImageURL)
+	assert.InDelta(t, 752.0, p.PriceRub, 1e-9) // string price parsed
+	assert.InDelta(t, 0.0, p.BidRub, 1e-9)
+	assert.InDelta(t, 0.0, p.BidPriceRub, 1e-9) // string bidPrice parsed
+	assert.Equal(t, "10+", p.VisibilityIndex)
+	assert.True(t, p.Enabled) // no flag in the response → presence == in promo
+}
+
 func TestEnableDisableSearchPromo(t *testing.T) {
 	srv, reqs, mu := newPerfActionServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedReq) {
 		w.Write([]byte(`{}`))

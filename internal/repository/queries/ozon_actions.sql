@@ -73,15 +73,29 @@ UPDATE ozon_campaign_products SET
 WHERE campaign_id = sqlc.arg('campaign_id') AND sku = sqlc.arg('sku');
 
 -- name: UpsertOzonCpoProduct :exec
-INSERT INTO ozon_cpo_products (seller_cabinet_id, sku, enabled, bid, bid_kind)
+-- The enriched display fields (offer_id/name/price_rub/bid_price_rub/image_url/
+-- visibility_index) are COALESCE-preserved so a bare toggle/bid upsert (which
+-- passes them as NULL) never wipes values captured by the product refresh.
+INSERT INTO ozon_cpo_products (
+    seller_cabinet_id, sku, enabled, bid, bid_kind,
+    offer_id, name, price_rub, bid_price_rub, image_url, visibility_index
+)
 VALUES (
     sqlc.arg('seller_cabinet_id'), sqlc.arg('sku'), sqlc.arg('enabled'),
-    sqlc.narg('bid'), sqlc.narg('bid_kind')
+    sqlc.narg('bid'), sqlc.narg('bid_kind'),
+    sqlc.narg('offer_id'), sqlc.narg('name'), sqlc.narg('price_rub'),
+    sqlc.narg('bid_price_rub'), sqlc.narg('image_url'), sqlc.narg('visibility_index')
 )
 ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     enabled = EXCLUDED.enabled,
     bid = COALESCE(EXCLUDED.bid, ozon_cpo_products.bid),
     bid_kind = COALESCE(EXCLUDED.bid_kind, ozon_cpo_products.bid_kind),
+    offer_id = COALESCE(EXCLUDED.offer_id, ozon_cpo_products.offer_id),
+    name = COALESCE(EXCLUDED.name, ozon_cpo_products.name),
+    price_rub = COALESCE(EXCLUDED.price_rub, ozon_cpo_products.price_rub),
+    bid_price_rub = COALESCE(EXCLUDED.bid_price_rub, ozon_cpo_products.bid_price_rub),
+    image_url = COALESCE(EXCLUDED.image_url, ozon_cpo_products.image_url),
+    visibility_index = COALESCE(EXCLUDED.visibility_index, ozon_cpo_products.visibility_index),
     updated_at = now();
 
 -- name: SetOzonCpoProductsEnabled :exec

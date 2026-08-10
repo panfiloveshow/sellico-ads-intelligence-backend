@@ -233,10 +233,19 @@ type MinSKUBid struct {
 
 // CPOProduct is one row of POST /api/client/campaign/search_promo/v2/products.
 // CPO (search promo) bids are plain rubles on the wire, not micro-rubles.
+// The response encodes sku/price/bidPrice as strings, bid as an int, and the
+// seller article as sourceSku (== offer_id). Every returned row is in the
+// promo, so Enabled is true unless an explicit per-product flag says otherwise.
 type CPOProduct struct {
-	SKU     int64   `json:"sku"`
-	BidRub  float64 `json:"bid_rub"`
-	Enabled bool    `json:"enabled"`
+	SKU             int64   `json:"sku"`
+	OfferID         string  `json:"offer_id"`
+	Name            string  `json:"name"`
+	PriceRub        float64 `json:"price_rub"`
+	BidRub          float64 `json:"bid_rub"`
+	BidPriceRub     float64 `json:"bid_price_rub"`
+	ImageURL        string  `json:"image_url"`
+	VisibilityIndex string  `json:"visibility_index"`
+	Enabled         bool    `json:"enabled"`
 }
 
 // CPOBid is one per-SKU fixed bid for search_promo/v2/bids/set (rubles).

@@ -347,7 +347,7 @@ func (q *Queries) ListOzonCampaignBindingsByStrategy(ctx context.Context, strate
 }
 
 const listOzonCpoProducts = `-- name: ListOzonCpoProducts :many
-SELECT id, seller_cabinet_id, sku, enabled, bid, bid_kind, updated_at FROM ozon_cpo_products
+SELECT id, seller_cabinet_id, sku, enabled, bid, bid_kind, updated_at, offer_id, name, price_rub, bid_price_rub, image_url, visibility_index FROM ozon_cpo_products
 WHERE seller_cabinet_id = $1
 ORDER BY sku
 LIMIT $2 OFFSET $3
@@ -376,6 +376,12 @@ func (q *Queries) ListOzonCpoProducts(ctx context.Context, arg ListOzonCpoProduc
 			&i.Bid,
 			&i.BidKind,
 			&i.UpdatedAt,
+			&i.OfferID,
+			&i.Name,
+			&i.PriceRub,
+			&i.BidPriceRub,
+			&i.ImageUrl,
+			&i.VisibilityIndex,
 		); err != nil {
 			return nil, err
 		}
@@ -507,15 +513,26 @@ func (q *Queries) UpdateOzonCpoProductBid(ctx context.Context, arg UpdateOzonCpo
 }
 
 const upsertOzonCpoProduct = `-- name: UpsertOzonCpoProduct :exec
-INSERT INTO ozon_cpo_products (seller_cabinet_id, sku, enabled, bid, bid_kind)
+INSERT INTO ozon_cpo_products (
+    seller_cabinet_id, sku, enabled, bid, bid_kind,
+    offer_id, name, price_rub, bid_price_rub, image_url, visibility_index
+)
 VALUES (
     $1, $2, $3,
-    $4, $5
+    $4, $5,
+    $6, $7, $8,
+    $9, $10, $11
 )
 ON CONFLICT (seller_cabinet_id, sku) DO UPDATE SET
     enabled = EXCLUDED.enabled,
     bid = COALESCE(EXCLUDED.bid, ozon_cpo_products.bid),
     bid_kind = COALESCE(EXCLUDED.bid_kind, ozon_cpo_products.bid_kind),
+    offer_id = COALESCE(EXCLUDED.offer_id, ozon_cpo_products.offer_id),
+    name = COALESCE(EXCLUDED.name, ozon_cpo_products.name),
+    price_rub = COALESCE(EXCLUDED.price_rub, ozon_cpo_products.price_rub),
+    bid_price_rub = COALESCE(EXCLUDED.bid_price_rub, ozon_cpo_products.bid_price_rub),
+    image_url = COALESCE(EXCLUDED.image_url, ozon_cpo_products.image_url),
+    visibility_index = COALESCE(EXCLUDED.visibility_index, ozon_cpo_products.visibility_index),
     updated_at = now()
 `
 
@@ -525,6 +542,12 @@ type UpsertOzonCpoProductParams struct {
 	Enabled         bool           `json:"enabled"`
 	Bid             pgtype.Numeric `json:"bid"`
 	BidKind         pgtype.Text    `json:"bid_kind"`
+	OfferID         pgtype.Text    `json:"offer_id"`
+	Name            pgtype.Text    `json:"name"`
+	PriceRub        pgtype.Numeric `json:"price_rub"`
+	BidPriceRub     pgtype.Numeric `json:"bid_price_rub"`
+	ImageUrl        pgtype.Text    `json:"image_url"`
+	VisibilityIndex pgtype.Text    `json:"visibility_index"`
 }
 
 func (q *Queries) UpsertOzonCpoProduct(ctx context.Context, arg UpsertOzonCpoProductParams) error {
@@ -534,6 +557,12 @@ func (q *Queries) UpsertOzonCpoProduct(ctx context.Context, arg UpsertOzonCpoPro
 		arg.Enabled,
 		arg.Bid,
 		arg.BidKind,
+		arg.OfferID,
+		arg.Name,
+		arg.PriceRub,
+		arg.BidPriceRub,
+		arg.ImageUrl,
+		arg.VisibilityIndex,
 	)
 	return err
 }

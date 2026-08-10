@@ -3294,6 +3294,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OzonBidChangeListEnvelope" }
         "400": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/cpo/overview:
+    get:
+      tags: [Ozon]
+      summary: CPO («Оплата за заказ») promo summary — enabled flag, backing promo campaign, product count, 7-day stats
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: cabinet_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: CPO overview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OzonCPOOverview" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/cpo/products:
     get:
       tags: [Ozon]
@@ -5859,12 +5878,36 @@ components:
         id: { type: string, format: uuid }
         seller_cabinet_id: { type: string, format: uuid }
         sku: { type: integer, format: int64 }
-        name: { type: string, description: "Product name from the ozon_products mapping (empty until the products sync has seen the SKU)" }
-        offer_id: { type: string, description: "Seller offer_id (артикул) from the ozon_products mapping" }
-        enabled: { type: boolean }
-        bid: { type: number, nullable: true }
+        name: { type: string, description: "Product name — ozon_products mapping if known, else the CPO API title" }
+        offer_id: { type: string, description: "Seller offer_id (артикул) — ozon_products mapping if known, else the CPO API sourceSku" }
+        enabled: { type: boolean, description: "True for every product returned by search_promo (presence = in promo)" }
+        bid: { type: number, nullable: true, description: "Mirrored CPO bid (rubles)" }
         bid_kind: { type: string, enum: [percent, fixed_rub], nullable: true }
+        price_rub: { type: number, nullable: true, description: "Product price from the CPO response (rubles)" }
+        bid_price_rub: { type: number, nullable: true, description: "bidPrice from the CPO response (rubles)" }
+        image_url: { type: string, description: "Product image URL from the CPO response" }
+        visibility_index: { type: string, description: "visibilityIndex label from the CPO response (e.g. \"10+\")" }
         updated_at: { type: string, format: date-time }
+    OzonCPOStats7d:
+      type: object
+      description: 7-day CPO stats aggregate (same shape as campaign list stats)
+      properties:
+        views: { type: integer, format: int64 }
+        clicks: { type: integer, format: int64 }
+        spend_rub: { type: number }
+        orders: { type: integer, format: int64 }
+        revenue_rub: { type: number }
+        drr: { type: number, description: "spend / revenue * 100 (0 when there is no revenue)" }
+    OzonCPOOverview:
+      type: object
+      description: CPO («Оплата за заказ») promo summary for a cabinet
+      properties:
+        enabled: { type: boolean, description: "True when any SEARCH_PROMO/ALL_SKU_PROMO campaign is RUNNING" }
+        promo_campaign_id: { type: integer, format: int64, nullable: true, description: "ozon_campaign_id of the representative promo campaign (null when none)" }
+        promo_campaign_title: { type: string }
+        products_count: { type: integer, format: int64, description: "Mirrored CPO product count" }
+        rate_pct: { type: number, nullable: true, description: "Global CPO rate (5/7/9 %). Null until the all_sku_promo rate endpoint is verified live (display-only)" }
+        stats7d: { $ref: "#/components/schemas/OzonCPOStats7d" }
     OzonCPOProductListEnvelope:
       type: object
       properties:

@@ -530,6 +530,12 @@ type OzonCpoProduct struct {
 	Bid             pgtype.Numeric     `json:"bid"`
 	BidKind         pgtype.Text        `json:"bid_kind"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	OfferID         pgtype.Text        `json:"offer_id"`
+	Name            pgtype.Text        `json:"name"`
+	PriceRub        pgtype.Numeric     `json:"price_rub"`
+	BidPriceRub     pgtype.Numeric     `json:"bid_price_rub"`
+	ImageUrl        pgtype.Text        `json:"image_url"`
+	VisibilityIndex pgtype.Text        `json:"visibility_index"`
 }
 
 type OzonCampaign struct {

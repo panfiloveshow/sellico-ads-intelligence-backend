@@ -66,6 +66,93 @@ func (q *Queries) AggregateOzonCampaignStatsByCabinet(ctx context.Context, arg A
 	return items, nil
 }
 
+const aggregateOzonPromoStats = `-- name: AggregateOzonPromoStats :one
+SELECT
+    COALESCE(SUM(s.views), 0)::bigint AS views,
+    COALESCE(SUM(s.clicks), 0)::bigint AS clicks,
+    COALESCE(SUM(s.spend_rub), 0)::numeric AS spend_rub,
+    COALESCE(SUM(s.orders), 0)::bigint AS orders,
+    COALESCE(SUM(s.revenue_rub), 0)::numeric AS revenue_rub
+FROM ozon_campaign_stats s
+JOIN ozon_campaigns c ON c.id = s.campaign_id
+WHERE c.seller_cabinet_id = $1
+  AND c.adv_object_type IN ('SEARCH_PROMO', 'ALL_SKU_PROMO')
+  AND s.date >= $2
+`
+
+type AggregateOzonPromoStatsParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Date            pgtype.Date `json:"date"`
+}
+
+type AggregateOzonPromoStatsRow struct {
+	Views      int64          `json:"views"`
+	Clicks     int64          `json:"clicks"`
+	SpendRub   pgtype.Numeric `json:"spend_rub"`
+	Orders     int64          `json:"orders"`
+	RevenueRub pgtype.Numeric `json:"revenue_rub"`
+}
+
+// 7-day (window bound by $2) stats aggregate across every promo campaign of a
+// cabinet — same columns/formula as AggregateOzonCampaignStatsByCabinet.
+func (q *Queries) AggregateOzonPromoStats(ctx context.Context, arg AggregateOzonPromoStatsParams) (AggregateOzonPromoStatsRow, error) {
+	row := q.db.QueryRow(ctx, aggregateOzonPromoStats, arg.SellerCabinetID, arg.Date)
+	var i AggregateOzonPromoStatsRow
+	err := row.Scan(
+		&i.Views,
+		&i.Clicks,
+		&i.SpendRub,
+		&i.Orders,
+		&i.RevenueRub,
+	)
+	return i, err
+}
+
+const listOzonPromoCampaigns = `-- name: ListOzonPromoCampaigns :many
+SELECT id, ozon_campaign_id, title, state, adv_object_type
+FROM ozon_campaigns
+WHERE seller_cabinet_id = $1
+  AND adv_object_type IN ('SEARCH_PROMO', 'ALL_SKU_PROMO')
+ORDER BY (state = 'CAMPAIGN_STATE_RUNNING') DESC, ozon_campaign_id
+`
+
+type ListOzonPromoCampaignsRow struct {
+	ID             pgtype.UUID `json:"id"`
+	OzonCampaignID int64       `json:"ozon_campaign_id"`
+	Title          pgtype.Text `json:"title"`
+	State          pgtype.Text `json:"state"`
+	AdvObjectType  pgtype.Text `json:"adv_object_type"`
+}
+
+// Promo campaigns backing the CPO («Оплата за заказ») view: ALL_SKU_PROMO or
+// SEARCH_PROMO advObjectType. Ordered RUNNING-first so the overview can pick a
+// representative campaign deterministically.
+func (q *Queries) ListOzonPromoCampaigns(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonPromoCampaignsRow, error) {
+	rows, err := q.db.Query(ctx, listOzonPromoCampaigns, sellerCabinetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOzonPromoCampaignsRow{}
+	for rows.Next() {
+		var i ListOzonPromoCampaignsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OzonCampaignID,
+			&i.Title,
+			&i.State,
+			&i.AdvObjectType,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countOzonCampaignsByCabinet = `-- name: CountOzonCampaignsByCabinet :one
 SELECT COUNT(*) FROM ozon_campaigns WHERE seller_cabinet_id = $1
 `

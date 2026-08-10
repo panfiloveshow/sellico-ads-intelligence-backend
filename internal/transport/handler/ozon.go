@@ -27,6 +27,7 @@ type ozonServicer interface {
 	ListCampaignStats(ctx context.Context, workspaceID, campaignID uuid.UUID, from, to time.Time) ([]domain.OzonCampaignStat, error)
 	ListPrices(ctx context.Context, workspaceID, cabinetID uuid.UUID, search string, limit, offset int32) ([]domain.OzonProductPrice, int64, error)
 	ListSearchQueries(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, search string, days int, limit, offset int32) ([]domain.OzonSearchQueryStat, int64, error)
+	GetCPOOverview(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonCPOOverview, error)
 }
 
 // ozonActionsServicer is the write/management surface (phase 2).
@@ -425,6 +426,21 @@ func (h *OzonHandler) ListBidChanges(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- phase 2: CPO (search promo) ---
+
+// CPOOverview handles GET /ozon/cpo/overview?cabinet_id= — the CPO promo
+// summary (enabled flag, promo campaign, product count, 7-day stats).
+func (h *OzonHandler) CPOOverview(w http.ResponseWriter, r *http.Request) {
+	workspaceID, cabinetID, ok := h.workspaceAndCabinet(w, r, r.URL.Query().Get("cabinet_id"))
+	if !ok {
+		return
+	}
+	overview, err := h.svc.GetCPOOverview(r.Context(), workspaceID, cabinetID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, overview)
+}
 
 // ListCPOProducts handles GET /ozon/cpo/products?cabinet_id=&page=.
 func (h *OzonHandler) ListCPOProducts(w http.ResponseWriter, r *http.Request) {

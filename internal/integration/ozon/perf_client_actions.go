@@ -233,7 +233,13 @@ func (c *PerfClient) ListSearchPromoProducts(ctx context.Context, creds Credenti
 		var resp struct {
 			Products []struct {
 				SKU               flexInt64 `json:"sku"`
+				SourceSku         string    `json:"sourceSku"`
+				Title             string    `json:"title"`
+				Price             flexFloat `json:"price"`
 				Bid               flexFloat `json:"bid"`
+				BidPrice          flexFloat `json:"bidPrice"`
+				ImageURL          string    `json:"imageUrl"`
+				VisibilityIndex   string    `json:"visibilityIndex"`
 				Enabled           *bool     `json:"enabled"`
 				IsEnabled         *bool     `json:"isEnabled"`
 				SearchPromoStatus string    `json:"searchPromoStatus"`
@@ -243,16 +249,29 @@ func (c *PerfClient) ListSearchPromoProducts(ctx context.Context, creds Credenti
 			return nil, err
 		}
 		for _, p := range resp.Products {
-			enabled := false
+			// Presence in the response == in the promo: the v2 payload carries no
+			// per-product enabled flag, so default to true and only honour an
+			// explicit flag when an older/alternate response shape provides one.
+			enabled := true
 			switch {
 			case p.Enabled != nil:
 				enabled = *p.Enabled
 			case p.IsEnabled != nil:
 				enabled = *p.IsEnabled
-			default:
+			case p.SearchPromoStatus != "":
 				enabled = p.SearchPromoStatus == "ENABLED" || p.SearchPromoStatus == "SEARCH_PROMO_STATUS_ENABLED"
 			}
-			out = append(out, CPOProduct{SKU: int64(p.SKU), BidRub: float64(p.Bid), Enabled: enabled})
+			out = append(out, CPOProduct{
+				SKU:             int64(p.SKU),
+				OfferID:         p.SourceSku,
+				Name:            p.Title,
+				PriceRub:        float64(p.Price),
+				BidRub:          float64(p.Bid),
+				BidPriceRub:     float64(p.BidPrice),
+				ImageURL:        p.ImageURL,
+				VisibilityIndex: p.VisibilityIndex,
+				Enabled:         enabled,
+			})
 		}
 		if len(resp.Products) < searchPromoPageSize {
 			return out, nil
