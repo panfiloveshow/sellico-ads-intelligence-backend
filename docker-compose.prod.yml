@@ -221,8 +221,11 @@ services:
       - --config.expand-env
       - --storage.path=/alertmanager
     environment:
-      ALERT_CHAT_ID: ${ALERT_CHAT_ID}
-      ONCALL_CHAT_ID: ${ONCALL_CHAT_ID:-${ALERT_CHAT_ID}}
+      # Empty is the intended "alerts off" state (this service is opt-in via the
+      # `alerts` profile), so the default is explicit — otherwise compose warns
+      # on every single command and the noise hides real warnings.
+      ALERT_CHAT_ID: ${ALERT_CHAT_ID:-}
+      ONCALL_CHAT_ID: ${ONCALL_CHAT_ID:-${ALERT_CHAT_ID:-}}
     restart: always
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
@@ -285,7 +288,13 @@ services:
       - "3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # Required, deliberately: an unset variable used to resolve to an EMPTY
+      # admin password, and compose only printed a warning. Grafana is not
+      # published to the host and nginx does not route to it, so this was never
+      # an open door — but anyone reaching the internal network or opening an
+      # SSH tunnel got admin with a blank password. Now the stack refuses to
+      # start instead of coming up insecure.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env — see .env.prod.example}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://api.sellico.ru/admin/grafana/}
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"

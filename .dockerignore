@@ -15,3 +15,16 @@ internal/service/testdata
 monitoring
 nginx
 extension
+
+# Build context trimming: none of this reaches the compiler, but all of it was
+# being transferred and hashed on every build.
+docs
+monitoring
+skills
+tools
+plan.md
+CHANGELOG.md
+*.md
+.claude
+.cursor
+front2
