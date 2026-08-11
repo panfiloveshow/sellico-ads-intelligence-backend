@@ -70,13 +70,32 @@ case "${1:-update}" in
     log "=== Updating Sellico ==="
     cd "$DEPLOY_DIR"
 
-    # Pull latest images for prebuilt services (monitoring stack);
-    # api/worker are build-from-source on this host so `pull` is a no-op for them.
-    docker compose -f "$COMPOSE_FILE" pull prometheus grafana cadvisor node-exporter || true
+    docker compose -f "$COMPOSE_FILE" pull prometheus cadvisor node-exporter || true
 
-    # Build api+worker from current source (needed when running `git pull` first).
-    docker compose -f "$COMPOSE_FILE" build api worker
-    log "Images built"
+    # api/worker: CI (.github/workflows/cd.yml) already builds and pushes both
+    # images to ghcr.io on every push to main — only its SSH deploy step fails,
+    # for lack of secrets. Rebuilding them here burned ~2 minutes of the
+    # production box's CPU reproducing an artefact that already existed.
+    #
+    # Pinned to the checked-out commit, never to :latest — pulling :latest right
+    # after `git pull` can silently deploy the PREVIOUS build while CI is still
+    # running. If the image for this exact commit is not published (CI still
+    # building, or it failed), fall back to building locally.
+    sha="$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
+    api_image="ghcr.io/panfiloveshow/sellico-ads-intelligence-backend-api:${sha}"
+    worker_image="ghcr.io/panfiloveshow/sellico-ads-intelligence-backend-worker:${sha}"
+
+    if [ "$sha" != "unknown" ] \
+       && docker pull "$api_image" >/dev/null 2>&1 \
+       && docker pull "$worker_image" >/dev/null 2>&1; then
+      export API_IMAGE="$api_image"
+      export WORKER_IMAGE="$worker_image"
+      log "Using prebuilt images from ghcr.io ($sha)"
+    else
+      log "No prebuilt images for $sha (CI still running, failed, or registry unreachable) — building locally"
+      docker compose -f "$COMPOSE_FILE" build api worker
+      log "Images built"
+    fi
 
     docker compose -f "$COMPOSE_FILE" run --rm migrate
     log "Migrations applied"
