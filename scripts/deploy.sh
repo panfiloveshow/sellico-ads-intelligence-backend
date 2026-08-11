@@ -97,7 +97,14 @@ case "${1:-update}" in
     # (e.g. when retrofitting monitoring onto a deployment that started without it).
     log "=== Starting monitoring stack ==="
     cd "$DEPLOY_DIR"
-    docker compose -f "$COMPOSE_FILE" up -d prometheus grafana cadvisor node-exporter
+    # Grafana is opt-in and must never come up with a blank admin password —
+    # that is exactly what happened while the variable was merely warned about.
+    if ! grep -qE '^GRAFANA_ADMIN_PASSWORD=.+' .env 2>/dev/null; then
+      echo "GRAFANA_ADMIN_PASSWORD не задан в .env — Grafana поднялась бы с пустым паролем администратора." >&2
+      echo "Сгенерировать:  echo \"GRAFANA_ADMIN_PASSWORD=\$(openssl rand -base64 24)\" >> .env" >&2
+      exit 1
+    fi
+    docker compose -f "$COMPOSE_FILE" --profile monitoring up -d prometheus grafana cadvisor node-exporter
     log "Monitoring up. Access via SSH tunnel:"
     log "  ssh -L 3000:grafana:3000 admin_reprice@$(hostname -I | awk '{print $1}')"
     log "Then open http://localhost:3000 (admin / \$GRAFANA_ADMIN_PASSWORD)"

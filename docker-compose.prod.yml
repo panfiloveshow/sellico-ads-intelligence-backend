@@ -5,9 +5,11 @@
 #   cap_drop: ALL + targeted cap_add  (least-privilege Linux capabilities)
 #   read_only: true with explicit tmpfs for runtime-writable paths
 #
-# Monitoring (prometheus, grafana, alertmanager) runs on the internal docker
-# network only — no host ports. Reach grafana via nginx /admin/grafana/ (Sprint 4).
-# For ad-hoc access use SSH tunnel: ssh -L 3000:grafana:3000 ops@host
+# Monitoring runs on the internal docker network only — no host ports.
+# prometheus/cadvisor/node-exporter are always on (cheap, no auth surface);
+# grafana and alertmanager are opt-in profiles, nobody uses them in production.
+# Ad-hoc access to grafana: ./scripts/deploy.sh monitoring, then
+#   ssh -L 3000:localhost:3000 admin_reprice@host
 
 services:
   nginx:
@@ -284,17 +286,21 @@ services:
 
   grafana:
     image: grafana/grafana:11.5.2
+    # Opt-in: nobody opens Grafana in production, and it ran for weeks with an
+    # EMPTY admin password because ${GRAFANA_ADMIN_PASSWORD} was unset and
+    # compose only warned. Not an open door (internal network only, no nginx
+    # route), but a free attack surface for a service with no users.
+    #
+    # Turn it on with:  ./scripts/deploy.sh monitoring
+    # That target refuses to start it without GRAFANA_ADMIN_PASSWORD in .env.
+    # (The check lives there, not here: a `:?` default breaks compose file
+    # loading for every command, even when the service is not selected.)
+    profiles: ["monitoring"]
     expose:
       - "3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      # Required, deliberately: an unset variable used to resolve to an EMPTY
-      # admin password, and compose only printed a warning. Grafana is not
-      # published to the host and nginx does not route to it, so this was never
-      # an open door — but anyone reaching the internal network or opening an
-      # SSH tunnel got admin with a blank password. Now the stack refuses to
-      # start instead of coming up insecure.
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env — see .env.prod.example}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://api.sellico.ru/admin/grafana/}
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
