@@ -184,7 +184,7 @@ func sellerCabinetAutomationGuardrailReason(state sqlcgen.SellerCabinetSyncState
 	if state.Status != "ready" {
 		return fmt.Sprintf("seller cabinet sync status is %s", state.Status)
 	}
-	if state.RateLimited || state.WBErrorCount > 0 || state.IssueCount > 0 {
+	if state.RateLimited || state.WbErrorCount > 0 || state.IssueCount > 0 {
 		return "seller cabinet sync completed with unresolved issues"
 	}
 	if !state.CompletedAt.Valid {

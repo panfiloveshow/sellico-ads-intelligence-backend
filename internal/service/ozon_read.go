@@ -64,6 +64,10 @@ func (s *OzonSyncService) ListCampaignsWithStats(ctx context.Context, workspaceI
 		aggregateByID[uuidFromPgtype(aggregate.CampaignID)] = aggregate
 	}
 
+	// «ДРР от общего оборота» per campaign — one round trip for the cabinet.
+	attributed := loadCampaignAttributedTurnover(ctx, s.queries, s.logger, cabinetID, since)
+
+	now := time.Now().UTC()
 	result := make([]domain.OzonCampaignWithStats, 0, len(rows))
 	for _, row := range rows {
 		item := domain.OzonCampaignWithStats{OzonCampaign: ozonCampaignFromSqlc(row)}
@@ -76,6 +80,14 @@ func (s *OzonSyncService) ListCampaignsWithStats(ctx context.Context, workspaceI
 			if item.StatsRevenue > 0 {
 				item.DRR = item.StatsSpend / item.StatsRevenue * 100
 			}
+		}
+		attrRow, attrFound := attributed[item.ID]
+		total := campaignTotalDRRFrom(attrRow, attrFound, item.StatsSpend, now, 0)
+		item.TotalDRRStatus = total.Status
+		item.TotalRevenueShared = total.Shared
+		if total.Status == totalDRRStatusOK {
+			value := total.Value
+			item.TotalDRR = &value
 		}
 		result = append(result, item)
 	}

@@ -38,6 +38,7 @@ type ozonStrategyPerfClient interface {
 
 type OzonStrategyService struct {
 	queries       *sqlcgen.Queries
+	apiBudget     *OzonAPIBudget
 	perfClient    ozonStrategyPerfClient
 	engine        *BidEngine
 	encryptionKey []byte
@@ -48,6 +49,7 @@ type OzonStrategyService struct {
 func NewOzonStrategyService(queries *sqlcgen.Queries, perfClient *ozon.PerfClient, engine *BidEngine, encryptionKey []byte, logger zerolog.Logger) *OzonStrategyService {
 	return &OzonStrategyService{
 		queries:       queries,
+		apiBudget:     NewOzonAPIBudget(queries, logger),
 		perfClient:    perfClient,
 		engine:        engine,
 		encryptionKey: encryptionKey,
@@ -68,6 +70,34 @@ type ozonStrategyDecisionContext struct {
 	Orders       int64   `json:"orders"`
 	LookbackDays int     `json:"lookback_days"`
 	Reason       string  `json:"reason"`
+
+	// «ДРР от общего оборота», cabinet-wide — the ceiling operates on this.
+	// Status tells a real measurement from a missing or stale one, so a zero
+	// here is never mistaken for a good ДРР.
+	TotalDRR        float64 `json:"total_drr"`
+	TotalDRRStatus  string  `json:"total_drr_status"`
+	TotalDRRScope   string  `json:"total_drr_scope"`
+	TotalRevenueRub float64 `json:"total_revenue_rub"`
+
+	// The same ratio narrowed to this campaign's attributed share of the
+	// turnover — the second bid target. RevenueShared says whether the
+	// denominator had to be split with other campaigns advertising the same
+	// SKUs, which is the main reason a value here can look surprising.
+	CampaignTotalDRR           float64 `json:"campaign_total_drr"`
+	CampaignTotalDRRStatus     string  `json:"campaign_total_drr_status"`
+	CampaignTotalRevenueRub    float64 `json:"campaign_total_revenue_rub"`
+	CampaignTotalRevenueShared bool    `json:"campaign_total_revenue_shared"`
+	TargetTotalDRR             float64 `json:"target_total_drr,omitempty"`
+
+	// Инкрементальный ДРР over the two most recent windows, cabinet-wide.
+	// Nothing acts on it — it is the evidence for whether paying more is
+	// actually moving more goods.
+	Incremental incrementalDRR `json:"incremental_drr"`
+
+	// The ceiling actually enforced and where it came from: "explicit" (the
+	// strategy states it), "unit_economics" (derived from margin), or "none".
+	MaxTotalDRR       *float64 `json:"max_total_drr,omitempty"`
+	MaxTotalDRRSource string   `json:"max_total_drr_source"`
 }
 
 // RunForWorkspace executes every active ozon_* strategy of the workspace.
@@ -129,10 +159,27 @@ func (s *OzonStrategyService) runStrategy(ctx context.Context, workspaceID uuid.
 	// SKUs often repeat in sibling campaigns.
 	minBidCache := map[int64]float64{}
 
+	// «ДРР от общего оборота» is cabinet-wide, so it is measured once per run
+	// and applied to every campaign decision — see ozon_total_drr.go.
+	since := now.AddDate(0, 0, -params.LookbackDays)
+	totalDRR := loadCabinetTotalDRR(ctx, s.queries, s.logger,
+		strategy.SellerCabinetID, since, now, params.MaxDataAgeHours)
+	// Per-campaign attributed turnover for the second target — one round trip
+	// for the whole cabinet, looked up per binding below.
+	attributed := loadCampaignAttributedTurnover(ctx, s.queries, s.logger, strategy.SellerCabinetID, since)
+	// Инкрементальный ДРР: observational only, recorded so the effect of
+	// spending more can be judged before anything is wired to it.
+	incremental := loadIncrementalDRR(ctx, s.queries, s.logger, strategy.SellerCabinetID, now, params.LookbackDays)
+	// The ceiling: whatever the strategy states outright, otherwise derived
+	// from the cabinet's own margin so nobody has to invent a percentage.
+	margin := loadCabinetMargin(ctx, s.queries, s.logger, strategy.SellerCabinetID, since)
+	ceiling, ceilingSource := resolveTotalDRRCeiling(
+		params.MaxTotalDRRPercent, margin, params.TargetMarginPercent, params.ExpectedBuyoutPercent)
+
 	applied := 0
 	var bindingErrors []error
 	for _, binding := range bindings {
-		count, bindingErr := s.runCampaign(ctx, strategy, params, creds, binding, now, minBidCache)
+		count, bindingErr := s.runCampaign(ctx, strategy, params, creds, binding, now, minBidCache, totalDRR, attributed, incremental, ceiling, ceilingSource)
 		applied += count
 		if bindingErr != nil {
 			bindingErrors = append(bindingErrors, fmt.Errorf("campaign %d: %w", binding.OzonCampaignID, bindingErr))
@@ -171,6 +218,11 @@ func (s *OzonStrategyService) runCampaign(
 	binding sqlcgen.ListOzonCampaignBindingsByStrategyRow,
 	now time.Time,
 	minBidCache map[int64]float64,
+	total totalDRR,
+	attributed map[uuid.UUID]sqlcgen.OzonCampaignAttributedTurnoverByCabinetRow,
+	incremental incrementalDRR,
+	ceiling *float64,
+	ceilingSource string,
 ) (int, error) {
 	logger := s.logger.With().
 		Str("strategy_id", strategy.ID.String()).
@@ -245,6 +297,46 @@ func (s *OzonStrategyService) runCampaign(
 	if decision == nil || decision.OldBid <= 0 || decision.NewBid == decision.OldBid {
 		return 0, nil
 	}
+
+	// Total-ДРР ceiling. Only increases are gated: while advertising already
+	// eats too much of the cabinet's whole turnover, spending more cannot be
+	// the right move, but cutting back always can.
+	if decision.NewBid > decision.OldBid {
+		if reason := totalDRRIncreaseBlockReason(ceiling, total); reason != "" {
+			logger.Info().
+				Float64("total_drr", total.Value).
+				Str("reason", reason).
+				Msg("ozon strategy bid increase blocked by total drr ceiling")
+			return 0, nil
+		}
+	}
+
+	// Second target: the campaign's attributed share of the cabinet's whole
+	// turnover. Taking the lower of the two bids gives «повышаем, только если
+	// оба разрешают; понижаем, если требует хотя бы один» without a second
+	// code path — both decisions start from the same current bid.
+	attrRow, attrFound := attributed[campaignID]
+	campaignTotal := campaignTotalDRRFrom(attrRow, attrFound, bidCtx.Spend, now, params.MaxDataAgeHours)
+	if params.TargetTotalDRRPercent > 0 && campaignTotal.Status == totalDRRStatusOK {
+		totalStrategy := strategy
+		totalStrategy.Params.TargetACoS = params.TargetTotalDRRPercent
+		totalCtx := bidCtx
+		totalCtx.Revenue = campaignTotal.RevenueRub
+
+		if totalDecision := s.engine.CalculateBid(totalStrategy, totalCtx); totalDecision != nil &&
+			totalDecision.NewBid < decision.NewBid {
+			logger.Info().
+				Int("campaign_drr_bid", decision.NewBid).
+				Int("total_drr_bid", totalDecision.NewBid).
+				Float64("campaign_total_drr", campaignTotal.Value).
+				Msg("total drr target overrode the campaign drr decision")
+			decision = totalDecision
+			decision.Reason = "ДРР от общего оборота: " + decision.Reason
+		}
+		if decision.NewBid == decision.OldBid {
+			return 0, nil
+		}
+	}
 	multiplier := float64(decision.NewBid) / float64(decision.OldBid)
 
 	// Guardrails: cooldown + daily cap per (campaign, sku). Uniform scaling
@@ -297,6 +389,21 @@ func (s *OzonStrategyService) runCampaign(
 		Orders:       agg.Orders,
 		LookbackDays: params.LookbackDays,
 		Reason:       decision.Reason,
+
+		TotalDRR:        total.Value,
+		TotalDRRStatus:  total.Status,
+		TotalDRRScope:   total.Scope,
+		TotalRevenueRub: total.RevenueRub,
+
+		CampaignTotalDRR:           campaignTotal.Value,
+		CampaignTotalDRRStatus:     campaignTotal.Status,
+		CampaignTotalRevenueRub:    campaignTotal.RevenueRub,
+		CampaignTotalRevenueShared: campaignTotal.Shared,
+		TargetTotalDRR:             params.TargetTotalDRRPercent,
+
+		Incremental:       incremental,
+		MaxTotalDRR:       ceiling,
+		MaxTotalDRRSource: ceilingSource,
 	})
 
 	status := domain.OzonBidStatusShadow
@@ -340,11 +447,30 @@ func (s *OzonStrategyService) runCampaign(
 			Float64("multiplier", multiplier).
 			Int("skus", len(newBids)).
 			Str("reason", decision.Reason).
+			Float64("total_drr", total.Value).
+			Str("total_drr_status", total.Status).
 			Msg("recorded shadow ozon bid decisions without calling the API")
 		return 0, nil
 	}
 
+	// Ozon meters bid changes per day from 2026-08-25. Automation stops short
+	// of the allowance so manual work in the cabinet is still possible; the
+	// shadow rows above are already recorded, so nothing is lost — the write
+	// simply does not happen this cycle.
+	if reason := s.apiBudget.AutomationBlockReason(ctx, strategy.SellerCabinetID, ozonAPICategoryBidWrite, 1); reason != "" {
+		logger.Warn().Str("reason", reason).Msg("ozon strategy bid write skipped: api budget")
+		for _, id := range changeIDs {
+			if markErr := s.queries.MarkOzonBidChangeResult(ctx, sqlcgen.MarkOzonBidChangeResultParams{
+				ID: id, Status: domain.OzonBidStatusFailed, Error: textToPgtype(truncateError(reason)),
+			}); markErr != nil {
+				logger.Warn().Err(markErr).Msg("failed to finalize budget-skipped bid change")
+			}
+		}
+		return 0, nil
+	}
+
 	writeErr := s.perfClient.SetCampaignProductBids(ctx, creds, binding.OzonCampaignID, newBids)
+	s.apiBudget.Record(ctx, strategy.SellerCabinetID, ozonAPICategoryBidWrite, 1)
 	finalStatus := domain.OzonBidStatusApplied
 	var errText pgtype.Text
 	if writeErr != nil {
@@ -377,6 +503,8 @@ func (s *OzonStrategyService) runCampaign(
 		Float64("multiplier", multiplier).
 		Int("skus", len(newBids)).
 		Str("reason", decision.Reason).
+		Float64("total_drr", total.Value).
+		Str("total_drr_status", total.Status).
 		Msg("ozon strategy bids applied")
 	return 1, nil
 }
@@ -433,4 +561,10 @@ func ozonStrategyDayStart(now time.Time) time.Time {
 // roundRub rounds a ruble amount to kopecks (2dp).
 func roundRub(value float64) float64 {
 	return math.Round(value*100) / 100
+}
+
+// CleanupAPICounters trims Performance-API quota buckets past every rolling
+// window. Exposed here because the strategy service already owns the budget.
+func (s *OzonStrategyService) CleanupAPICounters(ctx context.Context) error {
+	return s.apiBudget.CleanupCounters(ctx)
 }

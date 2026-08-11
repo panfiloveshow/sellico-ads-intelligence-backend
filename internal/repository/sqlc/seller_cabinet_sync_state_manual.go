@@ -6,20 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type SellerCabinetSyncState struct {
-	SellerCabinetID   pgtype.UUID
-	WorkspaceID       pgtype.UUID
-	Status            string
-	StartedAt         pgtype.Timestamptz
-	CompletedAt       pgtype.Timestamptz
-	DataThroughDate   pgtype.Date
-	IssueCount        int32
-	WBErrorCount      int32
-	RateLimited       bool
-	RetryAfterSeconds pgtype.Int4
-	LastError         pgtype.Text
-	UpdatedAt         pgtype.Timestamptz
-}
 
 type BeginSellerCabinetSyncParams struct {
 	SellerCabinetID pgtype.UUID
@@ -92,7 +78,7 @@ FROM seller_cabinet_sync_states
 WHERE seller_cabinet_id = $1`, sellerCabinetID)
 	var state SellerCabinetSyncState
 	err := row.Scan(&state.SellerCabinetID, &state.WorkspaceID, &state.Status, &state.StartedAt,
-		&state.CompletedAt, &state.DataThroughDate, &state.IssueCount, &state.WBErrorCount,
+		&state.CompletedAt, &state.DataThroughDate, &state.IssueCount, &state.WbErrorCount,
 		&state.RateLimited, &state.RetryAfterSeconds, &state.LastError, &state.UpdatedAt)
 	return state, err
 }
@@ -112,7 +98,7 @@ ORDER BY seller_cabinet_id`, workspaceID)
 	for rows.Next() {
 		var state SellerCabinetSyncState
 		if err := rows.Scan(&state.SellerCabinetID, &state.WorkspaceID, &state.Status, &state.StartedAt,
-			&state.CompletedAt, &state.DataThroughDate, &state.IssueCount, &state.WBErrorCount,
+			&state.CompletedAt, &state.DataThroughDate, &state.IssueCount, &state.WbErrorCount,
 			&state.RateLimited, &state.RetryAfterSeconds, &state.LastError, &state.UpdatedAt); err != nil {
 			return nil, err
 		}

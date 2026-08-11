@@ -1570,7 +1570,7 @@ func (s *CampaignActionService) recordLocalMinusPhrase(ctx context.Context, camp
 	if strings.TrimSpace(normQuery) == "" {
 		return nil
 	}
-	_, err := s.queries.CreateMinusPhrase(ctx, campaignID, strings.TrimSpace(normQuery))
+	_, err := s.queries.CreateMinusPhrase(ctx, sqlcgen.CreateMinusPhraseParams{CampaignID: campaignID, Phrase: strings.TrimSpace(normQuery)})
 	return err
 }
 

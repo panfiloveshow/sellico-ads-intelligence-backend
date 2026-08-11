@@ -349,6 +349,11 @@ func (r *campaignRows) Next() bool {
 	}
 	return false
 }
+
+// Scan mirrors the column order of the generated campaigns queries, which is
+// the physical column order of the campaigns table. Reordering columns in a
+// migration changes it — this fake panics loudly on a mismatch rather than
+// scanning garbage.
 func (r *campaignRows) Scan(dest ...any) error {
 	item := r.items[r.idx-1]
 	*dest[0].(*pgtype.UUID) = item.ID
@@ -361,15 +366,15 @@ func (r *campaignRows) Scan(dest ...any) error {
 	*dest[7].(*string) = item.BidType
 	*dest[8].(*string) = item.PaymentType
 	*dest[9].(*pgtype.Int8) = item.DailyBudget
-	*dest[10].(*pgtype.Bool) = item.PlacementSearch
-	*dest[11].(*pgtype.Bool) = item.PlacementRecommendations
-	*dest[12].(*pgtype.Timestamptz) = item.WbCreatedAt
-	*dest[13].(*pgtype.Timestamptz) = item.WbStartedAt
-	*dest[14].(*pgtype.Timestamptz) = item.WbUpdatedAt
-	*dest[15].(*pgtype.Timestamptz) = item.WbDeletedAt
-	*dest[16].(*pgtype.Bool) = item.CanChangeNms
-	*dest[17].(*pgtype.Timestamptz) = item.CreatedAt
-	*dest[18].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[10].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[11].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[12].(*pgtype.Bool) = item.PlacementSearch
+	*dest[13].(*pgtype.Bool) = item.PlacementRecommendations
+	*dest[14].(*pgtype.Timestamptz) = item.WbCreatedAt
+	*dest[15].(*pgtype.Timestamptz) = item.WbStartedAt
+	*dest[16].(*pgtype.Timestamptz) = item.WbUpdatedAt
+	*dest[17].(*pgtype.Timestamptz) = item.WbDeletedAt
+	*dest[18].(*pgtype.Bool) = item.CanChangeNms
 	return nil
 }
 
@@ -392,20 +397,24 @@ func (r *phraseRows) Next() bool {
 	}
 	return false
 }
+
+// Scan mirrors the generated phrases column order (physical column order of
+// the phrases table).
 func (r *phraseRows) Scan(dest ...any) error {
 	item := r.items[r.idx-1]
 	*dest[0].(*pgtype.UUID) = item.ID
 	*dest[1].(*pgtype.UUID) = item.CampaignID
 	*dest[2].(*pgtype.UUID) = item.WorkspaceID
-	*dest[3].(*pgtype.UUID) = item.ProductID
-	*dest[4].(*pgtype.Int8) = item.WbProductID
-	*dest[5].(*pgtype.Int8) = item.WbClusterID
-	*dest[6].(*string) = item.WbNormQuery
-	*dest[7].(*string) = item.Keyword
-	*dest[8].(*pgtype.Int4) = item.Count
-	*dest[9].(*pgtype.Int8) = item.CurrentBid
-	*dest[10].(*pgtype.Timestamptz) = item.CreatedAt
-	*dest[11].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[3].(*pgtype.Int8) = item.WbClusterID
+	*dest[4].(*string) = item.WbNormQuery
+	*dest[5].(*string) = item.Keyword
+	*dest[6].(*pgtype.Int4) = item.Count
+	*dest[7].(*pgtype.Int8) = item.CurrentBid
+	*dest[8].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[9].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[10].(*pgtype.UUID) = item.ProductID
+	*dest[11].(*pgtype.Int8) = item.WbProductID
+	*dest[12].(*pgtype.Timestamptz) = item.CurrentBidObservedAt
 	return nil
 }
 
@@ -754,13 +763,13 @@ func (r *phraseStatBatchRows) Scan(dest ...any) error {
 	*dest[3].(*int64) = item.Impressions
 	*dest[4].(*int64) = item.Clicks
 	*dest[5].(*int64) = item.Spend
-	*dest[6].(*pgtype.Int8) = item.Atbs
-	*dest[7].(*pgtype.Int8) = item.Orders
-	*dest[8].(*pgtype.Float8) = item.Cpc
-	*dest[9].(*pgtype.Float8) = item.Cpm
-	*dest[10].(*pgtype.Float8) = item.AvgPos
-	*dest[11].(*pgtype.Timestamptz) = item.CreatedAt
-	*dest[12].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[6].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[7].(*pgtype.Timestamptz) = item.UpdatedAt
+	*dest[8].(*pgtype.Int8) = item.Atbs
+	*dest[9].(*pgtype.Int8) = item.Orders
+	*dest[10].(*pgtype.Float8) = item.Cpc
+	*dest[11].(*pgtype.Float8) = item.Cpm
+	*dest[12].(*pgtype.Float8) = item.AvgPos
 	return nil
 }
 
@@ -787,10 +796,12 @@ func (r *bidSnapshotBatchRows) Scan(dest ...any) error {
 	item := r.items[r.idx-1]
 	*dest[0].(*pgtype.UUID) = item.ID
 	*dest[1].(*pgtype.UUID) = item.PhraseID
-	*dest[2].(*int64) = item.CompetitiveBid
-	*dest[3].(*int64) = item.LeadershipBid
-	*dest[4].(*int64) = item.CpmMin
-	*dest[5].(*pgtype.Timestamptz) = item.CreatedAt
+	*dest[2].(*pgtype.UUID) = item.WorkspaceID
+	*dest[3].(*int64) = item.CompetitiveBid
+	*dest[4].(*int64) = item.LeadershipBid
+	*dest[5].(*int64) = item.CpmMin
+	*dest[6].(*pgtype.Timestamptz) = item.CapturedAt
+	*dest[7].(*pgtype.Timestamptz) = item.CreatedAt
 	return nil
 }
 

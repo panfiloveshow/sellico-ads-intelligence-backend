@@ -115,6 +115,9 @@ type ozonSyncRunner interface {
 // ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
 type ozonStrategyRunner interface {
 	RunForWorkspace(ctx context.Context, workspaceID uuid.UUID) (int, error)
+	// CleanupAPICounters trims Performance-API quota buckets past every
+	// rolling window (Ozon meters requests hourly and daily from 2026-08-25).
+	CleanupAPICounters(ctx context.Context) error
 }
 
 // ozonAIRunner is the AI autopilot: sweep fan-out enumeration + one cabinet
@@ -537,6 +540,15 @@ func (p *Processor) HandleOzonSweepSync(ctx context.Context, _ *asynq.Task) erro
 		p.logger.Debug().Msg("ozon sync not configured, skipping sweep")
 		return nil
 	}
+	// Trim Performance-API quota buckets that are past every rolling window.
+	// Piggybacks on the sweep rather than earning its own schedule — it is a
+	// single DELETE and the sweep already runs often enough.
+	if p.ozonStrategy != nil {
+		if err := p.ozonStrategy.CleanupAPICounters(ctx); err != nil {
+			p.logger.Warn().Err(err).Msg("failed to trim ozon api call counters")
+		}
+	}
+
 	cabinetIDs, err := p.ozonSync.ListOzonCabinetIDs(ctx)
 	if err != nil {
 		return err

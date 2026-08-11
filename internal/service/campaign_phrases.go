@@ -45,7 +45,7 @@ func (s *CampaignPhraseService) AddMinusPhrase(ctx context.Context, workspaceID,
 	if err := s.ensureCampaignInWorkspace(ctx, workspaceID, campaignID); err != nil {
 		return nil, err
 	}
-	row, err := s.queries.CreateMinusPhrase(ctx, uuidToPgtype(campaignID), phrase)
+	row, err := s.queries.CreateMinusPhrase(ctx, sqlcgen.CreateMinusPhraseParams{CampaignID: uuidToPgtype(campaignID), Phrase: phrase})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to add minus phrase")
 	}
@@ -88,7 +88,7 @@ func (s *CampaignPhraseService) AddPlusPhrase(ctx context.Context, workspaceID, 
 	if err := s.ensureCampaignInWorkspace(ctx, workspaceID, campaignID); err != nil {
 		return nil, err
 	}
-	row, err := s.queries.CreatePlusPhrase(ctx, uuidToPgtype(campaignID), phrase)
+	row, err := s.queries.CreatePlusPhrase(ctx, sqlcgen.CreatePlusPhraseParams{CampaignID: uuidToPgtype(campaignID), Phrase: phrase})
 	if err != nil {
 		return nil, apperror.New(apperror.ErrInternal, "failed to add plus phrase")
 	}

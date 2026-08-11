@@ -48,6 +48,11 @@ type aiPackTotals struct {
 	Orders     int64   `json:"orders"`
 	RevenueRub float64 `json:"revenue_rub"`
 	DRR        float64 `json:"drr_pct"`
+	// TotalDRR is this campaign's spend over its attributed share of the
+	// cabinet's whole turnover. A campaign whose drr_pct looks fine while
+	// total_drr_pct is high is buying orders the shop was getting anyway.
+	// Omitted when the turnover is unknown — never reported as zero.
+	TotalDRR *float64 `json:"total_drr_pct,omitempty"`
 }
 
 // aiPackDay is one compact daily row: [date, views, clicks, spend, orders, revenue].
@@ -107,6 +112,12 @@ type aiPackDecisionOutcome struct {
 	DRRAfter     *float64 `json:"drr_after,omitempty"`
 	SpendDelta   *float64 `json:"spend_delta_rub,omitempty"`
 	RevenueDelta *float64 `json:"revenue_delta_rub,omitempty"`
+	// Cabinet-wide ДРР around the same decision. A decision that improved the
+	// campaign ДРР while raising this one bought traffic that was already
+	// converting — without these two fields the model cannot tell the cases
+	// apart and keeps repeating the second kind.
+	TotalDRRBefore *float64 `json:"total_drr_before,omitempty"`
+	TotalDRRAfter  *float64 `json:"total_drr_after,omitempty"`
 }
 
 type aiPackRules struct {
@@ -117,6 +128,21 @@ type aiPackRules struct {
 	MaxBidRub        int     `json:"max_bid_rub"`
 	CooldownMinutes  int     `json:"cooldown_minutes"`
 	MaxChangesPerDay int     `json:"max_changes_per_day"`
+
+	// «ДРР от общего оборота» — the cabinet-wide ratio and its ceiling. Status
+	// is ok|no_data|stale; on anything but ok the value is meaningless and the
+	// ceiling is not enforced.
+	TotalDRRPct       float64  `json:"total_drr_pct"`
+	TotalDRRStatus    string   `json:"total_drr_status"`
+	MaxTotalDRRPct    *float64 `json:"max_total_drr_pct,omitempty"`
+	MaxTotalDRRSource string   `json:"max_total_drr_source,omitempty"`
+	TotalTurnoverRub  float64  `json:"total_turnover_rub"`
+	TotalDRRWindowDay int      `json:"total_drr_window_days"`
+
+	// Incremental compares the last two windows: did extra spend bring extra
+	// turnover, or buy orders the shop already had. Advisory — no guardrail
+	// enforces it, but it is the strongest evidence in the pack.
+	Incremental incrementalDRR `json:"incremental_drr"`
 }
 
 // aiPackSearchQuery is one aggregated search query row of the context pack
@@ -153,6 +179,13 @@ type aiCabinetData struct {
 	campaignsByOzonID map[int64]sqlcgen.OzonCampaign
 	bidsByCampaignSKU map[int64]map[int64]float64 // ozon campaign id → sku → current bid
 	cpoBySKU          map[int64]domain.OzonCPOProduct
+	// totalDRR is the cabinet-wide «ДРР от общего оборота» measured once per
+	// run; the guardrail phase reads it to gate every spend increase.
+	totalDRR totalDRR
+	// totalDRRCeiling is the ceiling the guardrail phase enforces; Source says
+	// whether it was stated outright or derived from unit economics.
+	totalDRRCeiling       *float64
+	totalDRRCeilingSource string
 }
 
 // buildAIContext loads everything from local tables and assembles both the
@@ -212,9 +245,17 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		t.Orders += row.Orders
 		t.RevenueRub += revenue
 	}
-	for _, t := range totalsByCampaign {
+	// Attributed turnover per campaign — the denominator of the per-campaign
+	// «ДРР от общего оборота». One round trip for the whole cabinet.
+	attributed := loadCampaignAttributedTurnover(ctx, s.queries, s.logger, cabinetID, since)
+	for id, t := range totalsByCampaign {
 		if t.RevenueRub > 0 {
 			t.DRR = roundRub(t.SpendRub / t.RevenueRub * 100)
+		}
+		if row, ok := attributed[id]; ok {
+			if v := drrPct(t.SpendRub, pgNumericToFloat(row.RevenueRub)); v != nil {
+				t.TotalDRR = v
+			}
 		}
 		t.SpendRub = roundRub(t.SpendRub)
 		t.RevenueRub = roundRub(t.RevenueRub)
@@ -241,6 +282,16 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		data.campaignsByOzonID[campaign.OzonCampaignID] = campaign
 	}
 
+	// The cabinet-wide ДРР over the same window the pack reports. The model
+	// must see both the current value and the ceiling, otherwise it keeps
+	// proposing increases that the guardrail then rejects.
+	data.totalDRR = loadCabinetTotalDRR(ctx, s.queries, s.logger, cabinetID, since, time.Now().UTC(), params.MaxDataAgeHours)
+	// Same ceiling resolution as the deterministic strategy: explicit if the
+	// strategy states one, otherwise derived from the cabinet's own margin.
+	margin := loadCabinetMargin(ctx, s.queries, s.logger, cabinetID, since)
+	data.totalDRRCeiling, data.totalDRRCeilingSource = resolveTotalDRRCeiling(
+		params.MaxTotalDRRPercent, margin, params.TargetMarginPercent, params.ExpectedBuyoutPercent)
+
 	pack := &aiContextPack{
 		Rules: aiPackRules{
 			TargetDRRPct:     params.TargetACoS,
@@ -250,6 +301,15 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			MaxBidRub:        params.MaxBid,
 			CooldownMinutes:  params.CooldownMinutes,
 			MaxChangesPerDay: params.MaxChangesPerDay,
+
+			TotalDRRPct:       data.totalDRR.Value,
+			TotalDRRStatus:    data.totalDRR.Status,
+			MaxTotalDRRPct:    data.totalDRRCeiling,
+			MaxTotalDRRSource: data.totalDRRCeilingSource,
+			TotalTurnoverRub:  data.totalDRR.RevenueRub,
+			TotalDRRWindowDay: aiPackStatsWindowDays,
+			Incremental: loadIncrementalDRR(ctx, s.queries, s.logger, cabinetID,
+				time.Now().UTC(), aiPackStatsWindowDays),
 		},
 		BoundCampaigns: bound,
 	}
@@ -583,6 +643,9 @@ func (s *OzonAIManagerService) recentDecisionOutcomes(ctx context.Context, cabin
 			Outcome:     pgTextValue(row.OutcomeStatus),
 			DRRBefore:   pgNumericToFloatPtr(row.DrrBefore),
 			DRRAfter:    pgNumericToFloatPtr(row.DrrAfter),
+
+			TotalDRRBefore: pgNumericToFloatPtr(row.TotalDrrBefore),
+			TotalDRRAfter:  pgNumericToFloatPtr(row.TotalDrrAfter),
 		}
 		if target.OzonCampaignID > 0 {
 			if c, ok := data.campaignsByOzonID[target.OzonCampaignID]; ok && pgTextValue(c.Title) != "" {

@@ -28,3 +28,28 @@ ON CONFLICT (seller_cabinet_id, offer_id) DO UPDATE SET
 SELECT * FROM ozon_product_economics
 WHERE seller_cabinet_id = $1
 ORDER BY offer_id;
+
+-- OzonCabinetMarginInputs feeds the derived «ДРР от общего оборота» ceiling:
+-- every priced SKU of the cabinet with the turnover it produced over the
+-- window. The margin itself is computed in Go so there is exactly one
+-- implementation of that formula (ozonSKUMarginPct).
+--
+-- SKUs with no sales in the window come back with zero turnover and simply
+-- carry no weight.
+-- name: OzonCabinetMarginInputs :many
+SELECT p.sku,
+       p.price_rub,
+       p.net_price_rub,
+       p.commission_fbo_pct,
+       p.commission_fbs_pct,
+       p.acquiring_pct,
+       COALESCE(s.revenue_rub, 0)::numeric AS revenue_rub
+FROM ozon_product_prices p
+LEFT JOIN (
+    SELECT sd.sku, SUM(sd.revenue_rub) AS revenue_rub
+    FROM ozon_sales_daily sd
+    WHERE sd.seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+      AND sd.date >= sqlc.arg('since')
+    GROUP BY sd.sku
+) s ON s.sku = p.sku
+WHERE p.seller_cabinet_id = sqlc.arg('seller_cabinet_id');

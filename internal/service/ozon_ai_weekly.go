@@ -101,8 +101,14 @@ func (s *OzonAIManagerService) generateWeeklyReport(ctx context.Context, workspa
 
 	trend := s.weeklyDRRTrend(ctx, cabinetID, now)
 	decisions := s.weeklyDecisionSummary(ctx, cabinetID, now)
+	// «ДРР от общего оборота» and the two-window comparison. There is no Ozon
+	// advertising screen in the product, so this weekly recap is the only
+	// channel that actually reaches a human — the second ДРР belongs here.
+	total := loadCabinetTotalDRR(ctx, s.queries, s.logger, cabinetID,
+		now.AddDate(0, 0, -aiWeeklyWindowDays), now, 0)
+	incremental := loadIncrementalDRR(ctx, s.queries, s.logger, cabinetID, now, aiWeeklyWindowDays)
 
-	text, err := s.weeklyReportText(ctx, trend, decisions)
+	text, err := s.weeklyReportText(ctx, trend, decisions, total, incremental)
 	if err != nil {
 		return false, err
 	}
@@ -216,7 +222,13 @@ func (s *OzonAIManagerService) weeklyDecisionSummary(ctx context.Context, cabine
 
 // weeklyReportText asks the LLM for the manager-facing recap. The style matches
 // the run summaries: plain Russian, no field names, 4–8 sentences, no actions.
-func (s *OzonAIManagerService) weeklyReportText(ctx context.Context, trend aiWeeklyTrend, decisions aiWeeklyDecisions) (string, error) {
+func (s *OzonAIManagerService) weeklyReportText(
+	ctx context.Context,
+	trend aiWeeklyTrend,
+	decisions aiWeeklyDecisions,
+	total totalDRR,
+	incremental incrementalDRR,
+) (string, error) {
 	facts := map[string]any{
 		"расход_за_неделю_руб":        trend.SpendRub,
 		"выручка_за_неделю_руб":       trend.RevenueRub,
@@ -229,6 +241,17 @@ func (s *OzonAIManagerService) weeklyReportText(ctx context.Context, trend aiWee
 		"предложено_на_подтверждение": decisions.Proposed,
 		"в_режиме_наблюдения":         decisions.Shadow,
 		"по_типам_действий":           decisions.ByAction,
+	}
+	// Only include the second ДРР when it was actually measured: a stale or
+	// missing value must not reach the model as a number it can narrate.
+	if total.Status == totalDRRStatusOK {
+		facts["весь_оборот_магазина_руб"] = total.RevenueRub
+		facts["дрр_от_общего_оборота_пункты"] = total.Value
+	}
+	if incremental.Verdict != incrementalDRRNotEnoughData {
+		facts["изменение_расхода_руб"] = incremental.SpendDeltaRub
+		facts["изменение_оборота_руб"] = incremental.TurnoverDeltaRub
+		facts["вывод_по_доп_расходу"] = incremental.Verdict
 	}
 	payload, _ := json.Marshal(facts)
 
@@ -250,6 +273,8 @@ func aiWeeklyReportSystemPrompt() string {
 - 4–8 предложений простым деловым русским, без списков и заголовков.
 - Это только резюме, БЕЗ предложений действий и без обещаний — просто расскажи, что было.
 - Опиши динамику ДРР (доля рекламных расходов), расход и выручку человеческим языком, как изменилось за неделю.
+- Если есть «дрр_от_общего_оборота_пункты» — объясни разницу простыми словами: обычная ДРР считается от выручки, которую Ozon приписал рекламе, а эта — от всего оборота магазина. Назови обе цифры.
+- Если есть «вывод_по_доп_расходу»: "accretive" — рост рекламных затрат принёс дополнительный оборот; "cannibalizing" — затраты выросли, а оборот нет, то есть реклама выкупала заказы, которые магазин получил бы и так (это важно сказать прямо); "freed" — затраты снизили без потери оборота; "costly_cut" — сократили рекламу и вместе с ней потеряли оборот. Объясни своими словами, без этих английских слов.
 - Упомяни, сколько решений принял ИИ и что было применено, если это уместно.
 - НИКОГДА не используй имена полей и техножаргон: «расход», «выручка», «доля рекламных расходов (ДРР)», «заказы» — обычными словами. Числа пиши по-человечески.
 - Если данных за неделю почти нет — честно скажи об этом одним-двумя предложениями.

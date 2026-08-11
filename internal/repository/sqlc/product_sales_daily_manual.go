@@ -6,25 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type ProductSalesDaily struct {
-	ID              pgtype.UUID
-	WorkspaceID     pgtype.UUID
-	SellerCabinetID pgtype.UUID
-	ProductID       pgtype.UUID
-	WbProductID     int64
-	Date            pgtype.Date
-	Orders          int64
-	CanceledOrders  int64
-	Sales           int64
-	Returns         int64
-	OrderedRevenue  int64
-	SoldRevenue     int64
-	ReturnedRevenue int64
-	Source          string
-	CapturedAt      pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
-}
 
 type UpsertProductSalesDailyParams struct {
 	WorkspaceID     pgtype.UUID

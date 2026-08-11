@@ -6,29 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type ExtensionDomRowSnapshot struct {
-	ID              pgtype.UUID        `json:"id"`
-	SessionID       pgtype.UUID        `json:"session_id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	UserID          pgtype.UUID        `json:"user_id"`
-	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
-	CampaignID      pgtype.UUID        `json:"campaign_id"`
-	PhraseID        pgtype.UUID        `json:"phrase_id"`
-	ProductID       pgtype.UUID        `json:"product_id"`
-	PageType        string             `json:"page_type"`
-	TableRole       string             `json:"table_role"`
-	RowKey          string             `json:"row_key"`
-	Query           pgtype.Text        `json:"query"`
-	Region          pgtype.Text        `json:"region"`
-	VisibleText     string             `json:"visible_text"`
-	Cells           []byte             `json:"cells"`
-	Metadata        []byte             `json:"metadata"`
-	Source          string             `json:"source"`
-	Confidence      pgtype.Numeric     `json:"confidence"`
-	DedupeKey       string             `json:"dedupe_key"`
-	CapturedAt      pgtype.Timestamptz `json:"captured_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-}
 
 const createExtensionDOMRowSnapshot = `
 INSERT INTO extension_dom_row_snapshots (

@@ -70,6 +70,161 @@ func seedRunningCampaignWithBids(t *testing.T, fx *ozonFixture, ozonID int64, sk
 	return c.ID
 }
 
+// seedUnderspendingCampaign seeds a campaign whose own ДРР (10%) sits below
+// the 15% target, so the engine wants to RAISE the bid — the only situation in
+// which the total-ДРР ceiling has anything to say.
+func seedUnderspendingCampaign(t *testing.T, fx *ozonFixture, ozonID, sku int64) pgtype.UUID {
+	t.Helper()
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, ozonID, ozonCampaignStateRunning, nil, nil)
+	seedOzonCampaignProduct(t, fx.db, c.ID, sku, 20)
+	seedOzonCampaignStat(t, fx.db, c.ID, time.Now().UTC().AddDate(0, 0, -1), 2000, 100, 5, 100, 1000)
+	return c.ID
+}
+
+// TestOzonStrategy_TotalDRRCeilingBlocksIncrease and its control below are a
+// pair: the control proves the engine genuinely wants to raise this bid, so
+// the blocked case cannot pass vacuously.
+func TestOzonStrategy_TotalDRRCeilingBlocksIncrease(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-strategy-total-drr")
+	defer cleanup()
+	ctx := context.Background()
+	perf := &fakePerfClient{minBids: map[int64]float64{503: 1}}
+	svc := newStrategyService(fx.db, perf)
+
+	campaignID := seedUnderspendingCampaign(t, fx, 9700, 503)
+	// Cabinet-wide: 100 ₽ spent against 1000 ₽ of total turnover → 10%.
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 503, time.Now().UTC().AddDate(0, 0, -1), 4, 1000)
+
+	params := cpcTargetDRRParams(3)
+	ceiling := 5.0
+	params.MaxTotalDRRPercent = &ceiling
+
+	strategyID := seedOzonStrategy(t, fx.db, fx.workspaceID, fx.cabinetID,
+		domain.StrategyTypeOzonCPCTargetDRR, params, true)
+	seedOzonStrategyBinding(t, fx, strategyID, campaignID)
+
+	applied, err := svc.RunForWorkspace(ctx, fx.workspaceID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, applied)
+	assert.Equal(t, 0, perf.bidCalls, "ceiling reached: nothing may be written")
+
+	changes, _, err := newCampaignActions(fx.db, perf).ListBidChanges(ctx, fx.workspaceID, fx.cabinetID, nil, 50, 0)
+	require.NoError(t, err)
+	assert.Empty(t, changes, "a blocked increase must not be recorded as a bid change")
+}
+
+func TestOzonStrategy_TotalDRRCeilingUnsetAllowsIncrease(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-strategy-total-drr-off")
+	defer cleanup()
+	ctx := context.Background()
+	perf := &fakePerfClient{minBids: map[int64]float64{504: 1}}
+	svc := newStrategyService(fx.db, perf)
+
+	campaignID := seedUnderspendingCampaign(t, fx, 9701, 504)
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 504, time.Now().UTC().AddDate(0, 0, -1), 4, 1000)
+
+	strategyID := seedOzonStrategy(t, fx.db, fx.workspaceID, fx.cabinetID,
+		domain.StrategyTypeOzonCPCTargetDRR, cpcTargetDRRParams(3), true) // no ceiling
+	seedOzonStrategyBinding(t, fx, strategyID, campaignID)
+
+	applied, err := svc.RunForWorkspace(ctx, fx.workspaceID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, applied)
+	assert.Equal(t, 1, perf.bidCalls)
+}
+
+// TestOzonAttributedTurnover_NoDoubleCounting is the load-bearing property of
+// the per-campaign split: two campaigns advertising the same SKU must together
+// be attributed exactly that SKU's turnover, never twice.
+func TestOzonAttributedTurnover_NoDoubleCounting(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-attribution")
+	defer cleanup()
+	ctx := context.Background()
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+
+	// One SKU, two campaigns, spend split 3:1.
+	a := seedOzonCampaign(t, fx.db, fx.cabinetID, 9800, ozonCampaignStateRunning, nil, nil)
+	b := seedOzonCampaign(t, fx.db, fx.cabinetID, 9801, ozonCampaignStateRunning, nil, nil)
+	seedOzonCampaignProduct(t, fx.db, a.ID, 601, 20)
+	seedOzonCampaignProduct(t, fx.db, b.ID, 601, 20)
+	seedOzonCampaignStat(t, fx.db, a.ID, yesterday, 1000, 100, 5, 300, 500)
+	seedOzonCampaignStat(t, fx.db, b.ID, yesterday, 1000, 100, 5, 100, 200)
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 601, yesterday, 10, 4000)
+
+	rows := loadCampaignAttributedTurnover(ctx, fx.db.Queries, ozonTestLogger(), fx.cabinetID,
+		time.Now().UTC().AddDate(0, 0, -7))
+	require.Len(t, rows, 2)
+
+	got := map[uuid.UUID]float64{}
+	var sum float64
+	for id, row := range rows {
+		v := pgNumericToFloat(row.RevenueRub)
+		got[id] = v
+		sum += v
+		assert.True(t, row.RevenueShared, "both campaigns share the SKU")
+	}
+	assert.InDelta(t, 4000, sum, 0.01, "the SKU's turnover must be split, not duplicated")
+	assert.InDelta(t, 3000, got[uuidFromPgtype(a.ID)], 0.01) // 300/400 of 4000
+	assert.InDelta(t, 1000, got[uuidFromPgtype(b.ID)], 0.01) // 100/400 of 4000
+}
+
+// A SKU nobody advertises contributes nothing, and a lone campaign keeps the
+// whole turnover of its SKUs.
+func TestOzonAttributedTurnover_SoleCampaignKeepsAll(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-attribution-solo")
+	defer cleanup()
+	ctx := context.Background()
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 9810, ozonCampaignStateRunning, nil, nil)
+	seedOzonCampaignProduct(t, fx.db, c.ID, 602, 20)
+	seedOzonCampaignStat(t, fx.db, c.ID, yesterday, 1000, 100, 5, 250, 900)
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 602, yesterday, 10, 4000)
+	// 603 sells but is not in any campaign — must not reach any denominator.
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 603, yesterday, 10, 9999)
+
+	rows := loadCampaignAttributedTurnover(ctx, fx.db.Queries, ozonTestLogger(), fx.cabinetID,
+		time.Now().UTC().AddDate(0, 0, -7))
+	require.Len(t, rows, 1)
+	row := rows[uuidFromPgtype(c.ID)]
+	assert.InDelta(t, 4000, pgNumericToFloat(row.RevenueRub), 0.01)
+	assert.False(t, row.RevenueShared)
+}
+
+// The second target must be able to override a campaign-ДРР increase: the
+// campaign looks cheap on its own attributed revenue but expensive against the
+// turnover it actually moves.
+func TestOzonStrategy_TotalDRRTargetOverridesIncrease(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-strategy-total-target")
+	defer cleanup()
+	ctx := context.Background()
+	perf := &fakePerfClient{minBids: map[int64]float64{505: 1}}
+	svc := newStrategyService(fx.db, perf)
+
+	campaignID := seedUnderspendingCampaign(t, fx, 9702, 505) // campaign ДРР 10% vs target 15% → raise
+	// Attributed turnover of just 400 ₽ against 100 ₽ spend → total ДРР 25%,
+	// far above the 5% second target, so the lower bid must win.
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 505, time.Now().UTC().AddDate(0, 0, -1), 2, 400)
+
+	params := cpcTargetDRRParams(3)
+	params.TargetTotalDRRPercent = 5
+
+	strategyID := seedOzonStrategy(t, fx.db, fx.workspaceID, fx.cabinetID,
+		domain.StrategyTypeOzonCPCTargetDRR, params, true)
+	seedOzonStrategyBinding(t, fx, strategyID, campaignID)
+
+	_, err := svc.RunForWorkspace(ctx, fx.workspaceID)
+	require.NoError(t, err)
+
+	changes, _, err := newCampaignActions(fx.db, perf).ListBidChanges(ctx, fx.workspaceID, fx.cabinetID, nil, 50, 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, changes)
+	require.NotNil(t, changes[0].NewBidRub)
+	require.NotNil(t, changes[0].OldBidRub)
+	assert.Less(t, *changes[0].NewBidRub, *changes[0].OldBidRub,
+		"campaign ДРР alone wanted a raise; the total-ДРР target must turn it into a cut")
+}
+
 func TestOzonStrategy_ShadowRun(t *testing.T) {
 	fx, cleanup := newOzonFixture(t, "ozon-strategy-shadow")
 	defer cleanup()

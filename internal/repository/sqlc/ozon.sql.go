@@ -108,51 +108,6 @@ func (q *Queries) AggregateOzonPromoStats(ctx context.Context, arg AggregateOzon
 	return i, err
 }
 
-const listOzonPromoCampaigns = `-- name: ListOzonPromoCampaigns :many
-SELECT id, ozon_campaign_id, title, state, adv_object_type
-FROM ozon_campaigns
-WHERE seller_cabinet_id = $1
-  AND adv_object_type IN ('SEARCH_PROMO', 'ALL_SKU_PROMO')
-ORDER BY (state = 'CAMPAIGN_STATE_RUNNING') DESC, ozon_campaign_id
-`
-
-type ListOzonPromoCampaignsRow struct {
-	ID             pgtype.UUID `json:"id"`
-	OzonCampaignID int64       `json:"ozon_campaign_id"`
-	Title          pgtype.Text `json:"title"`
-	State          pgtype.Text `json:"state"`
-	AdvObjectType  pgtype.Text `json:"adv_object_type"`
-}
-
-// Promo campaigns backing the CPO («Оплата за заказ») view: ALL_SKU_PROMO or
-// SEARCH_PROMO advObjectType. Ordered RUNNING-first so the overview can pick a
-// representative campaign deterministically.
-func (q *Queries) ListOzonPromoCampaigns(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonPromoCampaignsRow, error) {
-	rows, err := q.db.Query(ctx, listOzonPromoCampaigns, sellerCabinetID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListOzonPromoCampaignsRow{}
-	for rows.Next() {
-		var i ListOzonPromoCampaignsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.OzonCampaignID,
-			&i.Title,
-			&i.State,
-			&i.AdvObjectType,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const countOzonCampaignsByCabinet = `-- name: CountOzonCampaignsByCabinet :one
 SELECT COUNT(*) FROM ozon_campaigns WHERE seller_cabinet_id = $1
 `
@@ -438,6 +393,51 @@ func (q *Queries) ListOzonProductPrices(ctx context.Context, arg ListOzonProduct
 			&i.OzonIndexMinPriceRub,
 			&i.ExternalIndexMinPriceRub,
 			&i.SelfIndexMinPriceRub,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOzonPromoCampaigns = `-- name: ListOzonPromoCampaigns :many
+SELECT id, ozon_campaign_id, title, state, adv_object_type
+FROM ozon_campaigns
+WHERE seller_cabinet_id = $1
+  AND adv_object_type IN ('SEARCH_PROMO', 'ALL_SKU_PROMO')
+ORDER BY (state = 'CAMPAIGN_STATE_RUNNING') DESC, ozon_campaign_id
+`
+
+type ListOzonPromoCampaignsRow struct {
+	ID             pgtype.UUID `json:"id"`
+	OzonCampaignID int64       `json:"ozon_campaign_id"`
+	Title          pgtype.Text `json:"title"`
+	State          pgtype.Text `json:"state"`
+	AdvObjectType  pgtype.Text `json:"adv_object_type"`
+}
+
+// Promo campaigns backing the CPO («Оплата за заказ») view: ALL_SKU_PROMO or
+// SEARCH_PROMO advObjectType. Ordered RUNNING-first so the overview can pick a
+// representative campaign deterministically.
+func (q *Queries) ListOzonPromoCampaigns(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonPromoCampaignsRow, error) {
+	rows, err := q.db.Query(ctx, listOzonPromoCampaigns, sellerCabinetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOzonPromoCampaignsRow{}
+	for rows.Next() {
+		var i ListOzonPromoCampaignsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OzonCampaignID,
+			&i.Title,
+			&i.State,
+			&i.AdvObjectType,
 		); err != nil {
 			return nil, err
 		}

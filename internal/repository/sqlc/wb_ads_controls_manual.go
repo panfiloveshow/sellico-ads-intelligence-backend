@@ -442,15 +442,6 @@ ON CONFLICT (seller_cabinet_id, captured_at) DO UPDATE SET
 	return err
 }
 
-type SellerAdBalance struct {
-	ID              pgtype.UUID
-	SellerCabinetID pgtype.UUID
-	Balance         int64
-	Net             int64
-	Bonus           int64
-	CapturedAt      pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-}
 
 func (q *Queries) GetLatestSellerAdBalance(ctx context.Context, sellerCabinetID pgtype.UUID) (SellerAdBalance, error) {
 	row := q.db.QueryRow(ctx, `
@@ -472,20 +463,6 @@ LIMIT 1`, sellerCabinetID)
 	return item, err
 }
 
-type CampaignDailyLimit struct {
-	ID               pgtype.UUID
-	WorkspaceID      pgtype.UUID
-	SellerCabinetID  pgtype.UUID
-	CampaignID       pgtype.UUID
-	DailyLimit       int64
-	Enabled          bool
-	PauseWhenReached bool
-	ResumeNextDay    bool
-	LastCheckedAt    pgtype.Timestamptz
-	LastActionAt     pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-}
 
 func (q *Queries) GetCampaignDailyLimit(ctx context.Context, campaignID pgtype.UUID) (CampaignDailyLimit, error) {
 	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, campaign_id, daily_limit,
@@ -631,20 +608,6 @@ ON CONFLICT (seller_cabinet_id, wb_product_id, date_from, date_to) DO UPDATE SET
 	return err
 }
 
-type ProductSalesFunnelPeriod struct {
-	ID              pgtype.UUID
-	WorkspaceID     pgtype.UUID
-	SellerCabinetID pgtype.UUID
-	ProductID       pgtype.UUID
-	WBProductID     int64
-	DateFrom        pgtype.Date
-	DateTo          pgtype.Date
-	OpenCount       int64
-	CartCount       int64
-	OrderCount      int64
-	Source          string
-	CapturedAt      pgtype.Timestamptz
-}
 
 func (q *Queries) ListProductSalesFunnelPeriodsByWorkspaceDateRange(ctx context.Context, workspaceID pgtype.UUID, dateFrom, dateTo pgtype.Date, limit, offset int32) ([]ProductSalesFunnelPeriod, error) {
 	rows, err := q.db.Query(ctx, `
@@ -669,7 +632,7 @@ LIMIT $4 OFFSET $5`, workspaceID, dateFrom, dateTo, limit, offset)
 			&item.WorkspaceID,
 			&item.SellerCabinetID,
 			&item.ProductID,
-			&item.WBProductID,
+			&item.WbProductID,
 			&item.DateFrom,
 			&item.DateTo,
 			&item.OpenCount,

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -82,6 +83,18 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	if params.MaxACoS < 0 || params.MaxACoS > 1000 {
 		errors["params.max_acos"] = "must be between 0 and 1000"
 	}
+	if params.MaxTotalDRRPercent != nil && (*params.MaxTotalDRRPercent <= 0 || *params.MaxTotalDRRPercent > 1000) {
+		errors["params.max_total_drr_percent"] = "must be greater than 0 and at most 1000"
+	}
+	if params.ExpectedBuyoutPercent < 0 || params.ExpectedBuyoutPercent > 100 {
+		errors["params.expected_buyout_percent"] = "must be between 0 and 100"
+	}
+	if params.TargetTotalDRRPercent < 0 || params.TargetTotalDRRPercent > 1000 {
+		errors["params.target_total_drr_percent"] = "must be between 0 and 1000"
+	}
+	if params.MaxTotalDRRPercent != nil && params.TargetTotalDRRPercent > *params.MaxTotalDRRPercent {
+		errors["params.target_total_drr_percent"] = "must not exceed max_total_drr_percent"
+	}
 	if params.AutomationLevel < 0 || params.AutomationLevel > 4 {
 		errors["params.automation_level"] = "must be between 1 and 4"
 	}
@@ -126,6 +139,11 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 		// target_acos doubles as the target ДРР for the Ozon strategy.
 		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
 			errors["params.target_acos"] = "must be greater than 0 and at most 1000"
+		}
+		// Both Ozon stats syncs mirror a 14-day window, so a longer lookback
+		// silently truncates the denominator and understates ДРР.
+		if params.LookbackDays > domain.OzonMaxLookbackDays {
+			errors["params.lookback_days"] = fmt.Sprintf("must be at most %d for ozon strategies (the stats sync window)", domain.OzonMaxLookbackDays)
 		}
 	}
 	return errors

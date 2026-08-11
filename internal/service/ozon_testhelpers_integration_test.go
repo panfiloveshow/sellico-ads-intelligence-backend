@@ -46,6 +46,11 @@ func ozonEnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
         ADD COLUMN IF NOT EXISTS image_url TEXT,
         ADD COLUMN IF NOT EXISTS visibility_index TEXT`)
 
+	// 000060: «ДРР от общего оборота» in the AI impact feedback loop.
+	_, _ = pool.Exec(ctx, `ALTER TABLE ai_decisions
+        ADD COLUMN IF NOT EXISTS total_drr_before NUMERIC(8,2),
+        ADD COLUMN IF NOT EXISTS total_drr_after NUMERIC(8,2)`)
+
 	// If the ozon schema is already present the DB is converged — do nothing.
 	// Re-running the whole-file migrations here would roll back partially-
 	// applicable files (they mix already-existing objects with constraint
@@ -260,6 +265,20 @@ func seedOzonCampaignProduct(t *testing.T, db *testutil.TestDB, campaignID pgtyp
 		Sku:        sku,
 		BidRub:     floatToPgNumeric(bid),
 		IsActive:   true,
+	})
+	require.NoError(t, err)
+}
+
+// seedOzonSalesDaily writes one day of cabinet-wide turnover for a SKU — the
+// denominator of «ДРР от общего оборота».
+func seedOzonSalesDaily(t *testing.T, db *testutil.TestDB, cabinetID uuid.UUID, sku int64, date time.Time, units int32, revenue float64) {
+	t.Helper()
+	err := db.Queries.UpsertOzonSalesDaily(context.Background(), sqlcgen.UpsertOzonSalesDailyParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Sku:             sku,
+		Date:            pgtype.Date{Time: date, Valid: true},
+		OrderedUnits:    units,
+		RevenueRub:      floatToPgNumeric(revenue),
 	})
 	require.NoError(t, err)
 }

@@ -89,7 +89,7 @@ func (q *Queries) FinishAIRun(ctx context.Context, arg FinishAIRunParams) error 
 }
 
 const getAIDecisionByID = `-- name: GetAIDecisionByID :one
-SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at FROM ai_decisions
+SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at, total_drr_before, total_drr_after FROM ai_decisions
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -125,6 +125,8 @@ func (q *Queries) GetAIDecisionByID(ctx context.Context, arg GetAIDecisionByIDPa
 		&i.RevenueBeforeRub,
 		&i.RevenueAfterRub,
 		&i.EvaluatedAt,
+		&i.TotalDrrBefore,
+		&i.TotalDrrAfter,
 	)
 	return i, err
 }
@@ -464,7 +466,7 @@ VALUES (
     $7, $8,
     $9, $10, $11
 )
-RETURNING id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at
+RETURNING id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at, total_drr_before, total_drr_after
 `
 
 type InsertAIDecisionParams struct {
@@ -520,6 +522,8 @@ func (q *Queries) InsertAIDecision(ctx context.Context, arg InsertAIDecisionPara
 		&i.RevenueBeforeRub,
 		&i.RevenueAfterRub,
 		&i.EvaluatedAt,
+		&i.TotalDrrBefore,
+		&i.TotalDrrAfter,
 	)
 	return i, err
 }
@@ -682,7 +686,7 @@ func (q *Queries) ListAIDecisionImpactRows(ctx context.Context, arg ListAIDecisi
 }
 
 const listAIDecisions = `-- name: ListAIDecisions :many
-SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at FROM ai_decisions
+SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at, total_drr_before, total_drr_after FROM ai_decisions
 WHERE workspace_id = $1
   AND seller_cabinet_id = $2
   AND ($3::text IS NULL OR status = $3::text)
@@ -740,6 +744,8 @@ func (q *Queries) ListAIDecisions(ctx context.Context, arg ListAIDecisionsParams
 			&i.RevenueBeforeRub,
 			&i.RevenueAfterRub,
 			&i.EvaluatedAt,
+			&i.TotalDrrBefore,
+			&i.TotalDrrAfter,
 		); err != nil {
 			return nil, err
 		}
@@ -753,7 +759,7 @@ func (q *Queries) ListAIDecisions(ctx context.Context, arg ListAIDecisionsParams
 
 const listAIDecisionsForImpactEval = `-- name: ListAIDecisionsForImpactEval :many
 
-SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at FROM ai_decisions
+SELECT id, run_id, workspace_id, seller_cabinet_id, action_type, target, proposal, rationale, expected_effect, guardrail_verdict, status, error, created_at, applied_at, applied_by, outcome_status, drr_before, drr_after, spend_before_rub, spend_after_rub, revenue_before_rub, revenue_after_rub, evaluated_at, total_drr_before, total_drr_after FROM ai_decisions
 WHERE status IN ('applied', 'auto_applied')
   AND evaluated_at IS NULL
   AND applied_at IS NOT NULL
@@ -800,6 +806,8 @@ func (q *Queries) ListAIDecisionsForImpactEval(ctx context.Context) ([]AiDecisio
 			&i.RevenueBeforeRub,
 			&i.RevenueAfterRub,
 			&i.EvaluatedAt,
+			&i.TotalDrrBefore,
+			&i.TotalDrrAfter,
 		); err != nil {
 			return nil, err
 		}
@@ -1056,7 +1064,8 @@ const listRecentAppliedAIDecisions = `-- name: ListRecentAppliedAIDecisions :man
 
 SELECT action_type, target, proposal, status, outcome_status, created_at,
        drr_before, drr_after, spend_before_rub, spend_after_rub,
-       revenue_before_rub, revenue_after_rub
+       revenue_before_rub, revenue_after_rub,
+       total_drr_before, total_drr_after
 FROM ai_decisions
 WHERE seller_cabinet_id = $1
   AND status IN ('applied', 'auto_applied')
@@ -1082,6 +1091,8 @@ type ListRecentAppliedAIDecisionsRow struct {
 	SpendAfterRub    pgtype.Numeric     `json:"spend_after_rub"`
 	RevenueBeforeRub pgtype.Numeric     `json:"revenue_before_rub"`
 	RevenueAfterRub  pgtype.Numeric     `json:"revenue_after_rub"`
+	TotalDrrBefore   pgtype.Numeric     `json:"total_drr_before"`
+	TotalDrrAfter    pgtype.Numeric     `json:"total_drr_after"`
 }
 
 // --- Feedback loop: recent applied decisions + their measured outcomes ---
@@ -1111,6 +1122,8 @@ func (q *Queries) ListRecentAppliedAIDecisions(ctx context.Context, arg ListRece
 			&i.SpendAfterRub,
 			&i.RevenueBeforeRub,
 			&i.RevenueAfterRub,
+			&i.TotalDrrBefore,
+			&i.TotalDrrAfter,
 		); err != nil {
 			return nil, err
 		}
@@ -1131,9 +1144,11 @@ UPDATE ai_decisions SET
     spend_after_rub = $5,
     revenue_before_rub = $6,
     revenue_after_rub = $7,
+    total_drr_before = $8,
+    total_drr_after = $9,
     evaluated_at = CASE WHEN $1::text IN ('evaluated', 'not_evaluable')
                         THEN now() ELSE evaluated_at END
-WHERE id = $8
+WHERE id = $10
 `
 
 type SetAIDecisionOutcomeParams struct {
@@ -1144,6 +1159,8 @@ type SetAIDecisionOutcomeParams struct {
 	SpendAfterRub    pgtype.Numeric `json:"spend_after_rub"`
 	RevenueBeforeRub pgtype.Numeric `json:"revenue_before_rub"`
 	RevenueAfterRub  pgtype.Numeric `json:"revenue_after_rub"`
+	TotalDrrBefore   pgtype.Numeric `json:"total_drr_before"`
+	TotalDrrAfter    pgtype.Numeric `json:"total_drr_after"`
 	ID               pgtype.UUID    `json:"id"`
 }
 
@@ -1156,6 +1173,8 @@ func (q *Queries) SetAIDecisionOutcome(ctx context.Context, arg SetAIDecisionOut
 		arg.SpendAfterRub,
 		arg.RevenueBeforeRub,
 		arg.RevenueAfterRub,
+		arg.TotalDrrBefore,
+		arg.TotalDrrAfter,
 		arg.ID,
 	)
 	return err

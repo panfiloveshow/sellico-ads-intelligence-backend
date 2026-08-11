@@ -14,7 +14,7 @@ import (
 const createPhrase = `-- name: CreatePhrase :one
 INSERT INTO phrases (campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, current_bid_observed_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9::bigint IS NULL THEN NULL ELSE now() END)
-RETURNING id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at
+RETURNING id, campaign_id, workspace_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at, product_id, wb_product_id, current_bid_observed_at
 `
 
 type CreatePhraseParams struct {
@@ -46,8 +46,6 @@ func (q *Queries) CreatePhrase(ctx context.Context, arg CreatePhraseParams) (Phr
 		&i.ID,
 		&i.CampaignID,
 		&i.WorkspaceID,
-		&i.ProductID,
-		&i.WbProductID,
 		&i.WbClusterID,
 		&i.WbNormQuery,
 		&i.Keyword,
@@ -55,12 +53,15 @@ func (q *Queries) CreatePhrase(ctx context.Context, arg CreatePhraseParams) (Phr
 		&i.CurrentBid,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductID,
+		&i.WbProductID,
+		&i.CurrentBidObservedAt,
 	)
 	return i, err
 }
 
 const getPhraseByID = `-- name: GetPhraseByID :one
-SELECT id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at FROM phrases WHERE id = $1
+SELECT id, campaign_id, workspace_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at, product_id, wb_product_id, current_bid_observed_at FROM phrases WHERE id = $1
 `
 
 func (q *Queries) GetPhraseByID(ctx context.Context, id pgtype.UUID) (Phrase, error) {
@@ -70,8 +71,6 @@ func (q *Queries) GetPhraseByID(ctx context.Context, id pgtype.UUID) (Phrase, er
 		&i.ID,
 		&i.CampaignID,
 		&i.WorkspaceID,
-		&i.ProductID,
-		&i.WbProductID,
 		&i.WbClusterID,
 		&i.WbNormQuery,
 		&i.Keyword,
@@ -79,14 +78,17 @@ func (q *Queries) GetPhraseByID(ctx context.Context, id pgtype.UUID) (Phrase, er
 		&i.CurrentBid,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductID,
+		&i.WbProductID,
+		&i.CurrentBidObservedAt,
 	)
 	return i, err
 }
 
 const listPhrasesByCampaign = `-- name: ListPhrasesByCampaign :many
-SELECT id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at FROM phrases
+SELECT id, campaign_id, workspace_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at, product_id, wb_product_id, current_bid_observed_at FROM phrases
 WHERE campaign_id = $1
-ORDER BY keyword, wb_product_id
+ORDER BY keyword
 LIMIT $2 OFFSET $3
 `
 
@@ -109,8 +111,6 @@ func (q *Queries) ListPhrasesByCampaign(ctx context.Context, arg ListPhrasesByCa
 			&i.ID,
 			&i.CampaignID,
 			&i.WorkspaceID,
-			&i.ProductID,
-			&i.WbProductID,
 			&i.WbClusterID,
 			&i.WbNormQuery,
 			&i.Keyword,
@@ -118,6 +118,9 @@ func (q *Queries) ListPhrasesByCampaign(ctx context.Context, arg ListPhrasesByCa
 			&i.CurrentBid,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ProductID,
+			&i.WbProductID,
+			&i.CurrentBidObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -130,10 +133,10 @@ func (q *Queries) ListPhrasesByCampaign(ctx context.Context, arg ListPhrasesByCa
 }
 
 const listPhrasesByWorkspace = `-- name: ListPhrasesByWorkspace :many
-SELECT id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at FROM phrases
+SELECT id, campaign_id, workspace_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at, product_id, wb_product_id, current_bid_observed_at FROM phrases
 WHERE workspace_id = $1
   AND ($4::uuid IS NULL OR campaign_id = $4::uuid)
-ORDER BY keyword, wb_product_id
+ORDER BY keyword
 LIMIT $2 OFFSET $3
 `
 
@@ -162,8 +165,6 @@ func (q *Queries) ListPhrasesByWorkspace(ctx context.Context, arg ListPhrasesByW
 			&i.ID,
 			&i.CampaignID,
 			&i.WorkspaceID,
-			&i.ProductID,
-			&i.WbProductID,
 			&i.WbClusterID,
 			&i.WbNormQuery,
 			&i.Keyword,
@@ -171,6 +172,9 @@ func (q *Queries) ListPhrasesByWorkspace(ctx context.Context, arg ListPhrasesByW
 			&i.CurrentBid,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ProductID,
+			&i.WbProductID,
+			&i.CurrentBidObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -196,7 +200,7 @@ ON CONFLICT (campaign_id, wb_product_id, wb_norm_query) DO UPDATE SET
 		ELSE phrases.current_bid_observed_at
 	END,
     updated_at = now()
-RETURNING id, campaign_id, workspace_id, product_id, wb_product_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at
+RETURNING id, campaign_id, workspace_id, wb_cluster_id, wb_norm_query, keyword, count, current_bid, created_at, updated_at, product_id, wb_product_id, current_bid_observed_at
 `
 
 type UpsertPhraseParams struct {
@@ -228,8 +232,6 @@ func (q *Queries) UpsertPhrase(ctx context.Context, arg UpsertPhraseParams) (Phr
 		&i.ID,
 		&i.CampaignID,
 		&i.WorkspaceID,
-		&i.ProductID,
-		&i.WbProductID,
 		&i.WbClusterID,
 		&i.WbNormQuery,
 		&i.Keyword,
@@ -237,6 +239,9 @@ func (q *Queries) UpsertPhrase(ctx context.Context, arg UpsertPhraseParams) (Phr
 		&i.CurrentBid,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductID,
+		&i.WbProductID,
+		&i.CurrentBidObservedAt,
 	)
 	return i, err
 }

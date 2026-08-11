@@ -78,26 +78,26 @@ type OzonCampaignStat struct {
 // OzonProductPrice is a product price row with Ozon's built-in unit economics
 // (commissions, acquiring, price index) from /v5/product/info/prices.
 type OzonProductPrice struct {
-	ID                      uuid.UUID  `json:"id"`
-	SellerCabinetID         uuid.UUID  `json:"seller_cabinet_id"`
-	SKU                     int64      `json:"sku"`
-	OfferID                 string     `json:"offer_id"`
-	Name                    string     `json:"name,omitempty"`
-	PriceRub                *float64   `json:"price_rub,omitempty"`
-	OldPriceRub             *float64   `json:"old_price_rub,omitempty"`
-	MinPriceRub             *float64   `json:"min_price_rub,omitempty"`
-	NetPriceRub             *float64   `json:"net_price_rub,omitempty"`
-	MarketingSellerPriceRub *float64   `json:"marketing_seller_price_rub,omitempty"`
+	ID                      uuid.UUID `json:"id"`
+	SellerCabinetID         uuid.UUID `json:"seller_cabinet_id"`
+	SKU                     int64     `json:"sku"`
+	OfferID                 string    `json:"offer_id"`
+	Name                    string    `json:"name,omitempty"`
+	PriceRub                *float64  `json:"price_rub,omitempty"`
+	OldPriceRub             *float64  `json:"old_price_rub,omitempty"`
+	MinPriceRub             *float64  `json:"min_price_rub,omitempty"`
+	NetPriceRub             *float64  `json:"net_price_rub,omitempty"`
+	MarketingSellerPriceRub *float64  `json:"marketing_seller_price_rub,omitempty"`
 	// EffectiveCostRub is the cost the floor math actually uses: Ozon's own
 	// net_price when present, else the Sellico unit-economics cost.
 	EffectiveCostRub *float64 `json:"effective_cost_rub,omitempty"`
 	// CostSource marks where EffectiveCostRub came from: "ozon" | "sellico".
-	CostSource string `json:"cost_source,omitempty"`
-	ColorIndex              string     `json:"color_index,omitempty"`
-	CommissionFBOPct        *float64   `json:"commission_fbo_pct,omitempty"`
-	CommissionFBSPct        *float64   `json:"commission_fbs_pct,omitempty"`
-	AcquiringPct            *float64   `json:"acquiring_pct,omitempty"`
-	SyncedAt                *time.Time `json:"synced_at,omitempty"`
+	CostSource       string     `json:"cost_source,omitempty"`
+	ColorIndex       string     `json:"color_index,omitempty"`
+	CommissionFBOPct *float64   `json:"commission_fbo_pct,omitempty"`
+	CommissionFBSPct *float64   `json:"commission_fbs_pct,omitempty"`
+	AcquiringPct     *float64   `json:"acquiring_pct,omitempty"`
+	SyncedAt         *time.Time `json:"synced_at,omitempty"`
 	// Competitor minimum prices from price_indexes (nil = no data).
 	OzonIndexMinPriceRub     *float64 `json:"ozon_index_min_price_rub,omitempty"`
 	ExternalIndexMinPriceRub *float64 `json:"external_index_min_price_rub,omitempty"`
@@ -337,4 +337,16 @@ type OzonCampaignWithStats struct {
 	StatsRevenue float64 `json:"stats_revenue_rub"`
 	// DRR = spend / revenue * 100 (0 when there is no revenue).
 	DRR float64 `json:"drr"`
+	// TotalDRR is «ДРР от общего оборота»: the same spend over the campaign's
+	// attributed share of the shop's whole turnover, not just the revenue Ozon
+	// credited to the campaign. A campaign with a healthy DRR and a high
+	// TotalDRR is buying orders the shop was getting anyway.
+	//
+	// Null when it could not be measured — never 0, which would read as
+	// "excellent". TotalDRRStatus says why: ok | no_data | stale.
+	TotalDRR       *float64 `json:"total_drr"`
+	TotalDRRStatus string   `json:"total_drr_status"`
+	// TotalRevenueShared marks campaigns whose SKUs are advertised by other
+	// campaigns too, so the turnover behind TotalDRR had to be split.
+	TotalRevenueShared bool `json:"total_revenue_shared"`
 }

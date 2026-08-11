@@ -19,8 +19,10 @@ import (
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
-// ozonStatsWindowDays is how far back SyncStats pulls daily statistics.
-const ozonStatsWindowDays = 14
+// ozonStatsWindowDays is how far back SyncStats pulls daily statistics. It is
+// the same window strategies are allowed to look back over — a strategy with a
+// longer lookback would divide by a truncated denominator.
+const ozonStatsWindowDays = domain.OzonMaxLookbackDays
 
 // OzonSyncService pulls campaigns, statistics and prices from the Ozon APIs
 // into the local ozon_* tables. Phase 1 is strictly read-only towards Ozon

@@ -200,6 +200,90 @@ func TestOzonAI_RunForCabinetShadowLevel(t *testing.T) {
 	assert.Equal(t, domain.AIDecisionStatusShadow, decisions[0].Status)
 }
 
+// TestOzonAI_TotalDRRCeilingBlocksIncrease proves the total-ДРР ceiling is
+// enforced on the AI branch too, not only in the deterministic strategy: an
+// autopilot proposal to raise a bid must be rejected while the cabinet's whole
+// turnover is already paying too much for advertising.
+func TestOzonAI_TotalDRRCeilingBlocksIncrease(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-total-drr")
+	defer cleanup()
+	ctx := context.Background()
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 8300, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	seedOzonCampaignProduct(t, fx.db, c.ID, 77, 20)
+	// The campaign itself looks healthy: 200 ₽ spent, 1000 ₽ attributed → 20%.
+	seedOzonCampaignStat(t, fx.db, c.ID, yesterday, 1000, 100, 10, 200, 1000)
+	// But the cabinet's WHOLE turnover is only 1000 ₽, so the total ДРР is
+	// also 20% — well past the 5% ceiling below.
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 77, yesterday, 4, 1000)
+
+	ceiling := 5.0
+	params := domain.StrategyParams{
+		AutomationLevel: 2, TargetACoS: 15, MaxChangePercent: 50,
+		MinBid: 10, MaxBid: 5000, MaxChangesPerDay: 5,
+		MaxTotalDRRPercent: &ceiling,
+	}
+	strategyID := seedOzonStrategy(t, fx.db, fx.workspaceID, fx.cabinetID, domain.StrategyTypeOzonAIAutopilot, params, true)
+	strategyRow, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
+	require.NoError(t, err)
+
+	llmClient := &fakeLLM{enabled: true, responses: []*llm.ChatResponse{
+		submitProposalsResponse("scaling up", []map[string]any{
+			{"action_type": "bid_change", "target": map[string]any{"ozon_campaign_id": 8300, "sku": 77},
+				"new_value": 25.0, "rationale": "raise", "expected_effect": "more clicks"},
+		}),
+	}}
+	mgr := newAIManager(fx.db, llmClient)
+
+	require.NoError(t, mgr.RunForCabinet(ctx, fx.workspaceID, fx.cabinetID, strategyFromSqlc(strategyRow), domain.AIRunTriggerManual))
+
+	decisions, _, err := mgr.ListDecisions(ctx, fx.workspaceID, fx.cabinetID, "", nil, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, decisions, 1)
+	assert.Equal(t, domain.AIDecisionStatusRejectedByGuardrail, decisions[0].Status)
+	assert.Contains(t, decisions[0].GuardrailVerdict, "ДРР от общего оборота")
+}
+
+// A decrease must always get through — a ceiling that also blocked cuts would
+// trap a cabinet at exactly the level it is trying to escape.
+func TestOzonAI_TotalDRRCeilingAllowsDecrease(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-total-drr-down")
+	defer cleanup()
+	ctx := context.Background()
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+
+	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 8301, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	seedOzonCampaignProduct(t, fx.db, c.ID, 78, 20)
+	seedOzonCampaignStat(t, fx.db, c.ID, yesterday, 1000, 100, 10, 200, 1000)
+	seedOzonSalesDaily(t, fx.db, fx.cabinetID, 78, yesterday, 4, 1000)
+
+	ceiling := 5.0
+	params := domain.StrategyParams{
+		AutomationLevel: 2, TargetACoS: 15, MaxChangePercent: 50,
+		MinBid: 10, MaxBid: 5000, MaxChangesPerDay: 5,
+		MaxTotalDRRPercent: &ceiling,
+	}
+	strategyID := seedOzonStrategy(t, fx.db, fx.workspaceID, fx.cabinetID, domain.StrategyTypeOzonAIAutopilot, params, true)
+	strategyRow, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
+	require.NoError(t, err)
+
+	llmClient := &fakeLLM{enabled: true, responses: []*llm.ChatResponse{
+		submitProposalsResponse("cutting back", []map[string]any{
+			{"action_type": "bid_change", "target": map[string]any{"ozon_campaign_id": 8301, "sku": 78},
+				"new_value": 15.0, "rationale": "cut", "expected_effect": "lower spend"},
+		}),
+	}}
+	mgr := newAIManager(fx.db, llmClient)
+
+	require.NoError(t, mgr.RunForCabinet(ctx, fx.workspaceID, fx.cabinetID, strategyFromSqlc(strategyRow), domain.AIRunTriggerManual))
+
+	decisions, _, err := mgr.ListDecisions(ctx, fx.workspaceID, fx.cabinetID, "", nil, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, decisions, 1)
+	assert.NotEqual(t, domain.AIDecisionStatusRejectedByGuardrail, decisions[0].Status)
+}
+
 func requestDataResponse(what string, skus []int64) *llm.ChatResponse {
 	args, _ := json.Marshal(map[string]any{"what": what, "skus": skus})
 	return &llm.ChatResponse{
@@ -678,9 +762,13 @@ func TestOzonAI_ContextFeedbackAndMargin(t *testing.T) {
 		GuardrailVerdict: "passed", Status: domain.AIDecisionStatusApplied,
 	})
 	require.NoError(t, err)
+	// Campaign ДРР improved (25 → 18) while the cabinet's total ДРР got worse
+	// (4.0 → 5.5): the decision bought orders that were already converting.
+	// The model can only tell this apart if both pairs reach the pack.
 	_, err = fx.db.Pool.Exec(ctx, `
 		UPDATE ai_decisions SET outcome_status='evaluated',
 			drr_before=25.0, drr_after=18.0,
+			total_drr_before=4.0, total_drr_after=5.5,
 			spend_before_rub=500, spend_after_rub=450,
 			revenue_before_rub=2000, revenue_after_rub=2500
 		WHERE id=$1`, dec.ID)
@@ -699,6 +787,10 @@ func TestOzonAI_ContextFeedbackAndMargin(t *testing.T) {
 	require.NotNil(t, rd.DRRAfter)
 	assert.InDelta(t, 25.0, *rd.DRRBefore, 0.01)
 	assert.InDelta(t, 18.0, *rd.DRRAfter, 0.01)
+	require.NotNil(t, rd.TotalDRRBefore)
+	require.NotNil(t, rd.TotalDRRAfter)
+	assert.InDelta(t, 4.0, *rd.TotalDRRBefore, 0.01)
+	assert.InDelta(t, 5.5, *rd.TotalDRRAfter, 0.01)
 	require.NotNil(t, rd.SpendDelta)
 	assert.InDelta(t, -50.0, *rd.SpendDelta, 0.01) // 450-500
 	require.NotNil(t, rd.RevenueDelta)

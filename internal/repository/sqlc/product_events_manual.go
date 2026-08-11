@@ -6,18 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type ProductEvent struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	ProductID   pgtype.UUID        `json:"product_id"`
-	EventType   string             `json:"event_type"`
-	FieldName   pgtype.Text        `json:"field_name"`
-	OldValue    pgtype.Text        `json:"old_value"`
-	NewValue    pgtype.Text        `json:"new_value"`
-	Metadata    []byte             `json:"metadata"`
-	DetectedAt  pgtype.Timestamptz `json:"detected_at"`
-	Source      string             `json:"source"`
-}
 
 type CreateProductEventParams struct {
 	WorkspaceID pgtype.UUID

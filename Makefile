@@ -31,6 +31,25 @@ backup-db:
 sqlc-generate:
 	sqlc generate
 
+# Fails when the checked-in typed layer differs from what sqlc produces — i.e.
+# when someone hand-edited a *.sql.go, or a *_manual.go started duplicating a
+# generated declaration. Both used to happen silently and left `sqlc generate`
+# unable to run at all.
+#
+# Compares against a snapshot rather than `git diff`, so it is meaningful with
+# uncommitted work in the tree.
+sqlc-check:
+	@rm -rf .sqlc-check && cp -r internal/repository/sqlc .sqlc-check
+	@sqlc generate
+	@if diff -r .sqlc-check internal/repository/sqlc > /dev/null; then \
+		rm -rf .sqlc-check; \
+		go build ./... && echo "sqlc layer is in sync"; \
+	else \
+		rm -rf .sqlc-check; \
+		echo "sqlc output differed — the tree now holds the regenerated files, review and commit them"; \
+		exit 1; \
+	fi
+
 # --- Linting & Security ---
 lint:
 	golangci-lint run ./...

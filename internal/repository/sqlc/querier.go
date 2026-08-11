@@ -11,8 +11,70 @@ import (
 )
 
 type Querier interface {
+	// AggregateOzonCabinetAdSpendSince sums the ad spend of every campaign of the
+	// cabinet over the same window — the numerator of the total ДРР.
+	AggregateOzonCabinetAdSpendSince(ctx context.Context, arg AggregateOzonCabinetAdSpendSinceParams) (pgtype.Numeric, error)
+	// --- «ДРР от общего оборота»: cabinet-wide turnover vs cabinet-wide ad spend ---
+	//
+	// Both sides are cabinet-scoped on purpose. A SKU can sit in several
+	// campaigns, so splitting the turnover per campaign needs an attribution rule
+	// that does not exist yet; the cabinet aggregate has no double counting.
+	// AggregateOzonCabinetTotalSalesSince sums the cabinet's whole turnover over a
+	// lookback window. last_date is the newest day that actually has data — the
+	// caller uses it to tell fresh numbers from a stalled ozon:sync_analytics.
+	AggregateOzonCabinetTotalSalesSince(ctx context.Context, arg AggregateOzonCabinetTotalSalesSinceParams) (AggregateOzonCabinetTotalSalesSinceRow, error)
+	AggregateOzonCampaignStatsByCabinet(ctx context.Context, arg AggregateOzonCampaignStatsByCabinetParams) ([]AggregateOzonCampaignStatsByCabinetRow, error)
+	AggregateOzonCampaignStatsSince(ctx context.Context, arg AggregateOzonCampaignStatsSinceParams) (AggregateOzonCampaignStatsSinceRow, error)
+	// Window aggregate for the CPO overview, sourced from the promoted-orders
+	// report (actual orders — unlike ozon_campaign_stats, which carries the
+	// campaign statistics counters).
+	AggregateOzonCpoOrders(ctx context.Context, arg AggregateOzonCpoOrdersParams) (AggregateOzonCpoOrdersRow, error)
+	// 7-day (window bound by $2) stats aggregate across every promo campaign of a
+	// cabinet — same columns/formula as AggregateOzonCampaignStatsByCabinet.
+	AggregateOzonPromoStats(ctx context.Context, arg AggregateOzonPromoStatsParams) (AggregateOzonPromoStatsRow, error)
+	// AggregateOzonSearchQueries powers GET /ozon/search-queries: per-query
+	// aggregate over a date window. avg_position is weighted by views over the
+	// rows that actually reported a position; top_sku is the highest-views SKU of
+	// the query (used for product-name enrichment).
+	AggregateOzonSearchQueries(ctx context.Context, arg AggregateOzonSearchQueriesParams) ([]AggregateOzonSearchQueriesRow, error)
 	BatchCreateSERPResultItems(ctx context.Context, arg []BatchCreateSERPResultItemsParams) (int64, error)
+	// CancelOzonPriceScheduleEntry cancels a pending entry (only pending rows
+	// can be cancelled; the WHERE clause makes the transition race-safe).
+	CancelOzonPriceScheduleEntry(ctx context.Context, id pgtype.UUID) (OzonPriceScheduleEntry, error)
+	CountAIDecisions(ctx context.Context, arg CountAIDecisionsParams) (int64, error)
+	CountAIRunsByCabinet(ctx context.Context, arg CountAIRunsByCabinetParams) (int64, error)
+	CountAuditLogsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountBidSnapshotsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountCampaignsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountExportsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountJobRunsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	// CountOzonAPICallsSince sums a cabinet's metered calls in one category since a
+	// point in time — the rolling hour or day usage.
+	CountOzonAPICallsSince(ctx context.Context, arg CountOzonAPICallsSinceParams) (int64, error)
+	CountOzonBidChangesByCabinet(ctx context.Context, arg CountOzonBidChangesByCabinetParams) (int64, error)
+	CountOzonCampaignsByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) (int64, error)
+	CountOzonCpoOrders(ctx context.Context, arg CountOzonCpoOrdersParams) (int64, error)
+	CountOzonCpoProducts(ctx context.Context, sellerCabinetID pgtype.UUID) (int64, error)
+	CountOzonPriceChangesByCabinet(ctx context.Context, arg CountOzonPriceChangesByCabinetParams) (int64, error)
+	CountOzonPriceScheduleEntriesByCabinet(ctx context.Context, arg CountOzonPriceScheduleEntriesByCabinetParams) (int64, error)
+	// CountOzonPriceWritesBySkuSince feeds the hard hourly write limit (Ozon
+	// rejects more than 10 price changes per product per hour). Only rows that
+	// did (or may still) reach Ozon count: pending + applied + rolled_back
+	// (a rollback is a real write too).
+	CountOzonPriceWritesBySkuSince(ctx context.Context, arg CountOzonPriceWritesBySkuSinceParams) (int64, error)
+	CountOzonProductPrices(ctx context.Context, arg CountOzonProductPricesParams) (int64, error)
+	CountOzonSearchQueries(ctx context.Context, arg CountOzonSearchQueriesParams) (int64, error)
+	// CountOzonStrategyDecisionsBySkuSince feeds the strategy cooldown and daily
+	// cap. Shadow rows count too: promoting a strategy from dry_run to auto must
+	// not bypass a cooldown the shadow run just started.
+	CountOzonStrategyDecisionsBySkuSince(ctx context.Context, arg CountOzonStrategyDecisionsBySkuSinceParams) (int64, error)
+	CountPendingOzonPriceSchedulesByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) (int64, error)
+	CountPhrasesByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountPositionsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountProductsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
+	CountRecommendationsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) (AuditLog, error)
+	CreateBidChange(ctx context.Context, arg CreateBidChangeParams) (BidChange, error)
 	CreateBidSnapshot(ctx context.Context, arg CreateBidSnapshotParams) (BidSnapshot, error)
 	CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error)
 	CreateCampaignStat(ctx context.Context, arg CreateCampaignStatParams) (CampaignStat, error)
@@ -27,8 +89,18 @@ type Querier interface {
 	CreateExternalUser(ctx context.Context, arg CreateExternalUserParams) (User, error)
 	CreateExternalWorkspace(ctx context.Context, arg CreateExternalWorkspaceParams) (Workspace, error)
 	CreateJobRun(ctx context.Context, arg CreateJobRunParams) (JobRun, error)
+	CreateMinusPhrase(ctx context.Context, arg CreateMinusPhraseParams) (CampaignMinusPhrase, error)
+	// Ozon module phase 5 queries (price calendar with auto-revert + repricer
+	// health summary).
+	CreateOzonPriceScheduleEntry(ctx context.Context, arg CreateOzonPriceScheduleEntryParams) (OzonPriceScheduleEntry, error)
+	// CreateOzonStrategyBindingInWorkspace inserts an Ozon binding only when the
+	// strategy belongs to the workspace AND the ozon campaign belongs to the
+	// strategy's seller cabinet (tenancy in one statement, mirroring the WB
+	// CreateStrategyBindingInWorkspace).
+	CreateOzonStrategyBindingInWorkspace(ctx context.Context, arg CreateOzonStrategyBindingInWorkspaceParams) (CreateOzonStrategyBindingInWorkspaceRow, error)
 	CreatePhrase(ctx context.Context, arg CreatePhraseParams) (Phrase, error)
 	CreatePhraseStat(ctx context.Context, arg CreatePhraseStatParams) (PhraseStat, error)
+	CreatePlusPhrase(ctx context.Context, arg CreatePlusPhraseParams) (CampaignPlusPhrase, error)
 	CreatePosition(ctx context.Context, arg CreatePositionParams) (Position, error)
 	CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error)
 	CreateRecommendation(ctx context.Context, arg CreateRecommendationParams) (Recommendation, error)
@@ -36,11 +108,35 @@ type Querier interface {
 	CreateSERPResultItem(ctx context.Context, arg CreateSERPResultItemParams) (SerpResultItem, error)
 	CreateSERPSnapshot(ctx context.Context, arg CreateSERPSnapshotParams) (SerpSnapshot, error)
 	CreateSellerCabinet(ctx context.Context, arg CreateSellerCabinetParams) (SellerCabinet, error)
+	CreateStrategy(ctx context.Context, arg CreateStrategyParams) (Strategy, error)
+	CreateStrategyBinding(ctx context.Context, arg CreateStrategyBindingParams) (StrategyBinding, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
 	CreateWorkspaceMember(ctx context.Context, arg CreateWorkspaceMemberParams) (WorkspaceMember, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) error
+	DeleteMinusPhrase(ctx context.Context, id pgtype.UUID) error
+	// DeleteOzonAPICallCountersBefore trims buckets that are past every window.
+	DeleteOzonAPICallCountersBefore(ctx context.Context, before pgtype.Timestamptz) error
+	DeletePlusPhrase(ctx context.Context, id pgtype.UUID) error
+	DeleteStrategy(ctx context.Context, id pgtype.UUID) error
+	DeleteStrategyBinding(ctx context.Context, id pgtype.UUID) error
 	DeleteWorkspaceMember(ctx context.Context, id pgtype.UUID) error
+	FinishAIRun(ctx context.Context, arg FinishAIRunParams) error
+	GetAIDecisionByID(ctx context.Context, arg GetAIDecisionByIDParams) (AiDecision, error)
+	// GetAIDecisionGuardState feeds the per-target cooldown/daily-cap guardrail
+	// from the AI side of history (ozon_bid_changes covers the write side).
+	// Only decisions that were or still may be applied count: shadow rows count
+	// too — promoting a strategy level must not bypass a cooldown the shadow run
+	// just started (same rule as the deterministic strategy guard).
+	GetAIDecisionGuardState(ctx context.Context, arg GetAIDecisionGuardStateParams) (GetAIDecisionGuardStateRow, error)
+	// --- Shadow → next-level readiness («готов ли к повышению уровня») ---
+	// GetAIReadinessStats is a pure aggregate over a cabinet's ai_decisions for the
+	// readiness endpoint (no writes). shadow_passed/shadow_total gives the
+	// within-guardrails share; the evaluated drr delta feeds projected_drr_delta.
+	GetAIReadinessStats(ctx context.Context, sellerCabinetID pgtype.UUID) (GetAIReadinessStatsRow, error)
+	// GetActiveOzonAIStrategyForCabinet picks the strategy a cabinet run uses.
+	// Multiple active AI strategies on one cabinet make no sense; the newest wins.
+	GetActiveOzonAIStrategyForCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) (Strategy, error)
 	GetActiveRecommendation(ctx context.Context, arg GetActiveRecommendationParams) (Recommendation, error)
 	GetAveragePosition(ctx context.Context, arg GetAveragePositionParams) (interface{}, error)
 	GetCampaignByID(ctx context.Context, id pgtype.UUID) (Campaign, error)
@@ -50,17 +146,59 @@ type Querier interface {
 	GetExtensionSession(ctx context.Context, arg GetExtensionSessionParams) (ExtensionSession, error)
 	GetJobRunByID(ctx context.Context, id pgtype.UUID) (JobRun, error)
 	GetLatestBidSnapshot(ctx context.Context, phraseID pgtype.UUID) (BidSnapshot, error)
+	// Returns the latest bid snapshot per phrase for a given workspace.
+	GetLatestBidSnapshotsBatch(ctx context.Context, workspaceID pgtype.UUID) ([]BidSnapshot, error)
 	GetLatestCampaignStat(ctx context.Context, campaignID pgtype.UUID) (CampaignStat, error)
+	// Returns the latest stat row per campaign for a given workspace.
+	GetLatestCampaignStatsBatch(ctx context.Context, workspaceID pgtype.UUID) ([]CampaignStat, error)
+	// GetLatestOzonAIWeeklyReport powers GET /ozon/ai/weekly-report (newest report
+	// for a cabinet, or no rows).
+	GetLatestOzonAIWeeklyReport(ctx context.Context, sellerCabinetID pgtype.UUID) (OzonAiWeeklyReport, error)
 	GetLatestPhraseStat(ctx context.Context, phraseID pgtype.UUID) (PhraseStat, error)
+	// Returns the latest stat row per phrase for a given workspace.
+	GetLatestPhraseStatsBatch(ctx context.Context, workspaceID pgtype.UUID) ([]PhraseStat, error)
+	// GetOzonAIBidGuardState mirrors GetOzonStrategyGuardState for a single
+	// (campaign, sku) target, counting both strategy and AI writes so the two
+	// automation paths share one cooldown budget.
+	GetOzonAIBidGuardState(ctx context.Context, arg GetOzonAIBidGuardStateParams) (GetOzonAIBidGuardStateRow, error)
+	// GetOzonAICPOGuardState is the CPO flavor (no campaign; cabinet + sku).
+	GetOzonAICPOGuardState(ctx context.Context, arg GetOzonAICPOGuardStateParams) (GetOzonAICPOGuardStateRow, error)
+	// GetOzonAIWeeklyReportForPeriod is the once-per-ISO-week generation guard.
+	GetOzonAIWeeklyReportForPeriod(ctx context.Context, arg GetOzonAIWeeklyReportForPeriodParams) (OzonAiWeeklyReport, error)
+	// GetOzonCabinetAdSpendWindowTotals mirrors the above for the spend side.
+	GetOzonCabinetAdSpendWindowTotals(ctx context.Context, arg GetOzonCabinetAdSpendWindowTotalsParams) (GetOzonCabinetAdSpendWindowTotalsRow, error)
+	// GetOzonCabinetSalesWindowTotals is the closed-window variant used by the AI
+	// impact sweep (before/after comparison around an applied decision).
+	GetOzonCabinetSalesWindowTotals(ctx context.Context, arg GetOzonCabinetSalesWindowTotalsParams) (GetOzonCabinetSalesWindowTotalsRow, error)
+	GetOzonCampaignByCabinetAndOzonID(ctx context.Context, arg GetOzonCampaignByCabinetAndOzonIDParams) (OzonCampaign, error)
+	GetOzonCampaignByID(ctx context.Context, id pgtype.UUID) (OzonCampaign, error)
+	// GetOzonCampaignStatsWindowTotals sums one campaign's stats over a closed
+	// date window for the before/after impact comparison. days counts rows, i.e.
+	// days that actually have data.
+	GetOzonCampaignStatsWindowTotals(ctx context.Context, arg GetOzonCampaignStatsWindowTotalsParams) (GetOzonCampaignStatsWindowTotalsRow, error)
+	GetOzonPriceChangeByID(ctx context.Context, id pgtype.UUID) (OzonPriceChange, error)
+	GetOzonPriceScheduleEntry(ctx context.Context, id pgtype.UUID) (OzonPriceScheduleEntry, error)
+	GetOzonProductPriceBySku(ctx context.Context, arg GetOzonProductPriceBySkuParams) (OzonProductPrice, error)
+	// GetOzonStrategyGuardState feeds the per-(campaign, sku) cooldown and
+	// daily-cap guardrails. The deterministic strategy scales every SKU of a
+	// campaign uniformly, so the worst (max) per-SKU counter is the campaign
+	// guard value. Shadow rows count too: promoting a strategy to live must not
+	// bypass a cooldown the shadow run just started.
+	GetOzonStrategyGuardState(ctx context.Context, arg GetOzonStrategyGuardStateParams) (GetOzonStrategyGuardStateRow, error)
+	GetOzonSyncState(ctx context.Context, sellerCabinetID pgtype.UUID) (OzonSyncState, error)
 	GetPhraseByID(ctx context.Context, id pgtype.UUID) (Phrase, error)
 	GetPhraseStatsByDateRange(ctx context.Context, arg GetPhraseStatsByDateRangeParams) ([]PhraseStat, error)
 	GetProductByID(ctx context.Context, id pgtype.UUID) (Product, error)
 	GetProductByWBProductID(ctx context.Context, arg GetProductByWBProductIDParams) (Product, error)
 	GetRecommendationByID(ctx context.Context, id pgtype.UUID) (Recommendation, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
+	// GetRunningAIRunForCabinet powers the 409 on manual runs. Runs older than
+	// one hour are treated as stale (crashed worker) and no longer block.
+	GetRunningAIRunForCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) (AiRun, error)
 	GetSERPSnapshotByID(ctx context.Context, id pgtype.UUID) (SerpSnapshot, error)
 	GetSellerCabinetByExternalIntegrationID(ctx context.Context, externalIntegrationID pgtype.Text) (SellerCabinet, error)
 	GetSellerCabinetByID(ctx context.Context, id pgtype.UUID) (SellerCabinet, error)
+	GetStrategyByID(ctx context.Context, id pgtype.UUID) (Strategy, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByExternalUserID(ctx context.Context, externalUserID pgtype.Text) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
@@ -69,15 +207,61 @@ type Querier interface {
 	GetWorkspaceBySlug(ctx context.Context, slug string) (Workspace, error)
 	GetWorkspaceMember(ctx context.Context, arg GetWorkspaceMemberParams) (WorkspaceMember, error)
 	GetWorkspaceMemberByID(ctx context.Context, id pgtype.UUID) (WorkspaceMember, error)
+	GetWorkspaceSettings(ctx context.Context, id pgtype.UUID) ([]byte, error)
+	// --- Performance API quota accounting (limits land 2026-08-25) ---
+	// IncrementOzonAPICalls records one metered Performance API request in its UTC
+	// hour bucket.
+	IncrementOzonAPICalls(ctx context.Context, arg IncrementOzonAPICallsParams) error
+	InsertAIDecision(ctx context.Context, arg InsertAIDecisionParams) (AiDecision, error)
+	// Ozon module phase 3 queries (AI autopilot: runs, decisions, context pack).
+	InsertAIRun(ctx context.Context, arg InsertAIRunParams) (AiRun, error)
+	// --- Weekly natural-language report (ozon_ai_weekly_reports) ---
+	InsertOzonAIWeeklyReport(ctx context.Context, arg InsertOzonAIWeeklyReportParams) (OzonAiWeeklyReport, error)
+	// Ozon module phase 2 queries (campaign actions, bid audit, CPO, strategies).
+	InsertOzonBidChange(ctx context.Context, arg InsertOzonBidChangeParams) (OzonBidChange, error)
+	// Ozon module phase 4 queries (repricer: price change audit + guardrails).
+	InsertOzonPriceChange(ctx context.Context, arg InsertOzonPriceChangeParams) (OzonPriceChange, error)
+	// LastOzonStrategySweepAt: when the strategy sweep last recorded a decision
+	// for this cabinet (max created_at over source='strategy' rows).
+	LastOzonStrategySweepAt(ctx context.Context, sellerCabinetID pgtype.UUID) (pgtype.Timestamptz, error)
+	// ListAIDecisionImpactRows powers GET /ozon/ai/impact: every applied decision
+	// of the last N days with its evaluation numbers (aggregation is done in Go —
+	// the formulas are unit-tested there).
+	ListAIDecisionImpactRows(ctx context.Context, arg ListAIDecisionImpactRowsParams) ([]ListAIDecisionImpactRowsRow, error)
+	ListAIDecisions(ctx context.Context, arg ListAIDecisionsParams) ([]AiDecision, error)
+	// --- AI impact («ИИ заработал/сэкономил») ---
+	// ListAIDecisionsForImpactEval feeds the ozon:ai_impact_sweep job: applied
+	// decisions at least 4 days old that have no final evaluation yet.
+	// 'pending_eval' rows keep evaluated_at NULL and are rescanned until they
+	// either gather 3 after-days of stats or age out past 14 days.
+	ListAIDecisionsForImpactEval(ctx context.Context) ([]AiDecision, error)
+	// ListAIDecisionsSince returns a cabinet's decisions created since a moment,
+	// for the weekly recap's «что ИИ предложил/применил за неделю» summary.
+	ListAIDecisionsSince(ctx context.Context, arg ListAIDecisionsSinceParams) ([]ListAIDecisionsSinceRow, error)
+	ListAIRunsByCabinet(ctx context.Context, arg ListAIRunsByCabinetParams) ([]AiRun, error)
+	// ListActiveOzonAICabinets enumerates cabinets the ozon:ai_sweep fans out to:
+	// every active Ozon cabinet that has at least one active ozon_ai_autopilot
+	// strategy.
+	ListActiveOzonAICabinets(ctx context.Context) ([]pgtype.UUID, error)
 	ListActiveSellerCabinets(ctx context.Context) ([]SellerCabinet, error)
+	ListActiveSellerCabinetsByMarketplace(ctx context.Context, marketplace string) ([]SellerCabinet, error)
 	ListActiveSellerCabinetsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]SellerCabinet, error)
+	ListActiveStrategiesByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]Strategy, error)
 	ListAuditLogsByWorkspace(ctx context.Context, arg ListAuditLogsByWorkspaceParams) ([]AuditLog, error)
 	ListAuditLogsFiltered(ctx context.Context, arg ListAuditLogsFilteredParams) ([]AuditLog, error)
+	ListBidChangesByCampaign(ctx context.Context, arg ListBidChangesByCampaignParams) ([]BidChange, error)
+	ListBidChangesByWorkspace(ctx context.Context, arg ListBidChangesByWorkspaceParams) ([]BidChange, error)
 	ListBidSnapshotsByPhrase(ctx context.Context, arg ListBidSnapshotsByPhraseParams) ([]BidSnapshot, error)
 	ListBidSnapshotsByWorkspace(ctx context.Context, arg ListBidSnapshotsByWorkspaceParams) ([]BidSnapshot, error)
 	ListCampaignStatsByWorkspace(ctx context.Context, arg ListCampaignStatsByWorkspaceParams) ([]CampaignStat, error)
 	ListCampaignsBySellerCabinet(ctx context.Context, arg ListCampaignsBySellerCabinetParams) ([]Campaign, error)
 	ListCampaignsByWorkspace(ctx context.Context, arg ListCampaignsByWorkspaceParams) ([]Campaign, error)
+	// ListDueOzonPriceScheduleReverts returns applied entries whose end time has
+	// passed and that carry a revert price to restore.
+	ListDueOzonPriceScheduleReverts(ctx context.Context, arg ListDueOzonPriceScheduleRevertsParams) ([]OzonPriceScheduleEntry, error)
+	// ListDueOzonPriceSchedules returns pending entries whose start time has
+	// passed, across all cabinets (the 15m executor task runs globally).
+	ListDueOzonPriceSchedules(ctx context.Context, arg ListDueOzonPriceSchedulesParams) ([]OzonPriceScheduleEntry, error)
 	ListExportsByWorkspace(ctx context.Context, arg ListExportsByWorkspaceParams) ([]Export, error)
 	ListExtensionBidSnapshotsFiltered(ctx context.Context, arg ListExtensionBidSnapshotsFilteredParams) ([]ExtensionBidSnapshot, error)
 	ListExtensionNetworkCapturesFiltered(ctx context.Context, arg ListExtensionNetworkCapturesFilteredParams) ([]ExtensionNetworkCapture, error)
@@ -86,27 +270,115 @@ type Querier interface {
 	ListExtensionUISignalsFiltered(ctx context.Context, arg ListExtensionUISignalsFilteredParams) ([]ExtensionUiSignal, error)
 	ListJobRunsByTaskType(ctx context.Context, arg ListJobRunsByTaskTypeParams) ([]JobRun, error)
 	ListJobRunsByWorkspace(ctx context.Context, arg ListJobRunsByWorkspaceParams) ([]JobRun, error)
+	ListMinusPhrases(ctx context.Context, campaignID pgtype.UUID) ([]CampaignMinusPhrase, error)
+	ListOzonBidChangesByCabinet(ctx context.Context, arg ListOzonBidChangesByCabinetParams) ([]OzonBidChange, error)
+	ListOzonCampaignBindingsByStrategy(ctx context.Context, strategyID pgtype.UUID) ([]ListOzonCampaignBindingsByStrategyRow, error)
+	// ListOzonCampaignDailyStatsSince returns per-campaign daily rows for the
+	// context pack (14-day window), keyed by the local campaign UUID.
+	ListOzonCampaignDailyStatsSince(ctx context.Context, arg ListOzonCampaignDailyStatsSinceParams) ([]ListOzonCampaignDailyStatsSinceRow, error)
+	ListOzonCampaignProducts(ctx context.Context, campaignID pgtype.UUID) ([]OzonCampaignProduct, error)
+	ListOzonCampaignRefsByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonCampaignRefsByCabinetRow, error)
+	ListOzonCampaignStats(ctx context.Context, arg ListOzonCampaignStatsParams) ([]OzonCampaignStat, error)
+	ListOzonCampaignsByCabinet(ctx context.Context, arg ListOzonCampaignsByCabinetParams) ([]OzonCampaign, error)
+	ListOzonCpoOrders(ctx context.Context, arg ListOzonCpoOrdersParams) ([]OzonCpoOrder, error)
+	ListOzonCpoProducts(ctx context.Context, arg ListOzonCpoProductsParams) ([]OzonCpoProduct, error)
+	// ListOzonPhraseCampaignRefs picks the campaigns the phrases sync asks Ozon
+	// about: SKU / SEARCH_PROMO campaigns currently running.
+	ListOzonPhraseCampaignRefs(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonPhraseCampaignRefsRow, error)
+	ListOzonPriceChangesByCabinet(ctx context.Context, arg ListOzonPriceChangesByCabinetParams) ([]OzonPriceChange, error)
+	ListOzonPriceScheduleEntriesByCabinet(ctx context.Context, arg ListOzonPriceScheduleEntriesByCabinetParams) ([]OzonPriceScheduleEntry, error)
+	ListOzonProductEconomicsByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) ([]OzonProductEconomic, error)
+	ListOzonProductPrices(ctx context.Context, arg ListOzonProductPricesParams) ([]OzonProductPrice, error)
+	ListOzonProductPricesBySkus(ctx context.Context, arg ListOzonProductPricesBySkusParams) ([]OzonProductPrice, error)
+	ListOzonProductStocksByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) ([]OzonProductStock, error)
+	// ListOzonProductsByCabinet feeds the price-sync name fill (map by product_id).
+	ListOzonProductsByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonProductsByCabinetRow, error)
+	// ListOzonProductsBySkus feeds batched read enrichment (campaign detail, CPO,
+	// bid changes) — one query per page, no N+1.
+	ListOzonProductsBySkus(ctx context.Context, arg ListOzonProductsBySkusParams) ([]ListOzonProductsBySkusRow, error)
+	// Promo campaigns backing the CPO («Оплата за заказ») view: ALL_SKU_PROMO or
+	// SEARCH_PROMO advObjectType. Ordered RUNNING-first so the overview can pick a
+	// representative campaign deterministically.
+	ListOzonPromoCampaigns(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonPromoCampaignsRow, error)
+	// ListOzonSearchQueriesBySkus serves the AI context pack / request_data:
+	// per-(sku, query) aggregates ordered by views within each SKU. The per-SKU
+	// top-N cut happens in Go (sqlc's analyzer cannot resolve ROW_NUMBER()
+	// filters); the LIMIT is a defensive bound only.
+	ListOzonSearchQueriesBySkus(ctx context.Context, arg ListOzonSearchQueriesBySkusParams) ([]ListOzonSearchQueriesBySkusRow, error)
 	ListPhraseStatsByWorkspace(ctx context.Context, arg ListPhraseStatsByWorkspaceParams) ([]PhraseStat, error)
 	ListPhrasesByCampaign(ctx context.Context, arg ListPhrasesByCampaignParams) ([]Phrase, error)
 	ListPhrasesByWorkspace(ctx context.Context, arg ListPhrasesByWorkspaceParams) ([]Phrase, error)
+	ListPlusPhrases(ctx context.Context, campaignID pgtype.UUID) ([]CampaignPlusPhrase, error)
 	ListPositionsByProduct(ctx context.Context, arg ListPositionsByProductParams) ([]Position, error)
 	ListPositionsByWorkspace(ctx context.Context, arg ListPositionsByWorkspaceParams) ([]Position, error)
 	ListPositionsFiltered(ctx context.Context, arg ListPositionsFilteredParams) ([]Position, error)
 	ListProductsBySellerCabinet(ctx context.Context, arg ListProductsBySellerCabinetParams) ([]Product, error)
 	ListProductsByWorkspace(ctx context.Context, arg ListProductsByWorkspaceParams) ([]Product, error)
+	// --- Feedback loop: recent applied decisions + their measured outcomes ---
+	// ListRecentAppliedAIDecisions feeds the «твои прошлые решения и что вышло»
+	// section of the context pack: the cabinet's newest applied/auto_applied
+	// decisions with the impact numbers written by the sweep (outcome_status,
+	// drr_before/after, spend/revenue before/after). Newest first.
+	ListRecentAppliedAIDecisions(ctx context.Context, arg ListRecentAppliedAIDecisionsParams) ([]ListRecentAppliedAIDecisionsRow, error)
 	ListRecommendationsByWorkspace(ctx context.Context, arg ListRecommendationsByWorkspaceParams) ([]Recommendation, error)
 	ListSERPResultItemsBySnapshot(ctx context.Context, snapshotID pgtype.UUID) ([]SerpResultItem, error)
 	ListSERPSnapshotsByWorkspace(ctx context.Context, arg ListSERPSnapshotsByWorkspaceParams) ([]SerpSnapshot, error)
 	ListSERPSnapshotsFiltered(ctx context.Context, arg ListSERPSnapshotsFilteredParams) ([]SerpSnapshot, error)
 	ListSellerCabinetsByWorkspace(ctx context.Context, arg ListSellerCabinetsByWorkspaceParams) ([]SellerCabinet, error)
+	ListStrategiesByWorkspace(ctx context.Context, arg ListStrategiesByWorkspaceParams) ([]Strategy, error)
+	ListStrategyBindings(ctx context.Context, strategyID pgtype.UUID) ([]StrategyBinding, error)
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	ListWorkspaceMembers(ctx context.Context, arg ListWorkspaceMembersParams) ([]WorkspaceMember, error)
 	ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) ([]Workspace, error)
 	ListWorkspacesByUserID(ctx context.Context, arg ListWorkspacesByUserIDParams) ([]Workspace, error)
+	MarkOzonBidChangeResult(ctx context.Context, arg MarkOzonBidChangeResultParams) error
+	MarkOzonPriceChangeResult(ctx context.Context, arg MarkOzonPriceChangeResultParams) error
+	// MarkOzonPriceScheduleResult finalizes one entry: 'applied' stamps
+	// applied_at, 'reverted' stamps reverted_at, 'failed' records the error.
+	MarkOzonPriceScheduleResult(ctx context.Context, arg MarkOzonPriceScheduleResultParams) (OzonPriceScheduleEntry, error)
+	// OzonCabinetMarginInputs feeds the derived «ДРР от общего оборота» ceiling:
+	// every priced SKU of the cabinet with the turnover it produced over the
+	// window. The margin itself is computed in Go so there is exactly one
+	// implementation of that formula (ozonSKUMarginPct).
+	//
+	// SKUs with no sales in the window come back with zero turnover and simply
+	// carry no weight.
+	OzonCabinetMarginInputs(ctx context.Context, arg OzonCabinetMarginInputsParams) ([]OzonCabinetMarginInputsRow, error)
+	// OzonCampaignAttributedTurnoverByCabinet splits the cabinet's turnover across
+	// its campaigns so a per-campaign «ДРР от общего оборота» can be computed
+	// without double counting.
+	//
+	// A SKU advertised by several campaigns has its turnover divided between them
+	// in proportion to what each campaign spent over the window:
+	//
+	//   attributed(C) = Σ over SKUs of C:  turnover(sku) × spend(C) / spend_on(sku)
+	//
+	// Summed over every campaign that advertises a SKU this returns exactly that
+	// SKU's turnover — never more. A SKU with no ad spend anywhere contributes
+	// nothing: NULLIF drops it rather than dividing by zero.
+	//
+	// revenue_shared flags campaigns whose SKUs are also advertised elsewhere, so
+	// a decision context can say whether the denominator was split or whole.
+	OzonCampaignAttributedTurnoverByCabinet(ctx context.Context, arg OzonCampaignAttributedTurnoverByCabinetParams) ([]OzonCampaignAttributedTurnoverByCabinetRow, error)
+	// OzonPriceChanges24hSummary feeds the repricer health endpoint.
+	OzonPriceChanges24hSummary(ctx context.Context, sellerCabinetID pgtype.UUID) (OzonPriceChanges24hSummaryRow, error)
+	// OzonSalesVelocityByCabinet sums ordered units and revenue per sales SKU
+	// over a lookback window; the caller divides by the window length to get
+	// units/day.
+	OzonSalesVelocityByCabinet(ctx context.Context, arg OzonSalesVelocityByCabinetParams) ([]OzonSalesVelocityByCabinetRow, error)
+	// OzonSkuAdSpendByCabinet attributes campaign-level spend/revenue to every
+	// SKU of the campaign (ozon_campaign_stats has no per-SKU split): a SKU in
+	// several campaigns aggregates across them, so its ДРР is the blended
+	// campaign ДРР of its placements. sku here is the SALES sku.
+	OzonSkuAdSpendByCabinet(ctx context.Context, arg OzonSkuAdSpendByCabinetParams) ([]OzonSkuAdSpendByCabinetRow, error)
 	RevokeAllUserRefreshTokens(ctx context.Context, userID pgtype.UUID) error
 	RevokeRefreshToken(ctx context.Context, id pgtype.UUID) error
+	SetAIDecisionOutcome(ctx context.Context, arg SetAIDecisionOutcomeParams) error
+	SetAIDecisionStatus(ctx context.Context, arg SetAIDecisionStatusParams) error
+	SetOzonCpoProductsEnabled(ctx context.Context, arg SetOzonCpoProductsEnabledParams) error
 	SoftDeleteSellerCabinet(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteWorkspace(ctx context.Context, id pgtype.UUID) error
+	TouchOzonSyncState(ctx context.Context, arg TouchOzonSyncStateParams) error
 	UpdateCampaign(ctx context.Context, arg UpdateCampaignParams) (Campaign, error)
 	UpdateExportStatus(ctx context.Context, arg UpdateExportStatusParams) (Export, error)
 	UpdateExtensionSession(ctx context.Context, arg UpdateExtensionSessionParams) (ExtensionSession, error)
@@ -114,19 +386,54 @@ type Querier interface {
 	UpdateExternalUser(ctx context.Context, arg UpdateExternalUserParams) (User, error)
 	UpdateExternalWorkspace(ctx context.Context, arg UpdateExternalWorkspaceParams) (Workspace, error)
 	UpdateJobRunStatus(ctx context.Context, arg UpdateJobRunStatusParams) (JobRun, error)
+	UpdateOzonCampaignBudgets(ctx context.Context, arg UpdateOzonCampaignBudgetsParams) error
+	UpdateOzonCampaignProductBid(ctx context.Context, arg UpdateOzonCampaignProductBidParams) error
+	UpdateOzonCampaignState(ctx context.Context, arg UpdateOzonCampaignStateParams) error
+	UpdateOzonCpoProductBid(ctx context.Context, arg UpdateOzonCpoProductBidParams) error
+	UpdateOzonProductPriceMirror(ctx context.Context, arg UpdateOzonProductPriceMirrorParams) error
 	UpdateRecommendationContent(ctx context.Context, arg UpdateRecommendationContentParams) (Recommendation, error)
 	UpdateRecommendationStatus(ctx context.Context, arg UpdateRecommendationStatusParams) (Recommendation, error)
 	UpdateSellerCabinetLastSynced(ctx context.Context, id pgtype.UUID) error
 	UpdateSellerCabinetStatus(ctx context.Context, arg UpdateSellerCabinetStatusParams) error
 	UpdateSellerCabinetTokenCache(ctx context.Context, arg UpdateSellerCabinetTokenCacheParams) error
+	UpdateStrategy(ctx context.Context, arg UpdateStrategyParams) (Strategy, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) (Workspace, error)
 	UpdateWorkspaceMemberRole(ctx context.Context, arg UpdateWorkspaceMemberRoleParams) (WorkspaceMember, error)
+	UpdateWorkspaceSettings(ctx context.Context, arg UpdateWorkspaceSettingsParams) (UpdateWorkspaceSettingsRow, error)
 	UpsertCampaign(ctx context.Context, arg UpsertCampaignParams) (Campaign, error)
 	UpsertCampaignStat(ctx context.Context, arg UpsertCampaignStatParams) (CampaignStat, error)
+	// Ozon module phase 1 queries (campaigns, products, stats, prices, sync state).
+	UpsertOzonCampaign(ctx context.Context, arg UpsertOzonCampaignParams) (OzonCampaign, error)
+	UpsertOzonCampaignProduct(ctx context.Context, arg UpsertOzonCampaignProductParams) error
+	UpsertOzonCampaignStat(ctx context.Context, arg UpsertOzonCampaignStatParams) error
+	// CPO («Оплата за заказ») promoted orders mirrored from the async
+	// all_sku_promo orders report (migration 000059).
+	UpsertOzonCpoOrder(ctx context.Context, arg UpsertOzonCpoOrderParams) error
+	// The enriched display fields (offer_id/name/price_rub/bid_price_rub/image_url/
+	// visibility_index) are COALESCE-preserved so a bare toggle/bid upsert (which
+	// passes them as NULL) never wipes values captured by the product refresh.
+	UpsertOzonCpoProduct(ctx context.Context, arg UpsertOzonCpoProductParams) error
+	// Ozon product catalog mapping (product_id ↔ sales SKU + name/offer_id/image).
+	UpsertOzonProduct(ctx context.Context, arg UpsertOzonProductParams) error
+	// Sellico unit-economics mirror for Ozon cabinets (cost fallback for the
+	// margin-floor repricer when Ozon does not report net_price).
+	UpsertOzonProductEconomics(ctx context.Context, arg UpsertOzonProductEconomicsParams) error
+	UpsertOzonProductPrice(ctx context.Context, arg UpsertOzonProductPriceParams) error
+	// Ozon module phase 5 queries (stocks + daily sales + per-SKU ad spend for
+	// the inventory-demand and ad-linked repricer strategies).
+	UpsertOzonProductStock(ctx context.Context, arg UpsertOzonProductStockParams) error
+	UpsertOzonSalesDaily(ctx context.Context, arg UpsertOzonSalesDailyParams) error
+	// Ozon search query statistics (Performance API phrases report mirror).
+	UpsertOzonSearchQuery(ctx context.Context, arg UpsertOzonSearchQueryParams) error
 	UpsertPhrase(ctx context.Context, arg UpsertPhraseParams) (Phrase, error)
 	UpsertPhraseStat(ctx context.Context, arg UpsertPhraseStatParams) (PhraseStat, error)
 	UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error)
+	// Ozon cabinets keep the Seller/Performance credential JSON (AES-GCM) in
+	// encrypted_credentials; encrypted_token stores the encrypted Seller API key
+	// only to satisfy the legacy NOT NULL column — WB code paths never read it
+	// because they skip marketplace <> 'wb' rows.
+	UpsertSellicoOzonSellerCabinet(ctx context.Context, arg UpsertSellicoOzonSellerCabinetParams) (SellerCabinet, error)
 	UpsertSellicoSellerCabinet(ctx context.Context, arg UpsertSellicoSellerCabinetParams) (SellerCabinet, error)
 }
 

@@ -45,6 +45,7 @@ type aiManagerPerfClient interface {
 // the manual endpoints use. The LLM never touches Ozon directly.
 type OzonAIManagerService struct {
 	queries       *sqlcgen.Queries
+	apiBudget     *OzonAPIBudget
 	perfClient    aiManagerPerfClient
 	actions       *OzonCampaignActionsService
 	llm           aiChatClient
@@ -57,6 +58,7 @@ type OzonAIManagerService struct {
 func NewOzonAIManagerService(queries *sqlcgen.Queries, perfClient *ozon.PerfClient, actions *OzonCampaignActionsService, llmClient aiChatClient, encryptionKey []byte, logger zerolog.Logger) *OzonAIManagerService {
 	return &OzonAIManagerService{
 		queries:       queries,
+		apiBudget:     NewOzonAPIBudget(queries, logger),
 		perfClient:    perfClient,
 		actions:       actions,
 		llm:           llmClient,
@@ -497,6 +499,14 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		if reason := ozonAIBidGuardReason(currentBid, *proposal.NewValue, 0, params); reason != "" {
 			return reason
 		}
+		// Same total-ДРР ceiling the deterministic strategy obeys. Without it
+		// here the autopilot would keep scaling a cabinet the other branch has
+		// already stopped scaling.
+		if *proposal.NewValue > currentBid {
+			if reason := totalDRRIncreaseBlockReason(data.totalDRRCeiling, data.totalDRR); reason != "" {
+				return reason
+			}
+		}
 		return s.bidCooldownReason(ctx, campaign.ID, cabinetID, proposal, params, now)
 	case domain.AIActionBudgetChange:
 		campaign, ok := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
@@ -510,6 +520,12 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		if reason := ozonAIBudgetGuardReason(current, int64(*proposal.NewValue), weekly, params); reason != "" {
 			return reason
 		}
+		// A budget raise spends more just as surely as a bid raise does.
+		if current != nil && int64(*proposal.NewValue) > *current {
+			if reason := totalDRRIncreaseBlockReason(data.totalDRRCeiling, data.totalDRR); reason != "" {
+				return reason
+			}
+		}
 		return s.decisionCooldownReason(ctx, cabinetID, proposal, params, now)
 	case domain.AIActionCampaignPause, domain.AIActionCampaignActivate:
 		campaign, ok := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
@@ -521,6 +537,9 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		}
 		return s.decisionCooldownReason(ctx, cabinetID, proposal, params, now)
 	case domain.AIActionCPOBid:
+		// Deliberately NOT gated by the total-ДРР ceiling: CPO charges per
+		// order, so raising a CPO bid cannot push ДРР up — spend only grows
+		// alongside the revenue it produced.
 		if proposal.Target.SKU <= 0 {
 			return "cpo_bid requires target.sku"
 		}
@@ -627,6 +646,12 @@ func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, c
 	switch proposal.ActionType {
 	case domain.AIActionBidChange:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
+		// Ozon meters bid changes daily from 2026-08-25. Checked here, at the
+		// moment of the real call: a shadow proposal spends no quota and must
+		// not be marked as a guardrail failure for it.
+		if reason := s.apiBudget.AutomationBlockReason(ctx, cabinetID, ozonAPICategoryBidWrite, 1); reason != "" {
+			return reason, nil
+		}
 		// Apply-time clamp: Ozon's real per-SKU minimum. A failed lookup
 		// blocks the write — without real minimums it is not provably valid
 		// (same rule as the deterministic strategy).
@@ -640,20 +665,27 @@ func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, c
 		_, err = s.actions.SetProductBidsWithSource(ctx, workspaceID, uuidFromPgtype(campaign.ID),
 			[]OzonBidInput{{SKU: proposal.Target.SKU, BidRub: roundRub(*proposal.NewValue)}},
 			domain.BidSourceAI, reason)
+		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryBidWrite, 1)
 		return "", err
 	case domain.AIActionBudgetChange:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
 		value := int64(*proposal.NewValue)
 		_, weekly := campaignBudget(campaign)
+		if reason := s.apiBudget.AutomationBlockReason(ctx, cabinetID, ozonAPICategoryBudgetWrite, 1); reason != "" {
+			return reason, nil
+		}
+		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryBudgetWrite, 1)
 		if weekly {
 			return "", s.actions.UpdateBudget(ctx, workspaceID, uuidFromPgtype(campaign.ID), nil, &value)
 		}
 		return "", s.actions.UpdateBudget(ctx, workspaceID, uuidFromPgtype(campaign.ID), &value, nil)
 	case domain.AIActionCampaignPause:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
+		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryCampaignWrite, 1)
 		return "", s.actions.DeactivateCampaign(ctx, workspaceID, uuidFromPgtype(campaign.ID))
 	case domain.AIActionCampaignActivate:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
+		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryCampaignWrite, 1)
 		return "", s.actions.ActivateCampaign(ctx, workspaceID, uuidFromPgtype(campaign.ID))
 	case domain.AIActionCPOBid:
 		// CPO minimums are best-effort: CPO charges per order, so an
@@ -736,15 +768,23 @@ func (s *OzonAIManagerService) cpoMinBid(ctx context.Context, workspaceID, cabin
 func aiSystemPrompt(params domain.StrategyParams) string {
 	return fmt.Sprintf(`Ты — опытный менеджер рекламы Ozon. Управляешь кампаниями кабинета продавца на основе данных за 14 дней.
 
-Цель: привести ДРР (доля рекламных расходов = расход / выручка × 100%%) кабинета к целевому уровню %.1f%% без потери объёма заказов.
+Ты работаешь с ДВУМЯ разными показателями, не путай их:
+- «ДРР кампании» = расход кампании / выручка, которую Ozon приписал этой кампании × 100%%. Показывает, окупается ли сама кампания. Поле drr_pct в totals_14d.
+- «ДРР от общего оборота» = рекламный расход / весь оборот × 100%%. Показывает, какую долю оборота съедает реклама. По кабинету — поля total_drr_pct и total_turnover_rub в rules; по каждой кампании — поле total_drr_pct в её totals_14d (оборот SKU делится между кампаниями, которые их рекламируют, пропорционально расходу).
+Кампания может выглядеть отлично по первому показателю и при этом ухудшать второй — это значит, что реклама выкупает заказы, которые пришли бы и без неё.
+
+Цель: привести ДРР кампаний к целевому уровню %.1f%% без потери объёма заказов и не разгоняя при этом ДРР от общего оборота.
 
 Жёсткие правила (нарушения отклонит автоматика):
 - Не предлагай изменение ставки или бюджета больше чем на %.0f%% от текущего значения.
 - Ставки CPC держи в диапазоне %d–%d ₽ и не ниже минимальной ставки Ozon.
+- В rules есть incremental_drr — сравнение двух последних периодов. verdict "cannibalizing" означает, что расход вырос, а оборот нет: масштабировать в этом состоянии бессмысленно, ищи, что сокращать. "freed" — расход снизили без потери оборота, можно сокращать и дальше. "accretive" — рост расхода реально приносит оборот. "not_enough_data" — игнорируй.
+- Поле max_total_drr_source говорит, откуда взят потолок: "explicit" — задан вручную, "unit_economics" — рассчитан из маржи кабинета с поправкой на выкуп, "none" — потолка нет. Если в rules задан max_total_drr_pct и total_drr_pct уже достиг его, любое повышение ставки или бюджета будет отклонено. В этом случае предлагай только снижения, паузы и CPO. Когда total_drr_status не равен "ok", показатель не измерен — ориентируйся на ДРР кампаний.
 - Цель по ДРР %.1f%% остаётся главной, но учитывай маржу SKU (поле margin_pct в экономике, источник себестоимости — cost_source): у товаров с высокой маржой допустим более высокий ДРР, у низкомаржинальных — жёстче. Не масштабируй SKU с отрицательной или неизвестной маржой (margin_pct отсутствует).
 - CPO («Продвижение в поиске») списывает деньги только за заказ — безрисково по ДРР: включай смело для SKU с положительной маржой.
 - Кампании с ДРР сильно выше цели — снижай ставки или ставь на паузу; с ДРР ниже цели и хорошей маржой — масштабируй.
 - Учитывай, что из твоих прошлых решений сработало, а что нет (секция recent_decisions: действие, что предлагал, ДРР до→после, изменение расхода/выручки). Не повторяй то, что уже не дало эффекта.
+- В recent_decisions те же два показателя: drr_before/drr_after — ДРР кампании, total_drr_before/total_drr_after — ДРР от общего оборота. Решение, которое улучшило первый, но подняло второй, реального оборота не добавило. Такие решения не повторяй, даже если по кампании они выглядят удачными.
 - Не трогай кампании без статистики за окно (мало данных — не действие, а наблюдение).
 - Каждое предложение обосновывай цифрами из контекста (rationale) и ожидаемым эффектом (expected_effect).
 

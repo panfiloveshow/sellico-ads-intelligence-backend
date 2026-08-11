@@ -11,44 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const campaignSelectColumns = `id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget,
-  placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at,
-  can_change_nms, created_at, updated_at`
-
-type rowScanner interface {
-	Scan(dest ...interface{}) error
-}
-
-func scanCampaign(row rowScanner) (Campaign, error) {
-	var i Campaign
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.SellerCabinetID,
-		&i.WbCampaignID,
-		&i.Name,
-		&i.Status,
-		&i.CampaignType,
-		&i.BidType,
-		&i.PaymentType,
-		&i.DailyBudget,
-		&i.PlacementSearch,
-		&i.PlacementRecommendations,
-		&i.WbCreatedAt,
-		&i.WbStartedAt,
-		&i.WbUpdatedAt,
-		&i.WbDeletedAt,
-		&i.CanChangeNms,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const createCampaign = `-- name: CreateCampaign :one
 INSERT INTO campaigns (workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING ` + campaignSelectColumns + `
+RETURNING id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
 `
 
 type CreateCampaignParams struct {
@@ -64,7 +30,7 @@ type CreateCampaignParams struct {
 }
 
 func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error) {
-	return scanCampaign(q.db.QueryRow(ctx, createCampaign,
+	row := q.db.QueryRow(ctx, createCampaign,
 		arg.WorkspaceID,
 		arg.SellerCabinetID,
 		arg.WbCampaignID,
@@ -74,19 +40,65 @@ func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) 
 		arg.BidType,
 		arg.PaymentType,
 		arg.DailyBudget,
-	))
+	)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SellerCabinetID,
+		&i.WbCampaignID,
+		&i.Name,
+		&i.Status,
+		&i.CampaignType,
+		&i.BidType,
+		&i.PaymentType,
+		&i.DailyBudget,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PlacementSearch,
+		&i.PlacementRecommendations,
+		&i.WbCreatedAt,
+		&i.WbStartedAt,
+		&i.WbUpdatedAt,
+		&i.WbDeletedAt,
+		&i.CanChangeNms,
+	)
+	return i, err
 }
 
 const getCampaignByID = `-- name: GetCampaignByID :one
-SELECT ` + campaignSelectColumns + ` FROM campaigns WHERE id = $1
+SELECT id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms FROM campaigns WHERE id = $1
 `
 
 func (q *Queries) GetCampaignByID(ctx context.Context, id pgtype.UUID) (Campaign, error) {
-	return scanCampaign(q.db.QueryRow(ctx, getCampaignByID, id))
+	row := q.db.QueryRow(ctx, getCampaignByID, id)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SellerCabinetID,
+		&i.WbCampaignID,
+		&i.Name,
+		&i.Status,
+		&i.CampaignType,
+		&i.BidType,
+		&i.PaymentType,
+		&i.DailyBudget,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PlacementSearch,
+		&i.PlacementRecommendations,
+		&i.WbCreatedAt,
+		&i.WbStartedAt,
+		&i.WbUpdatedAt,
+		&i.WbDeletedAt,
+		&i.CanChangeNms,
+	)
+	return i, err
 }
 
 const getCampaignByWBCampaignID = `-- name: GetCampaignByWBCampaignID :one
-SELECT ` + campaignSelectColumns + ` FROM campaigns
+SELECT id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms FROM campaigns
 WHERE workspace_id = $1 AND wb_campaign_id = $2
 LIMIT 1
 `
@@ -97,11 +109,34 @@ type GetCampaignByWBCampaignIDParams struct {
 }
 
 func (q *Queries) GetCampaignByWBCampaignID(ctx context.Context, arg GetCampaignByWBCampaignIDParams) (Campaign, error) {
-	return scanCampaign(q.db.QueryRow(ctx, getCampaignByWBCampaignID, arg.WorkspaceID, arg.WbCampaignID))
+	row := q.db.QueryRow(ctx, getCampaignByWBCampaignID, arg.WorkspaceID, arg.WbCampaignID)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SellerCabinetID,
+		&i.WbCampaignID,
+		&i.Name,
+		&i.Status,
+		&i.CampaignType,
+		&i.BidType,
+		&i.PaymentType,
+		&i.DailyBudget,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PlacementSearch,
+		&i.PlacementRecommendations,
+		&i.WbCreatedAt,
+		&i.WbStartedAt,
+		&i.WbUpdatedAt,
+		&i.WbDeletedAt,
+		&i.CanChangeNms,
+	)
+	return i, err
 }
 
 const listCampaignsBySellerCabinet = `-- name: ListCampaignsBySellerCabinet :many
-SELECT ` + campaignSelectColumns + ` FROM campaigns
+SELECT id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms FROM campaigns
 WHERE seller_cabinet_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -121,11 +156,31 @@ func (q *Queries) ListCampaignsBySellerCabinet(ctx context.Context, arg ListCamp
 	defer rows.Close()
 	items := []Campaign{}
 	for rows.Next() {
-		item, err := scanCampaign(rows)
-		if err != nil {
+		var i Campaign
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SellerCabinetID,
+			&i.WbCampaignID,
+			&i.Name,
+			&i.Status,
+			&i.CampaignType,
+			&i.BidType,
+			&i.PaymentType,
+			&i.DailyBudget,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PlacementSearch,
+			&i.PlacementRecommendations,
+			&i.WbCreatedAt,
+			&i.WbStartedAt,
+			&i.WbUpdatedAt,
+			&i.WbDeletedAt,
+			&i.CanChangeNms,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -134,7 +189,7 @@ func (q *Queries) ListCampaignsBySellerCabinet(ctx context.Context, arg ListCamp
 }
 
 const listCampaignsByWorkspace = `-- name: ListCampaignsByWorkspace :many
-SELECT ` + campaignSelectColumns + ` FROM campaigns
+SELECT id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms FROM campaigns
 WHERE workspace_id = $1
   AND ($4::uuid IS NULL OR seller_cabinet_id = $4::uuid)
   AND ($5::text IS NULL OR status = $5::text)
@@ -167,11 +222,31 @@ func (q *Queries) ListCampaignsByWorkspace(ctx context.Context, arg ListCampaign
 	defer rows.Close()
 	items := []Campaign{}
 	for rows.Next() {
-		item, err := scanCampaign(rows)
-		if err != nil {
+		var i Campaign
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SellerCabinetID,
+			&i.WbCampaignID,
+			&i.Name,
+			&i.Status,
+			&i.CampaignType,
+			&i.BidType,
+			&i.PaymentType,
+			&i.DailyBudget,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PlacementSearch,
+			&i.PlacementRecommendations,
+			&i.WbCreatedAt,
+			&i.WbStartedAt,
+			&i.WbUpdatedAt,
+			&i.WbDeletedAt,
+			&i.CanChangeNms,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -183,7 +258,7 @@ const updateCampaign = `-- name: UpdateCampaign :one
 UPDATE campaigns
 SET name = $2, status = $3, bid_type = $4, payment_type = $5, daily_budget = $6, updated_at = now()
 WHERE id = $1
-RETURNING ` + campaignSelectColumns + `
+RETURNING id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
 `
 
 type UpdateCampaignParams struct {
@@ -196,20 +271,43 @@ type UpdateCampaignParams struct {
 }
 
 func (q *Queries) UpdateCampaign(ctx context.Context, arg UpdateCampaignParams) (Campaign, error) {
-	return scanCampaign(q.db.QueryRow(ctx, updateCampaign,
+	row := q.db.QueryRow(ctx, updateCampaign,
 		arg.ID,
 		arg.Name,
 		arg.Status,
 		arg.BidType,
 		arg.PaymentType,
 		arg.DailyBudget,
-	))
+	)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SellerCabinetID,
+		&i.WbCampaignID,
+		&i.Name,
+		&i.Status,
+		&i.CampaignType,
+		&i.BidType,
+		&i.PaymentType,
+		&i.DailyBudget,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PlacementSearch,
+		&i.PlacementRecommendations,
+		&i.WbCreatedAt,
+		&i.WbStartedAt,
+		&i.WbUpdatedAt,
+		&i.WbDeletedAt,
+		&i.CanChangeNms,
+	)
+	return i, err
 }
 
 const upsertCampaign = `-- name: UpsertCampaign :one
 INSERT INTO campaigns (
-  workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget,
-  placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
+    workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget,
+    placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (wb_campaign_id, seller_cabinet_id) DO UPDATE SET
@@ -227,7 +325,7 @@ ON CONFLICT (wb_campaign_id, seller_cabinet_id) DO UPDATE SET
     wb_deleted_at = COALESCE(EXCLUDED.wb_deleted_at, campaigns.wb_deleted_at),
     can_change_nms = EXCLUDED.can_change_nms,
     updated_at = now()
-RETURNING ` + campaignSelectColumns + `
+RETURNING id, workspace_id, seller_cabinet_id, wb_campaign_id, name, status, campaign_type, bid_type, payment_type, daily_budget, created_at, updated_at, placement_search, placement_recommendations, wb_created_at, wb_started_at, wb_updated_at, wb_deleted_at, can_change_nms
 `
 
 type UpsertCampaignParams struct {
@@ -250,7 +348,7 @@ type UpsertCampaignParams struct {
 }
 
 func (q *Queries) UpsertCampaign(ctx context.Context, arg UpsertCampaignParams) (Campaign, error) {
-	return scanCampaign(q.db.QueryRow(ctx, upsertCampaign,
+	row := q.db.QueryRow(ctx, upsertCampaign,
 		arg.WorkspaceID,
 		arg.SellerCabinetID,
 		arg.WbCampaignID,
@@ -267,5 +365,28 @@ func (q *Queries) UpsertCampaign(ctx context.Context, arg UpsertCampaignParams) 
 		arg.WbUpdatedAt,
 		arg.WbDeletedAt,
 		arg.CanChangeNms,
-	))
+	)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SellerCabinetID,
+		&i.WbCampaignID,
+		&i.Name,
+		&i.Status,
+		&i.CampaignType,
+		&i.BidType,
+		&i.PaymentType,
+		&i.DailyBudget,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PlacementSearch,
+		&i.PlacementRecommendations,
+		&i.WbCreatedAt,
+		&i.WbStartedAt,
+		&i.WbUpdatedAt,
+		&i.WbDeletedAt,
+		&i.CanChangeNms,
+	)
+	return i, err
 }

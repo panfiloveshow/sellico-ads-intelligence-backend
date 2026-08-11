@@ -47,19 +47,6 @@ type UpsertCampaignProductParams struct {
 	BidRecommendations pgtype.Int8
 }
 
-type CampaignProduct struct {
-	CampaignID         pgtype.UUID
-	ProductID          pgtype.UUID
-	WorkspaceID        pgtype.UUID
-	SellerCabinetID    pgtype.UUID
-	WbCampaignID       int64
-	WbProductID        int64
-	SubjectName        pgtype.Text
-	BidSearch          pgtype.Int8
-	BidRecommendations pgtype.Int8
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-}
 
 const upsertCampaignProduct = `
 INSERT INTO campaign_products (campaign_id, product_id, workspace_id, seller_cabinet_id, wb_campaign_id, wb_product_id, subject_name, bid_search, bid_recommendations)
@@ -209,22 +196,6 @@ func (q *Queries) ListCampaignProductsByCampaign(ctx context.Context, campaignID
 	return items, rows.Err()
 }
 
-type ProductStat struct {
-	ID          pgtype.UUID
-	ProductID   pgtype.UUID
-	CampaignID  pgtype.UUID
-	Date        pgtype.Date
-	Impressions int64
-	Clicks      int64
-	Spend       int64
-	Orders      pgtype.Int8
-	Revenue     pgtype.Int8
-	Atbs        pgtype.Int8
-	Canceled    pgtype.Int8
-	Shks        pgtype.Int8
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-}
 
 type UpsertProductStatParams struct {
 	ProductID   pgtype.UUID

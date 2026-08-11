@@ -35,22 +35,7 @@ func (q *Queries) BeginWorkspaceSettingsUpdateTx(ctx context.Context, workspaceI
 	return q.WithTx(tx), tx, nil
 }
 
-const updateWorkspaceSettings = `-- name: UpdateWorkspaceSettings :one
-WITH automation_lock AS MATERIALIZED (
-	-- ($1::uuid)::text, not $1::text: a text-pinned $1 breaks "w.id = $1" (42883).
-	SELECT pg_advisory_xact_lock(hashtextextended(($1::uuid)::text || ':workspace-daily-bid-actions', 0))
-)
-UPDATE workspaces w
-SET settings = $2, updated_at = now()
-FROM automation_lock
-WHERE w.id = $1
-RETURNING w.id, w.name, w.slug, w.created_at, w.updated_at, w.deleted_at, w.settings
-`
 
-type UpdateWorkspaceSettingsParams struct {
-	ID       pgtype.UUID `json:"id"`
-	Settings []byte      `json:"settings"`
-}
 
 type WorkspaceWithSettings struct {
 	ID        pgtype.UUID        `json:"id"`
@@ -62,28 +47,5 @@ type WorkspaceWithSettings struct {
 	Settings  []byte             `json:"settings"`
 }
 
-func (q *Queries) UpdateWorkspaceSettings(ctx context.Context, arg UpdateWorkspaceSettingsParams) (WorkspaceWithSettings, error) {
-	row := q.db.QueryRow(ctx, updateWorkspaceSettings, arg.ID, arg.Settings)
-	var i WorkspaceWithSettings
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Slug,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DeletedAt,
-		&i.Settings,
-	)
-	return i, err
-}
 
-const getWorkspaceSettings = `-- name: GetWorkspaceSettings :one
-SELECT settings FROM workspaces WHERE id = $1 AND deleted_at IS NULL
-`
 
-func (q *Queries) GetWorkspaceSettings(ctx context.Context, id pgtype.UUID) ([]byte, error) {
-	row := q.db.QueryRow(ctx, getWorkspaceSettings, id)
-	var settings []byte
-	err := row.Scan(&settings)
-	return settings, err
-}

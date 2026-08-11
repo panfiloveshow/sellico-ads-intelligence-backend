@@ -50,6 +50,75 @@ func (q *Queries) ListOzonProductEconomicsByCabinet(ctx context.Context, sellerC
 	return items, nil
 }
 
+const ozonCabinetMarginInputs = `-- name: OzonCabinetMarginInputs :many
+SELECT p.sku,
+       p.price_rub,
+       p.net_price_rub,
+       p.commission_fbo_pct,
+       p.commission_fbs_pct,
+       p.acquiring_pct,
+       COALESCE(s.revenue_rub, 0)::numeric AS revenue_rub
+FROM ozon_product_prices p
+LEFT JOIN (
+    SELECT sd.sku, SUM(sd.revenue_rub) AS revenue_rub
+    FROM ozon_sales_daily sd
+    WHERE sd.seller_cabinet_id = $1
+      AND sd.date >= $2
+    GROUP BY sd.sku
+) s ON s.sku = p.sku
+WHERE p.seller_cabinet_id = $1
+`
+
+type OzonCabinetMarginInputsParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Since           pgtype.Date `json:"since"`
+}
+
+type OzonCabinetMarginInputsRow struct {
+	Sku              int64          `json:"sku"`
+	PriceRub         pgtype.Numeric `json:"price_rub"`
+	NetPriceRub      pgtype.Numeric `json:"net_price_rub"`
+	CommissionFboPct pgtype.Numeric `json:"commission_fbo_pct"`
+	CommissionFbsPct pgtype.Numeric `json:"commission_fbs_pct"`
+	AcquiringPct     pgtype.Numeric `json:"acquiring_pct"`
+	RevenueRub       pgtype.Numeric `json:"revenue_rub"`
+}
+
+// OzonCabinetMarginInputs feeds the derived «ДРР от общего оборота» ceiling:
+// every priced SKU of the cabinet with the turnover it produced over the
+// window. The margin itself is computed in Go so there is exactly one
+// implementation of that formula (ozonSKUMarginPct).
+//
+// SKUs with no sales in the window come back with zero turnover and simply
+// carry no weight.
+func (q *Queries) OzonCabinetMarginInputs(ctx context.Context, arg OzonCabinetMarginInputsParams) ([]OzonCabinetMarginInputsRow, error) {
+	rows, err := q.db.Query(ctx, ozonCabinetMarginInputs, arg.SellerCabinetID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []OzonCabinetMarginInputsRow{}
+	for rows.Next() {
+		var i OzonCabinetMarginInputsRow
+		if err := rows.Scan(
+			&i.Sku,
+			&i.PriceRub,
+			&i.NetPriceRub,
+			&i.CommissionFboPct,
+			&i.CommissionFbsPct,
+			&i.AcquiringPct,
+			&i.RevenueRub,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertOzonProductEconomics = `-- name: UpsertOzonProductEconomics :exec
 
 INSERT INTO ozon_product_economics (

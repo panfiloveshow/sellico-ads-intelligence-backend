@@ -161,3 +161,32 @@ SELECT
     COALESCE(SUM(revenue_rub), 0)::numeric AS revenue_rub
 FROM ozon_campaign_stats
 WHERE campaign_id = $1 AND date >= $2;
+
+-- --- Performance API quota accounting (limits land 2026-08-25) ---
+
+-- IncrementOzonAPICalls records one metered Performance API request in its UTC
+-- hour bucket.
+-- name: IncrementOzonAPICalls :exec
+INSERT INTO ozon_api_call_counters (seller_cabinet_id, category, hour_start, calls)
+VALUES (
+    sqlc.arg('seller_cabinet_id'),
+    sqlc.arg('category'),
+    date_trunc('hour', now()),
+    sqlc.arg('calls')
+)
+ON CONFLICT (seller_cabinet_id, category, hour_start) DO UPDATE SET
+    calls = ozon_api_call_counters.calls + EXCLUDED.calls,
+    updated_at = now();
+
+-- CountOzonAPICallsSince sums a cabinet's metered calls in one category since a
+-- point in time — the rolling hour or day usage.
+-- name: CountOzonAPICallsSince :one
+SELECT COALESCE(SUM(calls), 0)::bigint AS calls
+FROM ozon_api_call_counters
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND category = sqlc.arg('category')
+  AND hour_start >= sqlc.arg('since');
+
+-- DeleteOzonAPICallCountersBefore trims buckets that are past every window.
+-- name: DeleteOzonAPICallCountersBefore :exec
+DELETE FROM ozon_api_call_counters WHERE hour_start < sqlc.arg('before');

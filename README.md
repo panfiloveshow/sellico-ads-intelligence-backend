@@ -106,5 +106,6 @@ GitHub Actions CD pipeline (`.github/workflows/cd.yml`) automatically builds, pu
 ## Notes
 
 - Generated export files are stored under `EXPORT_STORAGE_PATH` (defaults to `./exports`).
-- After adding new SQL queries, run `make sqlc-generate` to regenerate the typed layer.
+- After adding new SQL queries, run `make sqlc-generate` to regenerate the typed layer, then `make sqlc-check` to confirm the committed tree matches.
+- Never hand-edit a `*.sql.go` file: the next `sqlc generate` silently discards the edit. Put hand-written queries in a `*_manual.go` file, and only for declarations sqlc does **not** generate — a `*_manual.go` that redeclares a generated type or query breaks the build the moment someone regenerates.
 - After modifying `go.mod`, run `go mod tidy` to sync `go.sum`.

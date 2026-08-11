@@ -7,29 +7,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type BidDecisionObservation struct {
-	ID                pgtype.UUID
-	ObservationKey    string
-	WorkspaceID       pgtype.UUID
-	SellerCabinetID   pgtype.UUID
-	StrategyID        pgtype.UUID
-	StrategyBindingID pgtype.UUID
-	CampaignID        pgtype.UUID
-	ProductID         pgtype.UUID
-	PhraseID          pgtype.UUID
-	WBCampaignID      int64
-	WBProductID       int64
-	NormQuery         pgtype.Text
-	Placement         string
-	OldBid            int32
-	ProposedBid       int32
-	Reason            string
-	Metrics           []byte
-	AutomationLevel   int32
-	BidObservedAt     pgtype.Timestamptz
-	FirstSeenAt       pgtype.Timestamptz
-	LastSeenAt        pgtype.Timestamptz
-}
 
 type UpsertBidDecisionObservationParams struct {
 	ObservationKey    string
@@ -105,7 +82,7 @@ func (q *Queries) ListBidDecisionObservationsByStrategy(ctx context.Context, arg
 		if err := rows.Scan(
 			&item.ID, &item.ObservationKey, &item.WorkspaceID, &item.SellerCabinetID,
 			&item.StrategyID, &item.StrategyBindingID, &item.CampaignID, &item.ProductID, &item.PhraseID,
-			&item.WBCampaignID, &item.WBProductID, &item.NormQuery, &item.Placement, &item.OldBid,
+			&item.WbCampaignID, &item.WbProductID, &item.NormQuery, &item.Placement, &item.OldBid,
 			&item.ProposedBid, &item.Reason, &item.Metrics, &item.AutomationLevel,
 			&item.BidObservedAt, &item.FirstSeenAt, &item.LastSeenAt,
 		); err != nil {

@@ -121,6 +121,12 @@ const (
 	PriceApplyModeAuto   = "auto"
 )
 
+// OzonMaxLookbackDays is the longest window an Ozon strategy may look back
+// over. Both stats syncs (campaign stats and daily sales) mirror exactly this
+// many days, so a longer lookback would quietly truncate the denominator of
+// every ДРР and make advertising look cheaper than it is.
+const OzonMaxLookbackDays = 14
+
 // Strategy represents an automated bidding strategy.
 type Strategy struct {
 	ID              uuid.UUID         `json:"id"`
@@ -160,6 +166,24 @@ type StrategyParams struct {
 	SacrificialSpendPricePct float64 `json:"sacrificial_spend_price_pct,omitempty"` // cut when spend ≥ this % of buyer price with 0 orders; default 100
 	FlatImpressionsPct       float64 `json:"flat_impressions_pct,omitempty"`        // impressions within ±this % of prior window = "flat"; default 20
 	RollbackStepPercent      float64 `json:"rollback_step_percent,omitempty"`       // pullback % once at target with flat impressions; default 9
+
+	// MaxTotalDRRPercent is the ceiling on «ДРР от общего оборота» (ad spend
+	// over the cabinet's WHOLE turnover, not the revenue attributed to a
+	// campaign). Above it, bid and budget increases are blocked — decreases
+	// are never affected. nil disables the guardrail entirely.
+	MaxTotalDRRPercent *float64 `json:"max_total_drr_percent,omitempty"`
+
+	// TargetTotalDRRPercent turns «ДРР от общего оборота» from a ceiling into
+	// a second target: the bid is then the lower of what the campaign ДРР and
+	// what the attributed total ДРР each ask for. Increases need both to
+	// agree, a decrease from either wins. 0 disables the second target.
+	TargetTotalDRRPercent float64 `json:"target_total_drr_percent,omitempty"`
+
+	// ExpectedBuyoutPercent is the share of ORDERED turnover expected to be
+	// delivered and kept. Ozon analytics reports orders, not deliveries, so a
+	// ceiling derived from that turnover without this haircut is too
+	// generous. 0 falls back to a conservative default.
+	ExpectedBuyoutPercent float64 `json:"expected_buyout_percent,omitempty"`
 
 	// Common limits
 	MinBid                    int     `json:"min_bid,omitempty"`                      // default: 50

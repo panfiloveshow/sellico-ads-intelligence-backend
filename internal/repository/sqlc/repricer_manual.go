@@ -14,19 +14,6 @@ import (
 // product_prices
 // ---------------------------------------------------------------------------
 
-type ProductPrice struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID     pgtype.UUID        `json:"seller_cabinet_id"`
-	WbProductID         int64              `json:"wb_product_id"`
-	PriceRub            int64              `json:"price_rub"`
-	DiscountPercent     int32              `json:"discount_percent"`
-	ClubDiscountPercent int32              `json:"club_discount_percent"`
-	DiscountedPriceRub  pgtype.Int8        `json:"discounted_price_rub"`
-	EditableSizePrice   bool               `json:"editable_size_price"`
-	SyncedAt            pgtype.Timestamptz `json:"synced_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-}
 
 type UpsertProductPriceParams struct {
 	WorkspaceID         pgtype.UUID
@@ -472,20 +459,6 @@ func (q *Queries) ListCabinetPricesScope(ctx context.Context, workspaceID pgtype
 // price_upload_tasks
 // ---------------------------------------------------------------------------
 
-type PriceUploadTask struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
-	WbTaskID        int64              `json:"wb_task_id"`
-	Status          string             `json:"status"`
-	ItemsCount      int32              `json:"items_count"`
-	PollCount       int32              `json:"poll_count"`
-	LastPolledAt    pgtype.Timestamptz `json:"last_polled_at"`
-	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
-	Error           pgtype.Text        `json:"error"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-}
 
 type CreatePriceUploadTaskParams struct {
 	WorkspaceID     pgtype.UUID
@@ -737,31 +710,6 @@ func scanPriceUploadTask(row rowScanner) (PriceUploadTask, error) {
 // price_changes
 // ---------------------------------------------------------------------------
 
-type PriceChange struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID    pgtype.UUID        `json:"seller_cabinet_id"`
-	StrategyID         pgtype.UUID        `json:"strategy_id"`
-	ScheduleEntryID    pgtype.UUID        `json:"schedule_entry_id"`
-	UploadTaskID       pgtype.UUID        `json:"upload_task_id"`
-	SubmissionBatchID  pgtype.UUID        `json:"submission_batch_id"`
-	WbProductID        int64              `json:"wb_product_id"`
-	OldPriceRub        int64              `json:"old_price_rub"`
-	NewPriceRub        int64              `json:"new_price_rub"`
-	OldDiscountPercent int32              `json:"old_discount_percent"`
-	NewDiscountPercent int32              `json:"new_discount_percent"`
-	MinPriceRub        pgtype.Int8        `json:"min_price_rub"`
-	Reason             string             `json:"reason"`
-	Source             string             `json:"source"`
-	WbStatus           string             `json:"wb_status"`
-	Error              pgtype.Text        `json:"error"`
-	CanRollback        bool               `json:"can_rollback"`
-	RollbackOf         pgtype.UUID        `json:"rollback_of"`
-	DecisionContext    []byte             `json:"decision_context"`
-	CreatedBy          pgtype.UUID        `json:"created_by"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-}
 
 type CreatePriceChangeParams struct {
 	WorkspaceID        pgtype.UUID
@@ -1272,17 +1220,6 @@ func scanPriceChange(row rowScanner) (PriceChange, error) {
 // price_quarantine_goods
 // ---------------------------------------------------------------------------
 
-type PriceQuarantineGood struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
-	WbProductID     int64              `json:"wb_product_id"`
-	OldPriceRub     pgtype.Int8        `json:"old_price_rub"`
-	NewPriceRub     pgtype.Int8        `json:"new_price_rub"`
-	DetectedAt      pgtype.Timestamptz `json:"detected_at"`
-	ResolvedAt      pgtype.Timestamptz `json:"resolved_at"`
-	Notified        bool               `json:"notified"`
-}
 
 type UpsertQuarantineGoodParams struct {
 	WorkspaceID     pgtype.UUID
@@ -1379,27 +1316,6 @@ func (q *Queries) SetCabinetPricesScopeStatus(ctx context.Context, cabinetID pgt
 // price_schedule_entries
 // ---------------------------------------------------------------------------
 
-type PriceScheduleEntry struct {
-	ID               pgtype.UUID        `json:"id"`
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	SellerCabinetID  pgtype.UUID        `json:"seller_cabinet_id"`
-	ScopeType        string             `json:"scope_type"`
-	ProductIds       []int64            `json:"product_ids"`
-	AdjustmentType   string             `json:"adjustment_type"`
-	AdjustmentValue  float64            `json:"adjustment_value"`
-	Direction        pgtype.Text        `json:"direction"`
-	ScheduledAt      pgtype.Timestamptz `json:"scheduled_at"`
-	RevertAt         pgtype.Timestamptz `json:"revert_at"`
-	RevertToPrevious bool               `json:"revert_to_previous"`
-	RevertOf         pgtype.UUID        `json:"revert_of"`
-	Status           string             `json:"status"`
-	ExecutedTaskIds  []pgtype.UUID      `json:"executed_task_ids"`
-	Error            pgtype.Text        `json:"error"`
-	Comment          pgtype.Text        `json:"comment"`
-	CreatedBy        pgtype.UUID        `json:"created_by"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-}
 
 type CreatePriceScheduleEntryParams struct {
 	WorkspaceID      pgtype.UUID

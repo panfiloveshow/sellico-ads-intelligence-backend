@@ -48,6 +48,29 @@ func (q *Queries) AggregateOzonCampaignStatsSince(ctx context.Context, arg Aggre
 	return i, err
 }
 
+const countOzonAPICallsSince = `-- name: CountOzonAPICallsSince :one
+SELECT COALESCE(SUM(calls), 0)::bigint AS calls
+FROM ozon_api_call_counters
+WHERE seller_cabinet_id = $1
+  AND category = $2
+  AND hour_start >= $3
+`
+
+type CountOzonAPICallsSinceParams struct {
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	Category        string             `json:"category"`
+	Since           pgtype.Timestamptz `json:"since"`
+}
+
+// CountOzonAPICallsSince sums a cabinet's metered calls in one category since a
+// point in time — the rolling hour or day usage.
+func (q *Queries) CountOzonAPICallsSince(ctx context.Context, arg CountOzonAPICallsSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOzonAPICallsSince, arg.SellerCabinetID, arg.Category, arg.Since)
+	var calls int64
+	err := row.Scan(&calls)
+	return calls, err
+}
+
 const countOzonBidChangesByCabinet = `-- name: CountOzonBidChangesByCabinet :one
 SELECT COUNT(*) FROM ozon_bid_changes bc
 LEFT JOIN ozon_campaigns c ON c.id = bc.campaign_id
@@ -120,6 +143,16 @@ func (q *Queries) CreateOzonStrategyBindingInWorkspace(ctx context.Context, arg 
 	return i, err
 }
 
+const deleteOzonAPICallCountersBefore = `-- name: DeleteOzonAPICallCountersBefore :exec
+DELETE FROM ozon_api_call_counters WHERE hour_start < $1
+`
+
+// DeleteOzonAPICallCountersBefore trims buckets that are past every window.
+func (q *Queries) DeleteOzonAPICallCountersBefore(ctx context.Context, before pgtype.Timestamptz) error {
+	_, err := q.db.Exec(ctx, deleteOzonAPICallCountersBefore, before)
+	return err
+}
+
 const getOzonStrategyGuardState = `-- name: GetOzonStrategyGuardState :one
 SELECT
     COALESCE(MAX(per_sku.changes_today), 0)::bigint AS max_changes_per_sku_today,
@@ -157,6 +190,34 @@ func (q *Queries) GetOzonStrategyGuardState(ctx context.Context, arg GetOzonStra
 	var i GetOzonStrategyGuardStateRow
 	err := row.Scan(&i.MaxChangesPerSkuToday, &i.LastChangeAt)
 	return i, err
+}
+
+const incrementOzonAPICalls = `-- name: IncrementOzonAPICalls :exec
+
+INSERT INTO ozon_api_call_counters (seller_cabinet_id, category, hour_start, calls)
+VALUES (
+    $1,
+    $2,
+    date_trunc('hour', now()),
+    $3
+)
+ON CONFLICT (seller_cabinet_id, category, hour_start) DO UPDATE SET
+    calls = ozon_api_call_counters.calls + EXCLUDED.calls,
+    updated_at = now()
+`
+
+type IncrementOzonAPICallsParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Category        string      `json:"category"`
+	Calls           int32       `json:"calls"`
+}
+
+// --- Performance API quota accounting (limits land 2026-08-25) ---
+// IncrementOzonAPICalls records one metered Performance API request in its UTC
+// hour bucket.
+func (q *Queries) IncrementOzonAPICalls(ctx context.Context, arg IncrementOzonAPICallsParams) error {
+	_, err := q.db.Exec(ctx, incrementOzonAPICalls, arg.SellerCabinetID, arg.Category, arg.Calls)
+	return err
 }
 
 const insertOzonBidChange = `-- name: InsertOzonBidChange :one

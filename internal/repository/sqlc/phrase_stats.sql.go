@@ -14,7 +14,7 @@ import (
 const createPhraseStat = `-- name: CreatePhraseStat :one
 INSERT INTO phrase_stats (phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at
+RETURNING id, phrase_id, date, impressions, clicks, spend, created_at, updated_at, atbs, orders, cpc, cpm, avg_pos
 `
 
 type CreatePhraseStatParams struct {
@@ -51,19 +51,19 @@ func (q *Queries) CreatePhraseStat(ctx context.Context, arg CreatePhraseStatPara
 		&i.Impressions,
 		&i.Clicks,
 		&i.Spend,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.Atbs,
 		&i.Orders,
 		&i.Cpc,
 		&i.Cpm,
 		&i.AvgPos,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getLatestPhraseStat = `-- name: GetLatestPhraseStat :one
-SELECT id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at FROM phrase_stats
+SELECT id, phrase_id, date, impressions, clicks, spend, created_at, updated_at, atbs, orders, cpc, cpm, avg_pos FROM phrase_stats
 WHERE phrase_id = $1
 ORDER BY date DESC
 LIMIT 1
@@ -79,19 +79,19 @@ func (q *Queries) GetLatestPhraseStat(ctx context.Context, phraseID pgtype.UUID)
 		&i.Impressions,
 		&i.Clicks,
 		&i.Spend,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.Atbs,
 		&i.Orders,
 		&i.Cpc,
 		&i.Cpm,
 		&i.AvgPos,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getPhraseStatsByDateRange = `-- name: GetPhraseStatsByDateRange :many
-SELECT id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at FROM phrase_stats
+SELECT id, phrase_id, date, impressions, clicks, spend, created_at, updated_at, atbs, orders, cpc, cpm, avg_pos FROM phrase_stats
 WHERE phrase_id = $1 AND date BETWEEN $2 AND $3
 ORDER BY date
 LIMIT $4 OFFSET $5
@@ -127,13 +127,13 @@ func (q *Queries) GetPhraseStatsByDateRange(ctx context.Context, arg GetPhraseSt
 			&i.Impressions,
 			&i.Clicks,
 			&i.Spend,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.Atbs,
 			&i.Orders,
 			&i.Cpc,
 			&i.Cpm,
 			&i.AvgPos,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -146,7 +146,7 @@ func (q *Queries) GetPhraseStatsByDateRange(ctx context.Context, arg GetPhraseSt
 }
 
 const listPhraseStatsByWorkspace = `-- name: ListPhraseStatsByWorkspace :many
-SELECT ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.atbs, ps.orders, ps.cpc, ps.cpm, ps.avg_pos, ps.created_at, ps.updated_at FROM phrase_stats ps
+SELECT ps.id, ps.phrase_id, ps.date, ps.impressions, ps.clicks, ps.spend, ps.created_at, ps.updated_at, ps.atbs, ps.orders, ps.cpc, ps.cpm, ps.avg_pos FROM phrase_stats ps
 JOIN phrases p ON p.id = ps.phrase_id
 WHERE p.workspace_id = $1
 ORDER BY ps.date DESC
@@ -175,13 +175,13 @@ func (q *Queries) ListPhraseStatsByWorkspace(ctx context.Context, arg ListPhrase
 			&i.Impressions,
 			&i.Clicks,
 			&i.Spend,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.Atbs,
 			&i.Orders,
 			&i.Cpc,
 			&i.Cpm,
 			&i.AvgPos,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -206,7 +206,7 @@ ON CONFLICT (phrase_id, date) DO UPDATE SET
     cpm = EXCLUDED.cpm,
     avg_pos = EXCLUDED.avg_pos,
     updated_at = now()
-RETURNING id, phrase_id, date, impressions, clicks, spend, atbs, orders, cpc, cpm, avg_pos, created_at, updated_at
+RETURNING id, phrase_id, date, impressions, clicks, spend, created_at, updated_at, atbs, orders, cpc, cpm, avg_pos
 `
 
 type UpsertPhraseStatParams struct {
@@ -243,13 +243,13 @@ func (q *Queries) UpsertPhraseStat(ctx context.Context, arg UpsertPhraseStatPara
 		&i.Impressions,
 		&i.Clicks,
 		&i.Spend,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.Atbs,
 		&i.Orders,
 		&i.Cpc,
 		&i.Cpm,
 		&i.AvgPos,
-		&i.CreatedAt,
-		&i.UpdatedAt,
 	)
 	return i, err
 }

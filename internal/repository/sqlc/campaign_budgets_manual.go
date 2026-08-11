@@ -6,16 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type CampaignBudget struct {
-	ID         pgtype.UUID        `json:"id"`
-	CampaignID pgtype.UUID        `json:"campaign_id"`
-	Cash       int64              `json:"cash"`
-	Netting    int64              `json:"netting"`
-	Total      int64              `json:"total"`
-	CapturedAt pgtype.Timestamptz `json:"captured_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-}
 
 type UpsertCampaignBudgetParams struct {
 	CampaignID pgtype.UUID        `json:"campaign_id"`

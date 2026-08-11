@@ -92,7 +92,7 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 	// to attribute. TODO: per-SKU evaluation via ozon_sales_daily.
 	switch row.ActionType {
 	case domain.AIActionCPOBid, domain.AIActionCPOEnable, domain.AIActionCPODisable:
-		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil)
+		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
 	}
 
 	var target domain.AIDecisionTarget
@@ -103,7 +103,7 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 	}
 	if target.OzonCampaignID == 0 {
 		// Campaign-typed action without a campaign target — nothing to measure.
-		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil)
+		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
 	}
 	campaign, err := s.queries.GetOzonCampaignByCabinetAndOzonID(ctx, sqlcgen.GetOzonCampaignByCabinetAndOzonIDParams{
 		SellerCabinetID: row.SellerCabinetID,
@@ -111,7 +111,7 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Campaign disappeared from the mirror (deleted upstream).
-		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil)
+		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
 	}
 	if err != nil {
 		return "", fmt.Errorf("load campaign %d: %w", target.OzonCampaignID, err)
@@ -129,9 +129,56 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 
 	outcome := aiImpactOutcome(before, after, row.AppliedAt.Time, now)
 	if outcome.Status != domain.AIOutcomeEvaluated {
-		return outcome.Status, s.writeDecisionOutcome(ctx, row.ID, outcome.Status, nil, nil)
+		return outcome.Status, s.writeDecisionOutcome(ctx, row.ID, outcome.Status, nil, nil, aiImpactTotalDRR{})
 	}
-	return outcome.Status, s.writeDecisionOutcome(ctx, row.ID, outcome.Status, &before, &after)
+
+	// The cabinet-wide ДРР over the same two windows. Without it the feedback
+	// loop only ever sees the campaign ДРР, so a decision that improved the
+	// campaign while pushing the cabinet's overall ДРР up is remembered as a
+	// success — and the model repeats it. Best-effort: a failed read leaves
+	// the columns NULL rather than blocking the evaluation.
+	totals := s.cabinetTotalDRRWindows(ctx, row.SellerCabinetID, windows)
+
+	return outcome.Status, s.writeDecisionOutcome(ctx, row.ID, outcome.Status, &before, &after, totals)
+}
+
+// aiImpactTotalDRR carries the cabinet-wide ДРР of both comparison windows.
+// Nil members mean "not measurable" (no turnover, or the read failed).
+type aiImpactTotalDRR struct {
+	Before *float64
+	After  *float64
+}
+
+// cabinetTotalDRRWindows measures the cabinet's total-turnover ДРР over the
+// before/after windows of one decision. Errors degrade to nil, never fail the
+// sweep — this number is observational (stage 0).
+func (s *OzonAIManagerService) cabinetTotalDRRWindows(ctx context.Context, cabinetID pgtype.UUID, w aiImpactWindowBounds) aiImpactTotalDRR {
+	return aiImpactTotalDRR{
+		Before: s.cabinetTotalDRRWindow(ctx, cabinetID, w.BeforeFrom, w.BeforeTo),
+		After:  s.cabinetTotalDRRWindow(ctx, cabinetID, w.AfterFrom, w.AfterTo),
+	}
+}
+
+func (s *OzonAIManagerService) cabinetTotalDRRWindow(ctx context.Context, cabinetID pgtype.UUID, from, to time.Time) *float64 {
+	dateFrom := pgtype.Date{Time: from, Valid: true}
+	dateTo := pgtype.Date{Time: to, Valid: true}
+
+	sales, err := s.queries.GetOzonCabinetSalesWindowTotals(ctx, sqlcgen.GetOzonCabinetSalesWindowTotalsParams{
+		SellerCabinetID: cabinetID, DateFrom: dateFrom, DateTo: dateTo,
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("ai impact: cabinet turnover window read failed")
+		return nil
+	}
+	spend, err := s.queries.GetOzonCabinetAdSpendWindowTotals(ctx, sqlcgen.GetOzonCabinetAdSpendWindowTotalsParams{
+		SellerCabinetID: cabinetID, DateFrom: dateFrom, DateTo: dateTo,
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("ai impact: cabinet ad spend window read failed")
+		return nil
+	}
+	// drrPct already returns nil on zero turnover — undefined, not zero.
+	return drrPct(pgNumericToFloat(spend.SpendRub), pgNumericToFloat(sales.RevenueRub))
 }
 
 func (s *OzonAIManagerService) campaignWindowTotals(ctx context.Context, campaignID pgtype.UUID, from, to time.Time) (aiImpactWindowTotals, error) {
@@ -150,8 +197,14 @@ func (s *OzonAIManagerService) campaignWindowTotals(ctx context.Context, campaig
 	}, nil
 }
 
-func (s *OzonAIManagerService) writeDecisionOutcome(ctx context.Context, id pgtype.UUID, status string, before, after *aiImpactWindowTotals) error {
+func (s *OzonAIManagerService) writeDecisionOutcome(ctx context.Context, id pgtype.UUID, status string, before, after *aiImpactWindowTotals, total aiImpactTotalDRR) error {
 	params := sqlcgen.SetAIDecisionOutcomeParams{ID: id, OutcomeStatus: textToPgtype(status)}
+	if total.Before != nil {
+		params.TotalDrrBefore = floatToPgNumeric(*total.Before)
+	}
+	if total.After != nil {
+		params.TotalDrrAfter = floatToPgNumeric(*total.After)
+	}
 	if status == domain.AIOutcomeEvaluated && before != nil && after != nil {
 		params.SpendBeforeRub = floatToPgNumeric(roundRub(before.SpendRub))
 		params.SpendAfterRub = floatToPgNumeric(roundRub(after.SpendRub))

@@ -182,6 +182,8 @@ UPDATE ai_decisions SET
     spend_after_rub = sqlc.narg('spend_after_rub'),
     revenue_before_rub = sqlc.narg('revenue_before_rub'),
     revenue_after_rub = sqlc.narg('revenue_after_rub'),
+    total_drr_before = sqlc.narg('total_drr_before'),
+    total_drr_after = sqlc.narg('total_drr_after'),
     evaluated_at = CASE WHEN sqlc.arg('outcome_status')::text IN ('evaluated', 'not_evaluable')
                         THEN now() ELSE evaluated_at END
 WHERE id = sqlc.arg('id');
@@ -225,7 +227,8 @@ WHERE workspace_id = sqlc.arg('workspace_id')
 -- name: ListRecentAppliedAIDecisions :many
 SELECT action_type, target, proposal, status, outcome_status, created_at,
        drr_before, drr_after, spend_before_rub, spend_after_rub,
-       revenue_before_rub, revenue_after_rub
+       revenue_before_rub, revenue_after_rub,
+       total_drr_before, total_drr_after
 FROM ai_decisions
 WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND status IN ('applied', 'auto_applied')

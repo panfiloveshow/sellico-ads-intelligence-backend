@@ -4,8 +4,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: UpsertCampaignStat :one
-INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue, atbs, canceled)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue, atbs, canceled, shks)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (campaign_id, date) DO UPDATE SET
     impressions = EXCLUDED.impressions,
     clicks = EXCLUDED.clicks,
@@ -14,6 +14,7 @@ ON CONFLICT (campaign_id, date) DO UPDATE SET
     revenue = EXCLUDED.revenue,
     atbs = EXCLUDED.atbs,
     canceled = EXCLUDED.canceled,
+    shks = EXCLUDED.shks,
     updated_at = now()
 RETURNING *;
 

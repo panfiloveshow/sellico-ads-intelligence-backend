@@ -14,7 +14,7 @@ import (
 const createCampaignStat = `-- name: CreateCampaignStat :one
 INSERT INTO campaign_stats (campaign_id, date, impressions, clicks, spend, orders, revenue, atbs, canceled)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled
+RETURNING id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled, shks
 `
 
 type CreateCampaignStatParams struct {
@@ -55,12 +55,13 @@ func (q *Queries) CreateCampaignStat(ctx context.Context, arg CreateCampaignStat
 		&i.UpdatedAt,
 		&i.Atbs,
 		&i.Canceled,
+		&i.Shks,
 	)
 	return i, err
 }
 
 const getCampaignStatsByDateRange = `-- name: GetCampaignStatsByDateRange :many
-SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled FROM campaign_stats
+SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled, shks FROM campaign_stats
 WHERE campaign_id = $1 AND date BETWEEN $2 AND $3
 ORDER BY date
 LIMIT $4 OFFSET $5
@@ -102,6 +103,7 @@ func (q *Queries) GetCampaignStatsByDateRange(ctx context.Context, arg GetCampai
 			&i.UpdatedAt,
 			&i.Atbs,
 			&i.Canceled,
+			&i.Shks,
 		); err != nil {
 			return nil, err
 		}
@@ -114,7 +116,7 @@ func (q *Queries) GetCampaignStatsByDateRange(ctx context.Context, arg GetCampai
 }
 
 const getLatestCampaignStat = `-- name: GetLatestCampaignStat :one
-SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled FROM campaign_stats
+SELECT id, campaign_id, date, impressions, clicks, spend, orders, revenue, created_at, updated_at, atbs, canceled, shks FROM campaign_stats
 WHERE campaign_id = $1
 ORDER BY date DESC
 LIMIT 1
@@ -136,12 +138,13 @@ func (q *Queries) GetLatestCampaignStat(ctx context.Context, campaignID pgtype.U
 		&i.UpdatedAt,
 		&i.Atbs,
 		&i.Canceled,
+		&i.Shks,
 	)
 	return i, err
 }
 
 const listCampaignStatsByWorkspace = `-- name: ListCampaignStatsByWorkspace :many
-SELECT cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend, cs.orders, cs.revenue, cs.created_at, cs.updated_at, cs.atbs, cs.canceled FROM campaign_stats cs
+SELECT cs.id, cs.campaign_id, cs.date, cs.impressions, cs.clicks, cs.spend, cs.orders, cs.revenue, cs.created_at, cs.updated_at, cs.atbs, cs.canceled, cs.shks FROM campaign_stats cs
 JOIN campaigns c ON c.id = cs.campaign_id
 WHERE c.workspace_id = $1
 ORDER BY cs.date DESC
@@ -176,6 +179,7 @@ func (q *Queries) ListCampaignStatsByWorkspace(ctx context.Context, arg ListCamp
 			&i.UpdatedAt,
 			&i.Atbs,
 			&i.Canceled,
+			&i.Shks,
 		); err != nil {
 			return nil, err
 		}
