@@ -1,30 +1,22 @@
-.git
-.github
-.codex
-.kiro
-.vscode
-bin
-exports
-.env
-.env.*
-*.log
-coverage.out
-tmp
-.DS_Store
-internal/service/testdata
-monitoring
-nginx
-extension
+# Allowlist, not blocklist.
+#
+# A blocklist has to predict what junk appears in the deploy directory, and it
+# always loses: on prod the context had grown to 1.28 GB (31 s just to transfer)
+# from files nobody thought to exclude. Denying everything and naming what the
+# build actually reads cannot regress that way.
+#
+# Verified with `go list -deps ./cmd/api ./cmd/worker`: the import graph touches
+# only cmd, internal and openapi. migrations and scripts are copied into the
+# final image by the Dockerfile.
+*
 
-# Build context trimming: none of this reaches the compiler, but all of it was
-# being transferred and hashed on every build.
-docs
-monitoring
-skills
-tools
-plan.md
-CHANGELOG.md
-*.md
-.claude
-.cursor
-front2
+!go.mod
+!go.sum
+!cmd
+!internal
+!openapi
+!migrations
+!scripts
+
+# Test fixtures are never compiled into the binaries.
+internal/service/testdata
