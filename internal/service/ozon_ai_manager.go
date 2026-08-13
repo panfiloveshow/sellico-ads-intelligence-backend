@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -495,6 +496,14 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		currentBid := data.bidsByCampaignSKU[proposal.Target.OzonCampaignID][proposal.Target.SKU]
 		if currentBid <= 0 {
 			return fmt.Sprintf("sku %d has no active bid in campaign %d", proposal.Target.SKU, proposal.Target.OzonCampaignID)
+		}
+		// Pull an oversized step back to the cap rather than discarding the
+		// proposal — the model rounds to whole rubles and lands just past the
+		// limit constantly. Mutating through the pointer is deliberate: the
+		// clamped value is what gets stored in the decision and applied.
+		if clamped, note := ozonAIClampBidToChangeLimit(currentBid, *proposal.NewValue, params.MaxChangePercent); note != "" {
+			*proposal.NewValue = clamped
+			proposal.Rationale = strings.TrimSpace(proposal.Rationale + " [" + note + "]")
 		}
 		if reason := ozonAIBidGuardReason(currentBid, *proposal.NewValue, 0, params); reason != "" {
 			return reason

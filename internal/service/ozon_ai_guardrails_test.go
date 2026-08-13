@@ -136,3 +136,70 @@ func TestMarshalAIContextPack_SizeCap(t *testing.T) {
 	assert.Equal(t, 12.0, decoded.Rules.TargetDRRPct)
 	assert.NotEmpty(t, decoded.Campaigns, "campaign detail must survive the cuts")
 }
+
+func TestOzonAIClampBidToChangeLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		current     float64
+		proposed    float64
+		maxChange   float64
+		wantBid     float64
+		wantClamped bool
+	}{
+		{
+			// Ровно случай из продакшена: 38 → 32 это −15.8 % при лимите 15 %.
+			// Раньше предложение выбрасывалось целиком из-за 0.8 п.п.
+			name:    "снижение чуть за лимитом подтягивается к границе",
+			current: 38, proposed: 32, maxChange: 15,
+			wantBid: 33, wantClamped: true, // 38 − 5.7 = 32.3 → вверх до 33
+		},
+		{
+			name:    "второй случай из продакшена",
+			current: 57, proposed: 48, maxChange: 15,
+			wantBid: 49, wantClamped: true, // 57 − 8.55 = 48.45 → вверх до 49
+		},
+		{
+			name:    "внутри лимита остаётся как есть",
+			current: 47, proposed: 40, maxChange: 15,
+			wantBid: 40, wantClamped: false,
+		},
+		{
+			name:    "повышение за лимитом тоже подтягивается",
+			current: 100, proposed: 130, maxChange: 15,
+			wantBid: 115, wantClamped: true,
+		},
+		{
+			name:    "лимит не задан — не вмешиваемся",
+			current: 38, proposed: 10, maxChange: 0,
+			wantBid: 10, wantClamped: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, note := ozonAIClampBidToChangeLimit(tc.current, tc.proposed, tc.maxChange)
+			if got != tc.wantBid {
+				t.Fatalf("bid = %v, want %v", got, tc.wantBid)
+			}
+			if clamped := note != ""; clamped != tc.wantClamped {
+				t.Fatalf("clamped = %v (note %q), want %v", clamped, note, tc.wantClamped)
+			}
+		})
+	}
+}
+
+// Зажатая ставка обязана проходить тот же гардрейл, который её отклонял.
+func TestClampedBidPassesChangeGuard(t *testing.T) {
+	params := domain.StrategyParams{MaxChangePercent: 15, MinBid: 5, MaxBid: 500}
+
+	if reason := ozonAIBidGuardReason(38, 32, 0, params); reason == "" {
+		t.Fatal("исходное предложение должно отклоняться — иначе тест бессмысленен")
+	}
+	clamped, note := ozonAIClampBidToChangeLimit(38, 32, params.MaxChangePercent)
+	if note == "" {
+		t.Fatal("ожидалось ограничение")
+	}
+	if reason := ozonAIBidGuardReason(38, clamped, 0, params); reason != "" {
+		t.Fatalf("зажатая ставка всё ещё отклоняется: %s", reason)
+	}
+}

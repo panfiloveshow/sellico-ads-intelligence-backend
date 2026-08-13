@@ -116,3 +116,50 @@ func ozonAICampaignStateGuardReason(actionType, state string) string {
 	}
 	return ""
 }
+
+// ozonAIClampBidToChangeLimit pulls a proposed bid back inside
+// max_change_percent instead of rejecting it.
+//
+// The model reasons in whole rubles, so it lands just past the cap constantly:
+// 38 → 32 is −15.8 % against a 15 % limit, and 57 → 48 is −15.8 % again. Every
+// such proposal used to be thrown away over 0.8 pp of rounding. On the «Тень»
+// level that was invisible; on «Автопилот» it would have killed most actions.
+//
+// The deterministic engine already treats this cap as a bound to clamp to
+// (applyBidDecisionLimits → limitChange), not as a validity check. This makes
+// the AI path behave the same way.
+//
+// Returns the bid to use and a note when it differs from what was proposed;
+// an empty note means the proposal was already inside the limit.
+func ozonAIClampBidToChangeLimit(currentBid, proposedBid, maxChangePercent float64) (float64, string) {
+	if maxChangePercent <= 0 || currentBid <= 0 || proposedBid <= 0 {
+		return proposedBid, ""
+	}
+	maxDelta := currentBid * maxChangePercent / 100
+	delta := proposedBid - currentBid
+
+	var clamped float64
+	switch {
+	case delta > maxDelta:
+		clamped = currentBid + maxDelta
+	case delta < -maxDelta:
+		clamped = currentBid - maxDelta
+	default:
+		return proposedBid, ""
+	}
+	// Round toward the CURRENT bid, never away from it: rounding outward would
+	// step back over the very limit being enforced.
+	if delta > 0 {
+		clamped = math.Floor(clamped)
+	} else {
+		clamped = math.Ceil(clamped)
+	}
+	if clamped == currentBid || clamped <= 0 {
+		// The limit leaves no room for a whole-ruble step in that direction.
+		return proposedBid, ""
+	}
+	return clamped, fmt.Sprintf(
+		"предложено %.2f₽ (%.1f%%), ограничено шагом %.1f%% до %.2f₽",
+		proposedBid, (proposedBid-currentBid)/currentBid*100, maxChangePercent, clamped,
+	)
+}
