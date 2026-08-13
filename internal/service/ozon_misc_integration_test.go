@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -302,7 +303,7 @@ func TestSellicoEconomics_ConfiguredAndSyncOzon(t *testing.T) {
 	client := &fakeSellicoEconomics{rows: []sellico.WBUnitEconomics{
 		{OfferID: "ART-1", CostPrice: 100, Source: "sellico"},
 		{OfferID: "ART-2", CostPrice: 250},
-		{OfferID: "", CostPrice: 50},  // skipped (no offer)
+		{OfferID: "", CostPrice: 50},     // skipped (no offer)
 		{OfferID: "ART-3", CostPrice: 0}, // skipped (no cost)
 	}}
 
@@ -394,4 +395,97 @@ func TestOzonRepricer_CompetitorFollowAuto(t *testing.T) {
 	require.Len(t, changes, 1)
 	assert.Equal(t, domain.OzonPriceStatusApplied, changes[0].Status)
 	assert.Less(t, changes[0].NewPriceRub, 1000.0)
+}
+
+// TestStrategyDeleteIsAuditedAndRestorable — удаление стратегии должно
+// оставлять в журнале снимок, достаточный для её воссоздания.
+//
+// Поводом стал реальный случай: стратегия ozon_ai_autopilot исчезла, ИИ
+// замолчал, и двое суток ушло на выяснение причины — потому что операции со
+// стратегиями не журналировались вообще.
+func TestStrategyDeleteIsAuditedAndRestorable(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "strategy-audit")
+	defer cleanup()
+	ctx := context.Background()
+	svc := NewStrategyService(fx.db.Queries)
+	actor := uuid.New()
+
+	created, err := svc.Create(ctx, fx.workspaceID, actor, domain.Strategy{
+		SellerCabinetID: fx.cabinetID,
+		Name:            "ИИ-автопилот",
+		Type:            domain.StrategyTypeOzonAIAutopilot,
+		IsActive:        true,
+		Params:          domain.StrategyParams{TargetACoS: 15, AutomationLevel: 1, MinBid: 5, MaxBid: 500},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Delete(ctx, fx.workspaceID, created.ID, actor))
+
+	var action, entityType string
+	var userID pgtype.UUID
+	var meta []byte
+	err = fx.db.Pool.QueryRow(ctx,
+		`SELECT action, entity_type, user_id, metadata FROM audit_logs
+		  WHERE entity_id = $1 AND action = 'delete_strategy'`, uuidToPgtype(created.ID)).
+		Scan(&action, &entityType, &userID, &meta)
+	require.NoError(t, err, "удаление обязано попасть в журнал")
+	assert.Equal(t, "strategy", entityType)
+	assert.Equal(t, actor, uuidFromPgtype(userID), "должно быть видно, КТО удалил")
+
+	// Снимка должно хватать, чтобы создать стратегию заново.
+	var snapshot struct {
+		Name     string                `json:"name"`
+		Type     string                `json:"type"`
+		IsActive bool                  `json:"is_active"`
+		Params   domain.StrategyParams `json:"params"`
+	}
+	require.NoError(t, json.Unmarshal(meta, &snapshot))
+	assert.Equal(t, "ИИ-автопилот", snapshot.Name)
+	assert.Equal(t, domain.StrategyTypeOzonAIAutopilot, snapshot.Type)
+	assert.True(t, snapshot.IsActive)
+	assert.EqualValues(t, 15, snapshot.Params.TargetACoS)
+	assert.EqualValues(t, 1, snapshot.Params.AutomationLevel)
+}
+
+// Изменение уровня автоматизации меняет поведение молча — в журнале обязано
+// остаться прежнее значение.
+func TestStrategyUpdateRecordsPreviousLevel(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "strategy-audit-upd")
+	defer cleanup()
+	ctx := context.Background()
+	svc := NewStrategyService(fx.db.Queries)
+	actor := uuid.New()
+
+	created, err := svc.Create(ctx, fx.workspaceID, actor, domain.Strategy{
+		SellerCabinetID: fx.cabinetID,
+		Name:            "тест",
+		Type:            domain.StrategyTypeOzonCPCTargetDRR,
+		IsActive:        true,
+		Params:          domain.StrategyParams{TargetACoS: 15, AutomationLevel: 1, MinBid: 5, MaxBid: 500},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.Update(ctx, fx.workspaceID, created.ID, actor, domain.Strategy{
+		SellerCabinetID: fx.cabinetID,
+		Name:            "тест",
+		Type:            domain.StrategyTypeOzonCPCTargetDRR,
+		IsActive:        true,
+		Params:          domain.StrategyParams{TargetACoS: 15, AutomationLevel: 3, MinBid: 5, MaxBid: 500},
+	})
+	require.NoError(t, err)
+
+	var meta []byte
+	require.NoError(t, fx.db.Pool.QueryRow(ctx,
+		`SELECT metadata FROM audit_logs WHERE entity_id = $1 AND action = 'update_strategy'`,
+		uuidToPgtype(created.ID)).Scan(&meta))
+
+	var record struct {
+		WasAutomationLevel int `json:"was_automation_level"`
+		Params             struct {
+			AutomationLevel int `json:"automation_level"`
+		} `json:"params"`
+	}
+	require.NoError(t, json.Unmarshal(meta, &record))
+	assert.Equal(t, 1, record.WasAutomationLevel, "прежний уровень «Тень» обязан остаться в журнале")
+	assert.Equal(t, 3, record.Params.AutomationLevel)
 }

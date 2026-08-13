@@ -20,12 +20,12 @@ import (
 )
 
 type strategyServicer interface {
-	Create(ctx context.Context, workspaceID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
+	Create(ctx context.Context, workspaceID, actorID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
 	Get(ctx context.Context, workspaceID, strategyID uuid.UUID) (*domain.Strategy, error)
 	List(ctx context.Context, workspaceID uuid.UUID, sellerCabinetID *uuid.UUID, limit, offset int32) ([]domain.Strategy, error)
 	ListShadowDecisions(ctx context.Context, workspaceID, strategyID uuid.UUID, limit, offset int32) ([]domain.BidDecisionObservation, error)
-	Update(ctx context.Context, workspaceID, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
-	Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error
+	Update(ctx context.Context, workspaceID, strategyID, actorID uuid.UUID, input domain.Strategy) (*domain.Strategy, error)
+	Delete(ctx context.Context, workspaceID, strategyID, actorID uuid.UUID) error
 	AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error)
 	DetachBinding(ctx context.Context, workspaceID, bindingID uuid.UUID) error
 	Activity(ctx context.Context, workspaceID, strategyID uuid.UUID) (*domain.StrategyActivity, error)
@@ -166,7 +166,8 @@ func (h *StrategyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	strategy, err := h.svc.Create(r.Context(), workspaceID, input)
+	actorID, _ := middleware.UserIDFromContext(r.Context())
+	strategy, err := h.svc.Create(r.Context(), workspaceID, actorID, input)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -430,7 +431,8 @@ func (h *StrategyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	strategy, err := h.svc.Update(r.Context(), workspaceID, id, input)
+	actorID, _ := middleware.UserIDFromContext(r.Context())
+	strategy, err := h.svc.Update(r.Context(), workspaceID, id, actorID, input)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -450,7 +452,8 @@ func (h *StrategyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), workspaceID, id); err != nil {
+	actorID, _ := middleware.UserIDFromContext(r.Context())
+	if err := h.svc.Delete(r.Context(), workspaceID, id, actorID); err != nil {
 		writeAppError(w, err)
 		return
 	}

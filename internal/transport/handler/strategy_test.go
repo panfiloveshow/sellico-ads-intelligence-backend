@@ -27,7 +27,7 @@ func (m *mockStrategyService) ListShadowDecisions(ctx context.Context, workspace
 	return m.shadowDecisionsFn(ctx, workspaceID, strategyID, limit, offset)
 }
 
-func (m *mockStrategyService) Create(context.Context, uuid.UUID, domain.Strategy) (*domain.Strategy, error) {
+func (m *mockStrategyService) Create(context.Context, uuid.UUID, uuid.UUID, domain.Strategy) (*domain.Strategy, error) {
 	return nil, nil
 }
 
@@ -42,11 +42,11 @@ func (m *mockStrategyService) List(ctx context.Context, workspaceID uuid.UUID, s
 	return m.listFn(ctx, workspaceID, sellerCabinetID, limit, offset)
 }
 
-func (m *mockStrategyService) Update(context.Context, uuid.UUID, uuid.UUID, domain.Strategy) (*domain.Strategy, error) {
+func (m *mockStrategyService) Update(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, domain.Strategy) (*domain.Strategy, error) {
 	return nil, nil
 }
 
-func (m *mockStrategyService) Delete(context.Context, uuid.UUID, uuid.UUID) error {
+func (m *mockStrategyService) Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 

@@ -62,7 +62,7 @@ func NewStrategyService(queries *sqlcgen.Queries) *StrategyService {
 	return &StrategyService{queries: queries}
 }
 
-func (s *StrategyService) Create(ctx context.Context, workspaceID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+func (s *StrategyService) Create(ctx context.Context, workspaceID, actorID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
 	if err := validateStrategyForSave(input); err != nil {
 		return nil, err
 	}
@@ -95,6 +95,20 @@ func (s *StrategyService) Create(ctx context.Context, workspaceID uuid.UUID, inp
 	}
 
 	result := strategyFromSqlc(row)
+	writeAuditLog(ctx, s.queries, sqlcgen.CreateAuditLogParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		UserID:      uuidToPgtype(actorID),
+		Action:      "create_strategy",
+		EntityType:  "strategy",
+		EntityID:    row.ID,
+		Metadata: mustJSON(map[string]any{
+			"name":              result.Name,
+			"type":              result.Type,
+			"is_active":         result.IsActive,
+			"params":            result.Params,
+			"seller_cabinet_id": result.SellerCabinetID.String(),
+		}),
+	})
 	return &result, nil
 }
 
@@ -142,7 +156,10 @@ func (s *StrategyService) List(ctx context.Context, workspaceID uuid.UUID, selle
 	return result, nil
 }
 
-func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID, actorID uuid.UUID, input domain.Strategy) (*domain.Strategy, error) {
+	// Снимок «до» — в журнал попадает и прежнее состояние, иначе непонятно,
+	// что именно изменили.
+	before, _ := s.Get(ctx, workspaceID, strategyID)
 	if err := validateStrategyForSave(input); err != nil {
 		return nil, err
 	}
@@ -196,6 +213,27 @@ func (s *StrategyService) Update(ctx context.Context, workspaceID, strategyID uu
 	}
 
 	result := strategyFromSqlc(row)
+	meta := map[string]any{
+		"name":      result.Name,
+		"type":      result.Type,
+		"is_active": result.IsActive,
+		"params":    result.Params,
+	}
+	if before != nil {
+		// Уровень автоматизации и активность — то, ради чего чаще всего лезут
+		// в стратегию, и то, что молча меняет её поведение.
+		meta["was_active"] = before.IsActive
+		meta["was_automation_level"] = before.Params.AutomationLevel
+		meta["was_params"] = before.Params
+	}
+	writeAuditLog(ctx, s.queries, sqlcgen.CreateAuditLogParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		UserID:      uuidToPgtype(actorID),
+		Action:      "update_strategy",
+		EntityType:  "strategy",
+		EntityID:    row.ID,
+		Metadata:    mustJSON(meta),
+	})
 	return &result, nil
 }
 
@@ -433,11 +471,49 @@ func validatePriceStrategy(input domain.Strategy) error {
 	return nil
 }
 
-func (s *StrategyService) Delete(ctx context.Context, workspaceID, strategyID uuid.UUID) error {
-	return s.queries.DeleteStrategyInWorkspace(ctx, sqlcgen.DeleteStrategyInWorkspaceParams{
+// Delete removes a strategy and records a FULL snapshot of it in the audit log
+// first. That snapshot is the whole point: deleting a strategy silently stops
+// the automation behind it, and until now nothing recorded who did it or what
+// was lost — an ozon_ai_autopilot strategy disappeared and two days went into
+// finding out why the AI had gone quiet. The metadata here is enough to
+// recreate the strategy exactly.
+func (s *StrategyService) Delete(ctx context.Context, workspaceID, strategyID, actorID uuid.UUID) error {
+	// Snapshot BEFORE the delete — afterwards there is nothing left to read.
+	snapshot, _ := s.Get(ctx, workspaceID, strategyID)
+
+	if err := s.queries.DeleteStrategyInWorkspace(ctx, sqlcgen.DeleteStrategyInWorkspaceParams{
 		ID:          uuidToPgtype(strategyID),
 		WorkspaceID: uuidToPgtype(workspaceID),
+	}); err != nil {
+		return err
+	}
+
+	meta := map[string]any{"strategy_id": strategyID.String()}
+	if snapshot != nil {
+		meta["name"] = snapshot.Name
+		meta["type"] = snapshot.Type
+		meta["is_active"] = snapshot.IsActive
+		meta["params"] = snapshot.Params
+		meta["seller_cabinet_id"] = snapshot.SellerCabinetID.String()
+		bindings := make([]string, 0, len(snapshot.Bindings))
+		for _, b := range snapshot.Bindings {
+			if b.OzonCampaignID != nil {
+				bindings = append(bindings, b.OzonCampaignID.String())
+			} else if b.CampaignID != nil {
+				bindings = append(bindings, b.CampaignID.String())
+			}
+		}
+		meta["bindings"] = bindings
+	}
+	writeAuditLog(ctx, s.queries, sqlcgen.CreateAuditLogParams{
+		WorkspaceID: uuidToPgtype(workspaceID),
+		UserID:      uuidToPgtype(actorID),
+		Action:      "delete_strategy",
+		EntityType:  "strategy",
+		EntityID:    uuidToPgtype(strategyID),
+		Metadata:    mustJSON(meta),
 	})
+	return nil
 }
 
 func (s *StrategyService) AttachBinding(ctx context.Context, workspaceID, strategyID uuid.UUID, campaignID, productID *uuid.UUID) (*domain.StrategyBinding, error) {
