@@ -2,6 +2,7 @@ package sqlcgen
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -17,4 +18,21 @@ func (q *Queries) GetLastCompletedAIRunAt(ctx context.Context, sellerCabinetID p
 	var finishedAt pgtype.Timestamptz
 	err := row.Scan(&finishedAt)
 	return finishedAt, err
+}
+
+// ExpireStaleAIRuns closes ai_runs left in 'running' by a worker that died
+// mid-flight — a deploy restart is enough. Nothing ever reset them, so the row
+// stayed 'running' forever and the UI kept showing «Выполняется» for a run that
+// had been dead for days. Returns how many were closed.
+func (q *Queries) ExpireStaleAIRuns(ctx context.Context, olderThan time.Time) (int64, error) {
+	tag, err := q.db.Exec(ctx,
+		`UPDATE ai_runs
+		    SET status = 'failed',
+		        error = COALESCE(error, 'Прогон прерван: воркер остановлен во время выполнения'),
+		        finished_at = COALESCE(finished_at, now())
+		  WHERE status = 'running' AND started_at < $1`, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

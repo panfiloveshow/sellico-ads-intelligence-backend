@@ -829,7 +829,11 @@ func (p *Processor) HandleOzonAISweep(ctx context.Context, _ *asynq.Task) error 
 		}
 		enqueued++
 	}
-	p.logger.Info().Int("cabinets", len(cabinetIDs)).Int("enqueued", enqueued).Msg("ozon ai sweep scheduled")
+	p.logger.Info().
+		Int("cabinets", len(cabinetIDs)).
+		Int("enqueued", enqueued).
+		Int("deduped", len(cabinetIDs)-enqueued).
+		Msg("ozon ai sweep scheduled")
 	return nil
 }
 

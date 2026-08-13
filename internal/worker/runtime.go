@@ -417,6 +417,11 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 	}, nil
 }
 
+// aiRunStaleAfter is when a still-'running' AI run is treated as dead. The
+// task itself is capped at 45 minutes, so anything past an hour cannot be
+// alive — it is a row left behind by a restart.
+const aiRunStaleAfter = time.Hour
+
 func (r *Runtime) Start() error {
 	metricsCtx, cancel := context.WithCancel(context.Background())
 	r.metricsCancel = cancel
@@ -428,6 +433,16 @@ func (r *Runtime) Start() error {
 			r.logger.Warn().Err(err).Msg("failed to expire stale job runs")
 		} else if expired > 0 {
 			r.logger.Warn().Int64("expired", expired).Msg("expired stale job runs on worker startup")
+		}
+
+		// Same treatment for AI runs. A deploy that restarts the worker mid-run
+		// used to leave the row 'running' forever: the UI showed «Выполняется»
+		// for a dead run, and the two-hour min-gap guard — which only looks at
+		// COMPLETED runs — silently stopped counting from it.
+		if staleAI, err := r.queries.ExpireStaleAIRuns(metricsCtx, time.Now().UTC().Add(-aiRunStaleAfter)); err != nil {
+			r.logger.Warn().Err(err).Msg("failed to expire stale ai runs")
+		} else if staleAI > 0 {
+			r.logger.Warn().Int64("expired", staleAI).Msg("expired stale ai runs on worker startup")
 		}
 	}
 
