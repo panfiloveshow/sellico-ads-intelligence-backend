@@ -158,11 +158,12 @@ func main() {
 	// AI manager in the API process serves listings + copilot approvals; the
 	// LLM client is only used by the worker, so it may be disabled here.
 	ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonCampaignActionsService, llm.NewClient(llm.Config{
-		BaseURL:   cfg.LLMBaseURL,
-		APIKey:    cfg.LLMAPIKey,
-		Model:     cfg.LLMModel,
-		Timeout:   cfg.LLMTimeout,
-		MaxTokens: cfg.LLMMaxTokens,
+		BaseURL:        cfg.LLMBaseURL,
+		APIKey:         cfg.LLMAPIKey,
+		Model:          cfg.LLMModel,
+		FallbackModels: cfg.LLMFallbackModels,
+		Timeout:        cfg.LLMTimeout,
+		MaxTokens:      cfg.LLMMaxTokens,
 	}, deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)

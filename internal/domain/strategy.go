@@ -82,6 +82,48 @@ const (
 	StrategyTypeOzonPricePeakHours = "ozon_price_peak_hours"
 )
 
+// KnownStrategyTypes is every type the API accepts, in one place.
+//
+// It exists because the transport-layer validator carried its own hand-written
+// whitelist of SIX types while the database CHECK constraint allowed fourteen.
+// ozon_ai_autopilot was missing from it, so every attempt to save the AI
+// strategy — including changing its automation level — came back 400 and the
+// level silently stayed on «Тень». The repricer types were missing too.
+//
+// Anything added here must also be added to the strategies_type_check
+// constraint in migrations; keeping the list next to the constants is what
+// makes the two easy to compare.
+var KnownStrategyTypes = []string{
+	StrategyTypeACoS,
+	StrategyTypeROAS,
+	StrategyTypeAntiSliv,
+	StrategyTypeDayparting,
+	StrategyTypeRecommendation,
+	StrategyTypeSearchPlaybook,
+	StrategyTypePriceMarginFloor,
+	StrategyTypePriceInventoryDemand,
+	StrategyTypePriceAdLinked,
+	StrategyTypePricePeakHours,
+	StrategyTypePriceCompetitorFollow,
+	StrategyTypeOzonCPCTargetDRR,
+	StrategyTypeOzonAIAutopilot,
+	StrategyTypeOzonPriceMarginFloor,
+	StrategyTypeOzonPriceCompetitorFollow,
+	StrategyTypeOzonPriceInventoryDemand,
+	StrategyTypeOzonPriceAdLinked,
+	StrategyTypeOzonPricePeakHours,
+}
+
+// IsKnownStrategyType reports whether the API may accept this type at all.
+func IsKnownStrategyType(strategyType string) bool {
+	for _, known := range KnownStrategyTypes {
+		if known == strategyType {
+			return true
+		}
+	}
+	return false
+}
+
 // IsOzonStrategy reports whether a strategy type belongs to the Ozon module.
 // WB bid automation and the WB repricer must skip these.
 func IsOzonStrategy(strategyType string) bool {

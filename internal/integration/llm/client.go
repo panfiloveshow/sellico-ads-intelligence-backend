@@ -46,6 +46,11 @@ const (
 // timeouts) — callers can present them as "повторим позже", not as errors.
 var ErrTransient = errors.New("transient llm failure")
 
+// ErrModelUnavailable marks a model the provider is not serving right now
+// (HTTP 404 on chat/completions). Distinct from ErrTransient: retrying the same
+// model does not help, switching models does.
+var ErrModelUnavailable = errors.New("llm model unavailable")
+
 // Config configures the client; zero fields fall back to the defaults above.
 // An empty APIKey means "AI disabled": Enabled() reports false and every call
 // fails fast without touching the network.
@@ -53,8 +58,14 @@ type Config struct {
 	BaseURL   string
 	APIKey    string
 	Model     string
-	Timeout   time.Duration
-	MaxTokens int
+	// FallbackModels are tried, in order, when the primary model is not
+	// available. NVIDIA's free tier unloads models and answers 404 for hours:
+	// half of the AI runs died on «returned 404» while the same model worked
+	// again later. A 404 is not a bad request here — it means «this model is
+	// not being served right now», and the only useful answer is another model.
+	FallbackModels []string
+	Timeout        time.Duration
+	MaxTokens      int
 }
 
 // Client is a minimal OpenAI-compatible chat completions client.
@@ -201,12 +212,39 @@ type wireResponse struct {
 // ChatCompletion executes POST {base}/chat/completions and returns the first
 // choice. 429 and 5xx responses are retried with exponential backoff (max 3
 // attempts total), honoring Retry-After when the server sends one.
+// ChatCompletion sends one completion, walking the model list when a model is
+// unavailable. Retries on 429/5xx happen inside chatOnce per model.
 func (c *Client) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("llm: client is disabled (no API key configured)")
 	}
+	models := append([]string{c.cfg.Model}, c.cfg.FallbackModels...)
+	var lastErr error
+	for i, model := range models {
+		resp, err := c.chatOnce(ctx, model, req)
+		if err == nil {
+			if i > 0 {
+				c.logger.Warn().
+					Str("primary", c.cfg.Model).
+					Str("used", model).
+					Msg("primary llm model unavailable; answered by fallback")
+			}
+			return resp, nil
+		}
+		lastErr = err
+		// Дальше по списку идём только когда модель именно недоступна.
+		// Прочие 4xx — наша ошибка в запросе, её сменой модели не исправить.
+		if !errors.Is(err, ErrModelUnavailable) {
+			return nil, err
+		}
+		c.logger.Warn().Err(err).Str("model", model).Msg("llm model unavailable; trying next")
+	}
+	return nil, lastErr
+}
+
+func (c *Client) chatOnce(ctx context.Context, model string, req ChatRequest) (*ChatResponse, error) {
 	body, err := json.Marshal(wireRequest{
-		Model:      c.cfg.Model,
+		Model:      model,
 		Messages:   req.Messages,
 		Tools:      req.Tools,
 		ToolChoice: req.ToolChoice,
@@ -265,6 +303,10 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResp
 				}
 			}
 			continue
+		case resp.StatusCode == http.StatusNotFound:
+			// Провайдер выгрузил модель. Повторять тот же запрос бессмысленно —
+			// отвечает часами; помогает только другая модель.
+			return nil, fmt.Errorf("%w: %s returned 404: %s", ErrModelUnavailable, url, truncate(string(respBody), 300))
 		case resp.StatusCode >= 400:
 			return nil, fmt.Errorf("llm: %s returned %d: %s", url, resp.StatusCode, truncate(string(respBody), 500))
 		}

@@ -130,11 +130,12 @@ func main() {
 	// module is otherwise fully absent (no handlers, no cron entries).
 	if cfg.LLMAPIKey != "" {
 		llmClient := llm.NewClient(llm.Config{
-			BaseURL:   cfg.LLMBaseURL,
-			APIKey:    cfg.LLMAPIKey,
-			Model:     cfg.LLMModel,
-			Timeout:   cfg.LLMTimeout,
-			MaxTokens: cfg.LLMMaxTokens,
+			BaseURL:        cfg.LLMBaseURL,
+			APIKey:         cfg.LLMAPIKey,
+			Model:          cfg.LLMModel,
+			FallbackModels: cfg.LLMFallbackModels,
+			Timeout:        cfg.LLMTimeout,
+			MaxTokens:      cfg.LLMMaxTokens,
 		}, deps.Logger)
 		ozonActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 		ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonActionsService, llmClient, []byte(cfg.EncryptionKey), deps.Logger)

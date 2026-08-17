@@ -57,15 +57,11 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 	if input.SellerCabinetID == uuid.Nil {
 		errors["seller_cabinet_id"] = "is required"
 	}
-	switch input.Type {
-	case domain.StrategyTypeACoS,
-		domain.StrategyTypeROAS,
-		domain.StrategyTypeAntiSliv,
-		domain.StrategyTypeDayparting,
-		domain.StrategyTypeSearchPlaybook,
-		domain.StrategyTypeOzonCPCTargetDRR:
-	default:
-		errors["type"] = "must be one of: acos, roas, anti_sliv, dayparting, search_playbook, ozon_cpc_target_drr"
+	// Единый список типов живёт в домене рядом с константами: свой список здесь
+	// уже привёл к тому, что ozon_ai_autopilot не проходил валидацию и уровень
+	// автоматизации молча не сохранялся.
+	if !domain.IsKnownStrategyType(input.Type) {
+		errors["type"] = "must be one of: " + strings.Join(domain.KnownStrategyTypes, ", ")
 	}
 	params := input.Params
 	if params.MinBid < 0 {
@@ -135,8 +131,8 @@ func validateStrategyInput(input domain.Strategy) map[string]string {
 		if params.MaxACoS <= 0 {
 			errors["params.max_acos"] = "must be greater than 0"
 		}
-	case domain.StrategyTypeOzonCPCTargetDRR:
-		// target_acos doubles as the target ДРР for the Ozon strategy.
+	case domain.StrategyTypeOzonCPCTargetDRR, domain.StrategyTypeOzonAIAutopilot:
+		// target_acos doubles as the target ДРР for both Ozon bid strategies.
 		if params.TargetACoS <= 0 || params.TargetACoS > 1000 {
 			errors["params.target_acos"] = "must be greater than 0 and at most 1000"
 		}

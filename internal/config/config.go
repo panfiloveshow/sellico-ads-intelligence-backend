@@ -55,11 +55,14 @@ type Config struct {
 	// Empty LLM_API_KEY disables the AI module entirely (no scheduling, runs
 	// recorded as 'skipped'). The default free-tier provider has multi-minute
 	// latency per request — hence the 10m default timeout.
-	LLMBaseURL   string        // env: LLM_BASE_URL, default: "https://integrate.api.nvidia.com/v1"
-	LLMAPIKey    string        // env: LLM_API_KEY, empty = AI disabled
-	LLMModel     string        // env: LLM_MODEL, default: "z-ai/glm-5.2"
-	LLMTimeout   time.Duration // env: LLM_TIMEOUT, default: 10m
-	LLMMaxTokens int           // env: LLM_MAX_TOKENS, default: 8192
+	LLMBaseURL string // env: LLM_BASE_URL, default: "https://integrate.api.nvidia.com/v1"
+	LLMAPIKey  string // env: LLM_API_KEY, empty = AI disabled
+	LLMModel   string // env: LLM_MODEL, default: "z-ai/glm-5.2"
+	// LLMFallbackModels — модели, на которые переходим, когда основная отвечает
+	// 404 (провайдер её выгрузил). env: LLM_FALLBACK_MODELS, через запятую.
+	LLMFallbackModels []string
+	LLMTimeout        time.Duration // env: LLM_TIMEOUT, default: 10m
+	LLMMaxTokens      int           // env: LLM_MAX_TOKENS, default: 8192
 
 	// WB Catalog Parser
 	WBParserMinDelay time.Duration // env: WB_PARSER_MIN_DELAY, default: 2s
@@ -157,6 +160,7 @@ func Load() *Config {
 		LLMBaseURL:                         getEnvOrDefault("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
 		LLMAPIKey:                          getEnvOrDefault("LLM_API_KEY", ""),
 		LLMModel:                           getEnvOrDefault("LLM_MODEL", "z-ai/glm-5.2"),
+		LLMFallbackModels:                  splitAndTrim(getEnvOrDefault("LLM_FALLBACK_MODELS", "openai/gpt-oss-20b,z-ai/glm-5.2")),
 		LLMTimeout:                         getEnvAsDuration("LLM_TIMEOUT", 10*time.Minute),
 		LLMMaxTokens:                       getEnvAsInt("LLM_MAX_TOKENS", 8192),
 		WBParserMinDelay:                   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),
@@ -312,4 +316,17 @@ func getEnvAsSlice(key, sep string) []string {
 		return nil
 	}
 	return result
+}
+
+// splitAndTrim разбирает список через запятую, отбрасывая пустые элементы.
+// Используется для LLM_FALLBACK_MODELS.
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

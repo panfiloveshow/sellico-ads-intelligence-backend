@@ -139,3 +139,61 @@ func TestChatCompletion_Disabled(t *testing.T) {
 	_, err := client.ChatCompletion(context.Background(), ChatRequest{})
 	require.Error(t, err)
 }
+
+// 404 означает «провайдер сейчас не отдаёт эту модель», а не ошибку запроса:
+// половина прогонов ИИ гибла на «returned 404», хотя та же модель работала
+// часом позже. Переход на следующую модель обязателен.
+func TestChatCompletionFallsBackWhenModelUnavailable(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Model string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		asked = append(asked, body.Model)
+		if body.Model == "gone/model" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ок"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		BaseURL:        srv.URL,
+		APIKey:         "k",
+		Model:          "gone/model",
+		FallbackModels: []string{"alive/model"},
+	}, zerolog.Nop())
+
+	resp, err := client.ChatCompletion(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "привет"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ок", resp.Message.Content)
+	assert.Equal(t, []string{"gone/model", "alive/model"}, asked,
+		"после 404 обязан быть запрос к запасной модели")
+}
+
+// Прочие 4xx сменой модели не лечатся — это ошибка нашего запроса.
+func TestChatCompletionDoesNotFallBackOnBadRequest(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"bad tools schema"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{
+		BaseURL:        srv.URL,
+		APIKey:         "k",
+		Model:          "primary/model",
+		FallbackModels: []string{"alive/model"},
+	}, zerolog.Nop())
+
+	_, err := client.ChatCompletion(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "привет"}},
+	})
+	require.Error(t, err)
+	assert.Equal(t, 1, calls, "400 не должен приводить к перебору моделей")
+}
