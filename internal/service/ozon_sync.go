@@ -168,6 +168,14 @@ func (s *OzonSyncService) SyncCampaigns(ctx context.Context, cabinet domain.Sell
 			return fmt.Errorf("upsert campaign %d: %w", campaign.ID, upsertErr)
 		}
 
+		// Архивные и завершённые кампании товаров уже не отдают: Ozon отвечает
+		// 400 «Кампания не найдена». Это давало 67 бесполезных запросов в
+		// сутки, а с 25.08.2026 Performance API считает запросы по квотам —
+		// каждый такой отказ будет тратить лимит живых кампаний.
+		if ozonCampaignSyncSkipsProducts(campaign.State) {
+			continue
+		}
+
 		products, productsErr := s.perfClient.ListCampaignProducts(ctx, ozonClientCreds(creds), campaign.ID)
 		if productsErr != nil {
 			// Products are best-effort per campaign (some types have none).
@@ -698,4 +706,15 @@ func pgNumericToFloatPtr(numeric pgtype.Numeric) *float64 {
 	}
 	value := pgNumericToFloat(numeric)
 	return &value
+}
+
+// ozonCampaignSyncSkipsProducts reports whether a campaign in this state can
+// still return products. Archived and finished campaigns cannot: the
+// Performance API answers 400 «Кампания не найдена» for them.
+func ozonCampaignSyncSkipsProducts(state string) bool {
+	switch strings.ToUpper(strings.TrimSpace(state)) {
+	case "CAMPAIGN_STATE_ARCHIVED", "CAMPAIGN_STATE_FINISHED":
+		return true
+	}
+	return false
 }

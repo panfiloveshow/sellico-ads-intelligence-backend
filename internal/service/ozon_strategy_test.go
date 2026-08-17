@@ -117,3 +117,21 @@ func TestWBAutomationSkipsOzonStrategies(t *testing.T) {
 		t.Fatal("ozon strategy must not be classified as a price strategy")
 	}
 }
+
+// Архивные кампании товаров не отдают — Ozon отвечает 400 «Кампания не
+// найдена». До этой проверки синк тратил на них 67 запросов в сутки, а с
+// 25.08.2026 Performance API считает запросы по квотам.
+func TestOzonCampaignSyncSkipsProducts(t *testing.T) {
+	skipped := []string{"CAMPAIGN_STATE_ARCHIVED", "CAMPAIGN_STATE_FINISHED", "campaign_state_archived", " CAMPAIGN_STATE_ARCHIVED "}
+	for _, state := range skipped {
+		if !ozonCampaignSyncSkipsProducts(state) {
+			t.Fatalf("состояние %q обязано пропускаться", state)
+		}
+	}
+	polled := []string{"CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_INACTIVE", "CAMPAIGN_STATE_PLANNED", ""}
+	for _, state := range polled {
+		if ozonCampaignSyncSkipsProducts(state) {
+			t.Fatalf("состояние %q обязано опрашиваться: остановленную кампанию можно запустить снова", state)
+		}
+	}
+}
