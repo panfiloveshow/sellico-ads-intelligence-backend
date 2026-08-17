@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -378,6 +379,27 @@ type cabinetMargin struct {
 // loadCabinetMargin computes the turnover-weighted average margin. SKUs whose
 // cost is unknown are excluded from the average and counted against coverage,
 // so a cabinet with mostly unpriced goods cannot produce a confident ceiling.
+// loadBuyoutPercent returns the measured buyout for a cabinet, falling back to
+// the configured (or default) assumption when the postings sample is too thin
+// or has not been collected yet.
+func loadBuyoutPercent(
+	ctx context.Context,
+	queries *sqlcgen.Queries,
+	cabinetID uuid.UUID,
+	configured float64,
+) (float64, string) {
+	total, cancelled, err := queries.GetOzonCancellationCounts(ctx, uuidToPgtype(cabinetID))
+	if err == nil {
+		if measured, ok := ozonMeasuredBuyoutPercent(int(total), int(cancelled)); ok {
+			return measured, "measured"
+		}
+	}
+	if configured > 0 && configured <= 100 {
+		return configured, "configured"
+	}
+	return defaultExpectedBuyoutPercent, "assumed"
+}
+
 func loadCabinetMargin(
 	ctx context.Context,
 	queries *sqlcgen.Queries,
@@ -493,4 +515,35 @@ func totalDRRIncreaseBlockReason(maxTotalDRR *float64, total totalDRR) string {
 		"ДРР от общего оборота %.2f%% достиг потолка %.2f%% — повышение заблокировано",
 		total.Value, *maxTotalDRR,
 	)
+}
+
+// --- Измеренная доля отмен ---
+
+// ozonPostingCancelled reports whether a posting status means the order was
+// cancelled. Ozon's statuses for FBS/rFBS include awaiting_registration,
+// awaiting_deliver, delivering, delivered, cancelled and not_accepted; only the
+// last two mean the goods never reached the customer.
+func ozonPostingCancelled(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "cancelled", "canceled", "not_accepted":
+		return true
+	}
+	return false
+}
+
+// ozonMeasuredBuyoutPercent turns counted postings into a buyout percentage.
+//
+// It is an UPPER bound: postings statuses capture cancellations, not returns
+// after delivery — those need /v1/returns/list. Still strictly better than the
+// blind 90 % the ceiling used to assume.
+//
+// Below minPostingsForBuyout the sample is too thin to beat the default, so the
+// caller keeps its configured value.
+const minPostingsForBuyout = 50
+
+func ozonMeasuredBuyoutPercent(total, cancelled int) (float64, bool) {
+	if total < minPostingsForBuyout || cancelled < 0 || cancelled > total {
+		return 0, false
+	}
+	return roundRub(float64(total-cancelled) / float64(total) * 100), true
 }

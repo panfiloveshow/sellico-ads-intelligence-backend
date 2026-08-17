@@ -569,6 +569,19 @@ func (s *OzonSyncService) SyncPostings(ctx context.Context, cabinet domain.Selle
 	if err != nil {
 		return fmt.Errorf("posting list: %w", err)
 	}
+	// Отправления уже здесь — считаем по ним долю отмен. Раньше поправка на
+	// выкуп в потолке ДРР была допущением в 90 %, проверить которое было нечем.
+	cancelled := 0
+	for _, posting := range postings {
+		if ozonPostingCancelled(posting.Status) {
+			cancelled++
+		}
+	}
+	if err := s.queries.UpsertOzonCancellationRate(ctx, uuidToPgtype(cabinet.ID),
+		int32(ozonPostingsWindowDays), clampInt32(int64(len(postings))), clampInt32(int64(cancelled))); err != nil {
+		s.logger.Warn().Err(err).Msg("failed to store ozon cancellation rate")
+	}
+
 	rows := aggregateOzonPostings(postings)
 	// An empty pull still rewrites (clears) the heatmap: keeping a stale
 	// matrix would silently drive the peak-hours strategy on dead data.
@@ -579,6 +592,7 @@ func (s *OzonSyncService) SyncPostings(ctx context.Context, cabinet domain.Selle
 	s.logger.Info().
 		Str("cabinet_id", cabinet.ID.String()).
 		Int("postings", len(postings)).
+		Int("cancelled", cancelled).
 		Int("slots", len(rows)).
 		Msg("ozon postings heatmap synced")
 	return nil

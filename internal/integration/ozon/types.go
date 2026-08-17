@@ -173,6 +173,9 @@ type PostingSale struct {
 	SKU       int64
 	CreatedAt time.Time
 	Quantity  int64
+	// Status — статус отправления Ozon (delivered, cancelled, delivering и
+	// прочие). Пустая строка означает, что метод его не вернул.
+	Status string
 }
 
 // Campaign is one campaign from GET /api/client/campaign, with budgets

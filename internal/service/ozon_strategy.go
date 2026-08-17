@@ -173,8 +173,14 @@ func (s *OzonStrategyService) runStrategy(ctx context.Context, workspaceID uuid.
 	// The ceiling: whatever the strategy states outright, otherwise derived
 	// from the cabinet's own margin so nobody has to invent a percentage.
 	margin := loadCabinetMargin(ctx, s.queries, s.logger, strategy.SellerCabinetID, since)
+	// Доля выкупа берётся из измеренных отмен, когда выборка достаточна, и
+	// только иначе — из настройки или допущения.
+	buyout, buyoutSource := loadBuyoutPercent(ctx, s.queries, strategy.SellerCabinetID, params.ExpectedBuyoutPercent)
 	ceiling, ceilingSource := resolveTotalDRRCeiling(
-		params.MaxTotalDRRPercent, margin, params.TargetMarginPercent, params.ExpectedBuyoutPercent)
+		params.MaxTotalDRRPercent, margin, params.TargetMarginPercent, buyout)
+	if ceilingSource == "unit_economics" {
+		ceilingSource += "/" + buyoutSource
+	}
 
 	applied := 0
 	var bindingErrors []error

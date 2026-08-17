@@ -317,3 +317,45 @@ func TestComputeTotalDRRTodayIsNeverStale(t *testing.T) {
 		t.Fatalf("age = %v, want 0", got.AgeHours)
 	}
 }
+
+func TestOzonPostingCancelledAndMeasuredBuyout(t *testing.T) {
+	// Статусы Ozon: доставки и промежуточные состояния выкупом не считаются
+	// отменёнными, отмена и непринятие — считаются.
+	for _, s := range []string{"cancelled", "CANCELLED", " not_accepted ", "canceled"} {
+		if !ozonPostingCancelled(s) {
+			t.Fatalf("статус %q обязан считаться отменой", s)
+		}
+	}
+	for _, s := range []string{"delivered", "delivering", "awaiting_deliver", "acceptance_in_progress", ""} {
+		if ozonPostingCancelled(s) {
+			t.Fatalf("статус %q отменой не является", s)
+		}
+	}
+
+	// 1000 отправлений, 80 отменено → выкуп 92%.
+	if got, ok := ozonMeasuredBuyoutPercent(1000, 80); !ok || got != 92 {
+		t.Fatalf("получено %v (ok=%v), ожидалось 92", got, ok)
+	}
+	// Тонкая выборка не должна вытеснять настройку.
+	if _, ok := ozonMeasuredBuyoutPercent(minPostingsForBuyout-1, 0); ok {
+		t.Fatal("выборка меньше порога не должна приниматься")
+	}
+	// Порченые счётчики отбрасываются, а не дают выкуп больше 100%.
+	if _, ok := ozonMeasuredBuyoutPercent(100, 120); ok {
+		t.Fatal("отмен больше отправлений — измерение недействительно")
+	}
+}
+
+// Измеренный выкуп обязан менять потолок: при 92% он выше, чем при 90%.
+func TestMeasuredBuyoutMovesCeiling(t *testing.T) {
+	margin := cabinetMargin{WeightedMarginPct: 30, Coverage: 1}
+
+	assumed := derivedTotalDRRCeiling(margin, 10, defaultExpectedBuyoutPercent)
+	measured := derivedTotalDRRCeiling(margin, 10, 92)
+	if assumed == nil || measured == nil {
+		t.Fatal("оба потолка должны считаться")
+	}
+	if *measured <= *assumed {
+		t.Fatalf("измеренный выкуп 92%% должен давать потолок выше допущения: %v против %v", *measured, *assumed)
+	}
+}

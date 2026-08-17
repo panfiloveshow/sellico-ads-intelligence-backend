@@ -565,6 +565,15 @@ type OzonCampaignStat struct {
 	RevenueRub pgtype.Numeric `json:"revenue_rub"`
 }
 
+// Доля отменённых отправлений по кабинету за окно синка; верхняя оценка выкупа (возвраты не учтены)
+type OzonCancellationRate struct {
+	SellerCabinetID   pgtype.UUID        `json:"seller_cabinet_id"`
+	WindowDays        int32              `json:"window_days"`
+	TotalPostings     int32              `json:"total_postings"`
+	CancelledPostings int32              `json:"cancelled_postings"`
+	MeasuredAt        pgtype.Timestamptz `json:"measured_at"`
+}
+
 type OzonCpoOrder struct {
 	ID              pgtype.UUID        `json:"id"`
 	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`

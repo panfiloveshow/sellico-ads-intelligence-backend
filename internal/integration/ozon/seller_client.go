@@ -559,7 +559,10 @@ const postingsPageSize = 1000
 type postingWireItem struct {
 	InProcessAt string `json:"in_process_at"`
 	CreatedAt   string `json:"created_at"`
-	Products    []struct {
+	// Status приходил в ответе всегда, но не читался. Он и есть единственный
+	// способ измерить долю отмен, не запрашивая ничего дополнительно.
+	Status   string `json:"status"`
+	Products []struct {
 		SKU      flexInt64 `json:"sku"`
 		Quantity flexInt64 `json:"quantity"`
 	} `json:"products"`
@@ -630,6 +633,7 @@ func flattenPostings(items []postingWireItem) []PostingSale {
 				SKU:       int64(product.SKU),
 				CreatedAt: createdAt,
 				Quantity:  quantity,
+				Status:    item.Status,
 			})
 		}
 	}

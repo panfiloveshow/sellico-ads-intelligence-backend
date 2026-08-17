@@ -36,3 +36,27 @@ func (q *Queries) ExpireStaleAIRuns(ctx context.Context, olderThan time.Time) (i
 	}
 	return tag.RowsAffected(), nil
 }
+
+// UpsertOzonCancellationRate stores the measured share of cancelled postings
+// for a cabinet. Overwrites: only the latest measurement matters.
+func (q *Queries) UpsertOzonCancellationRate(ctx context.Context, cabinetID pgtype.UUID, windowDays, total, cancelled int32) error {
+	_, err := q.db.Exec(ctx,
+		`INSERT INTO ozon_cancellation_rates (seller_cabinet_id, window_days, total_postings, cancelled_postings, measured_at)
+		 VALUES ($1, $2, $3, $4, now())
+		 ON CONFLICT (seller_cabinet_id) DO UPDATE SET
+		   window_days = EXCLUDED.window_days,
+		   total_postings = EXCLUDED.total_postings,
+		   cancelled_postings = EXCLUDED.cancelled_postings,
+		   measured_at = now()`,
+		cabinetID, windowDays, total, cancelled)
+	return err
+}
+
+// GetOzonCancellationCounts returns the stored posting counts for a cabinet
+// (pgx.ErrNoRows when the postings sync has not run yet).
+func (q *Queries) GetOzonCancellationCounts(ctx context.Context, cabinetID pgtype.UUID) (total int32, cancelled int32, err error) {
+	err = q.db.QueryRow(ctx,
+		`SELECT total_postings, cancelled_postings FROM ozon_cancellation_rates WHERE seller_cabinet_id = $1`,
+		cabinetID).Scan(&total, &cancelled)
+	return total, cancelled, err
+}
