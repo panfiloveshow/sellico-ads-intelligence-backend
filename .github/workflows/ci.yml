@@ -81,7 +81,9 @@ jobs:
       - name: Run test suite
         env:
           TEST_DATABASE_URL: postgres://sellico:sellico@localhost:5432/sellico_test?sslmode=disable
-        run: go test -timeout 300s -coverprofile=coverage.out ./...
+        # Пакет service гоняет полсотни тестов против живой базы: локально ~80 с,
+        # на раннере втрое дольше. 300 с упирались не в зависший тест, а в потолок.
+        run: go test -timeout 900s -coverprofile=coverage.out ./...
 
       - name: Upload coverage artifact
         if: always()
