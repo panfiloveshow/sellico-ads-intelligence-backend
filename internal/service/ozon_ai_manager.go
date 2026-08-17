@@ -526,6 +526,12 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 			return "budget_change requires new_value"
 		}
 		current, weekly := campaignBudget(campaign)
+		if current != nil {
+			if clamped, note := ozonAIClampBudgetToChangeLimit(*current, int64(*proposal.NewValue), params.MaxChangePercent); note != "" {
+				*proposal.NewValue = float64(clamped)
+				proposal.Rationale = strings.TrimSpace(proposal.Rationale + " [" + note + "]")
+			}
+		}
 		if reason := ozonAIBudgetGuardReason(current, int64(*proposal.NewValue), weekly, params); reason != "" {
 			return reason
 		}
@@ -804,6 +810,8 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 Действия: bid_change (target: ozon_campaign_id+sku, new_value = ставка ₽), budget_change (target: ozon_campaign_id, new_value = бюджет ₽ в том поле, которое кампания уже использует), campaign_pause / campaign_activate (target: ozon_campaign_id), cpo_bid (target: sku, new_value = фикс. ставка ₽), cpo_enable / cpo_disable (target: sku).
 
 Если менять нечего — вызови submit_proposals с пустым списком proposals и объясни в summary, почему.
+
+НИКОГДА не пиши «общий ДРР». У кабинета есть кампания с названием «Общ», и «общий ДРР» неотличимо от «ДРР кампании Общ» — менеджер прочтёт не то число. Пиши полностью: либо «ДРР кампании «Общ»», либо «ДРР от общего оборота».
 
 Стиль текстов (summary, rationale, expected_effect) — их читает менеджер магазина, не программист:
 - Пиши простым деловым русским. НИКОГДА не используй имена полей и технический жаргон: вместо spend_rub — «расход», orders — «заказы», revenue_rub — «выручка», net_price — «себестоимость», SKU-кампания — «кампания».

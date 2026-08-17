@@ -203,3 +203,55 @@ func TestClampedBidPassesChangeGuard(t *testing.T) {
 		t.Fatalf("зажатая ставка всё ещё отклоняется: %s", reason)
 	}
 }
+
+// Ставка меньше ~7 ₽ не могла сдвинуться вообще: 15 % от 6 ₽ — это 90 копеек,
+// целого рубля не помещается, и предложение отклонялось. На проде такие SKU
+// стояли неподвижно: «current 6.00 → proposed 5.00» и «current 5.00 →
+// proposed 6.00» отклонялись после того, как ограничение уже было внедрено.
+func TestClampAllowsOneRubleStepOnTinyBids(t *testing.T) {
+	cases := []struct {
+		current, proposed, want float64
+	}{
+		{6, 5, 5}, // вниз: рубль — минимально возможный шаг
+		{5, 6, 6}, // вверх
+		{4, 1, 3}, // крупное предложение всё равно ужимается до рубля
+	}
+	for _, c := range cases {
+		got, note := ozonAIClampBidToChangeLimit(c.current, c.proposed, 15)
+		if note == "" {
+			t.Fatalf("ставка %.0f→%.0f: ожидалось ограничение", c.current, c.proposed)
+		}
+		if got != c.want {
+			t.Fatalf("ставка %.0f→%.0f: получено %.0f, ожидалось %.0f", c.current, c.proposed, got, c.want)
+		}
+	}
+	// Ставка 1 ₽ вниз шагнуть не может — ушла бы в ноль.
+	if got, note := ozonAIClampBidToChangeLimit(1, 0.5, 15); note != "" || got != 0.5 {
+		t.Fatalf("ставка 1₽ вниз: получено %.2f (%q), вмешиваться нельзя", got, note)
+	}
+}
+
+// Бюджеты не зажимались вовсе: «12 000 → 17 000» это 41.7 % при пределе 15 %,
+// и предложение выбрасывалось целиком.
+func TestClampBudgetToChangeLimit(t *testing.T) {
+	got, note := ozonAIClampBudgetToChangeLimit(12000, 17000, 15)
+	if note == "" {
+		t.Fatal("ожидалось ограничение бюджета")
+	}
+	if got != 13800 { // 12000 + 15 %
+		t.Fatalf("получено %d, ожидалось 13800", got)
+	}
+	// Зажатое значение обязано проходить тот же страж, который его отклонял.
+	params := domain.StrategyParams{MaxChangePercent: 15}
+	current := int64(12000)
+	if reason := ozonAIBudgetGuardReason(&current, 17000, false, params); reason == "" {
+		t.Fatal("исходное предложение должно отклоняться — иначе тест бессмыслен")
+	}
+	if reason := ozonAIBudgetGuardReason(&current, got, false, params); reason != "" {
+		t.Fatalf("зажатый бюджет всё ещё отклоняется: %s", reason)
+	}
+	// Внутри предела не трогаем.
+	if v, n := ozonAIClampBudgetToChangeLimit(12000, 13000, 15); n != "" || v != 13000 {
+		t.Fatalf("получено %d (%q), ожидалось без изменений", v, n)
+	}
+}

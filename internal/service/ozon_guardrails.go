@@ -154,12 +154,55 @@ func ozonAIClampBidToChangeLimit(currentBid, proposedBid, maxChangePercent float
 	} else {
 		clamped = math.Ceil(clamped)
 	}
-	if clamped == currentBid || clamped <= 0 {
-		// The limit leaves no room for a whole-ruble step in that direction.
+	if clamped <= 0 {
 		return proposedBid, ""
+	}
+	if clamped == currentBid {
+		// Ставка настолько мала, что процентный предел меньше рубля: 15 % от
+		// 6 ₽ — это 90 копеек. Округление съедало весь шаг, предложение
+		// возвращалось неизменным и отклонялось — такие SKU не могли
+		// сдвинуться НИКОГДА. Разрешаем ровно рубль: это минимальная
+		// возможная величина шага, и в абсолюте она ничтожна.
+		if delta > 0 {
+			clamped = currentBid + 1
+		} else {
+			clamped = currentBid - 1
+		}
+		if clamped <= 0 {
+			return proposedBid, ""
+		}
 	}
 	return clamped, fmt.Sprintf(
 		"предложено %.2f₽ (%.1f%%), ограничено шагом %.1f%% до %.2f₽",
 		proposedBid, (proposedBid-currentBid)/currentBid*100, maxChangePercent, clamped,
+	)
+}
+
+// ozonAIClampBudgetToChangeLimit is the budget counterpart of the bid clamp:
+// «12 000 → 17 000» is a 41.7 % step against a 15 % cap and used to be thrown
+// away whole. Budgets are whole rubles and large, so plain clamping is enough —
+// the sub-ruble case that bids run into cannot happen here.
+func ozonAIClampBudgetToChangeLimit(currentBudget, proposedBudget int64, maxChangePercent float64) (int64, string) {
+	if maxChangePercent <= 0 || currentBudget <= 0 || proposedBudget <= 0 {
+		return proposedBudget, ""
+	}
+	maxDelta := float64(currentBudget) * maxChangePercent / 100
+	delta := float64(proposedBudget - currentBudget)
+
+	var clamped int64
+	switch {
+	case delta > maxDelta:
+		clamped = currentBudget + int64(math.Floor(maxDelta))
+	case delta < -maxDelta:
+		clamped = currentBudget - int64(math.Floor(maxDelta))
+	default:
+		return proposedBudget, ""
+	}
+	if clamped <= 0 || clamped == currentBudget {
+		return proposedBudget, ""
+	}
+	return clamped, fmt.Sprintf(
+		"предложено %d₽ (%.1f%%), ограничено шагом %.1f%% до %d₽",
+		proposedBudget, delta/float64(currentBudget)*100, maxChangePercent, clamped,
 	)
 }
