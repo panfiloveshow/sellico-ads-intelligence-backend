@@ -73,7 +73,8 @@ jobs:
 
       - name: Apply migrations to the test database
         run: |
-          go install github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1
+          # Без тега postgres бинарь собирается без драйвера: 'unknown driver postgres'.
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1
           migrate -path migrations \
             -database "postgres://sellico:sellico@localhost:5432/sellico_test?sslmode=disable" up
 
