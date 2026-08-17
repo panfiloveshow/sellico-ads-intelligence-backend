@@ -81,8 +81,9 @@ func (h *OzonHandler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
-	items, total, err := h.svc.ListCampaignsWithStats(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	items, total, err := h.svc.ListCampaignsWithStats(r.Context(), workspaceID, cabinetID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -171,8 +172,9 @@ func (h *OzonHandler) ListPrices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
-	items, total, err := h.svc.ListPrices(r.Context(), workspaceID, cabinetID, r.URL.Query().Get("search"), int32(pg.PerPage), int32(pg.Offset()))
+	items, total, err := h.svc.ListPrices(r.Context(), workspaceID, cabinetID, r.URL.Query().Get("search"), pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -206,8 +208,9 @@ func (h *OzonHandler) ListSearchQueries(w http.ResponseWriter, r *http.Request) 
 		days = parsed
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
-	items, total, err := h.svc.ListSearchQueries(r.Context(), workspaceID, cabinetID, sku, r.URL.Query().Get("search"), days, int32(pg.PerPage), int32(pg.Offset()))
+	items, total, err := h.svc.ListSearchQueries(r.Context(), workspaceID, cabinetID, sku, r.URL.Query().Get("search"), days, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -420,7 +423,8 @@ func (h *OzonHandler) ListBidChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.actions.ListBidChanges(r.Context(), workspaceID, cabinetID, campaignID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.actions.ListBidChanges(r.Context(), workspaceID, cabinetID, campaignID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -455,7 +459,8 @@ func (h *OzonHandler) ListCPOProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.actions.ListCPOProducts(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.actions.ListCPOProducts(r.Context(), workspaceID, cabinetID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -481,7 +486,8 @@ func (h *OzonHandler) ListCPOOrders(w http.ResponseWriter, r *http.Request) {
 		days = parsed
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.svc.ListCPOOrders(r.Context(), workspaceID, cabinetID, days, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.svc.ListCPOOrders(r.Context(), workspaceID, cabinetID, days, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

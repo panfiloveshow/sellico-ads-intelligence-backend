@@ -82,12 +82,13 @@ func (h *BidHandler) ListHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	dateFrom, dateTo := parseDateRangeWithDefault(r, 30)
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
 	items, err := h.svc.ListHistory(r.Context(), workspaceID, service.BidListFilter{
 		PhraseID: phraseID,
 		DateFrom: &dateFrom,
 		DateTo:   &dateTo,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

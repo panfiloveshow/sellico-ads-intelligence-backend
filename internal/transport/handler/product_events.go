@@ -35,7 +35,8 @@ func (h *ProductEventHandler) ListByProduct(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	pg := pagination.Parse(r)
-	events, err := h.svc.ListEvents(r.Context(), productID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	events, err := h.svc.ListEvents(r.Context(), productID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -50,8 +51,9 @@ func (h *ProductEventHandler) ListByWorkspace(w http.ResponseWriter, r *http.Req
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	eventType := r.URL.Query().Get("event_type")
-	events, err := h.svc.ListEventsByWorkspace(r.Context(), workspaceID, eventType, int32(pg.PerPage), int32(pg.Offset()))
+	events, err := h.svc.ListEventsByWorkspace(r.Context(), workspaceID, eventType, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

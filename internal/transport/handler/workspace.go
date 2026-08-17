@@ -74,8 +74,9 @@ func (h *WorkspaceHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
-	workspaces, err := h.svc.List(r.Context(), userID, int32(pg.PerPage), int32(pg.Offset()))
+	workspaces, err := h.svc.List(r.Context(), userID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -119,7 +120,8 @@ func (h *WorkspaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
-	members, err := h.svc.ListMembers(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	members, err := h.svc.ListMembers(r.Context(), workspaceID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

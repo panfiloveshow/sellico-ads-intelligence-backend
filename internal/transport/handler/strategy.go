@@ -245,8 +245,9 @@ func (h *StrategyHandler) ListEvaluationRuns(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	// #nosec G115 -- pagination.Parse bounds both values to math.MaxInt32.
-	items, err := h.svc.ListEvaluationRuns(r.Context(), workspaceID, strategyID, int32(pg.PerPage), int32(pg.Offset()))
+	items, err := h.svc.ListEvaluationRuns(r.Context(), workspaceID, strategyID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -387,12 +388,13 @@ func (h *StrategyHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	sellerCabinetID, err := parseOptionalUUIDQuery(r, "seller_cabinet_id")
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, "invalid seller_cabinet_id")
 		return
 	}
-	strategies, err := h.svc.List(r.Context(), workspaceID, sellerCabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	strategies, err := h.svc.List(r.Context(), workspaceID, sellerCabinetID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

@@ -64,6 +64,7 @@ func (h *RecommendationHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	taskFilters, err := recommendationTaskFiltersFromQuery(r)
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, err.Error())
@@ -79,7 +80,7 @@ func (h *RecommendationHandler) List(w http.ResponseWriter, r *http.Request) {
 		TaskCategory:  taskFilters.TaskCategory,
 		TaskOwnerRole: taskFilters.TaskOwnerRole,
 		Overdue:       taskFilters.Overdue,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

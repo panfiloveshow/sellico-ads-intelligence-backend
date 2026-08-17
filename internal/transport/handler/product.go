@@ -52,10 +52,11 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	products, err := h.svc.List(r.Context(), workspaceID, service.ProductListFilter{
 		Title:           r.URL.Query().Get("title"),
 		SellerCabinetID: sellerCabinetID,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -109,7 +110,8 @@ func (h *ProductHandler) ListPositions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
-	positions, err := h.svc.ListPositions(r.Context(), workspaceID, productID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	positions, err := h.svc.ListPositions(r.Context(), workspaceID, productID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -139,6 +141,7 @@ func (h *ProductHandler) ListRecommendations(w http.ResponseWriter, r *http.Requ
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	taskFilters, err := recommendationTaskFiltersFromQuery(r)
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, err.Error())
@@ -151,7 +154,7 @@ func (h *ProductHandler) ListRecommendations(w http.ResponseWriter, r *http.Requ
 		TaskCategory:  taskFilters.TaskCategory,
 		TaskOwnerRole: taskFilters.TaskOwnerRole,
 		Overdue:       taskFilters.Overdue,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

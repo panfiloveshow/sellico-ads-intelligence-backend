@@ -105,3 +105,18 @@ func TestSQLLimitOffset(t *testing.T) {
 		})
 	}
 }
+
+// Большая страница не должна давать отрицательное смещение: перевод в int32
+// без ограничения переполнялся, и в Postgres уходил отрицательный OFFSET —
+// запрос падал с ошибкой. Хендлеры конвертировали вручную мимо этого метода.
+func TestSQLLimitOffsetBoundsHugePage(t *testing.T) {
+	for _, page := range []int{1 << 20, 1 << 30, math.MaxInt32, math.MaxInt64 / 1000} {
+		limit, offset := Params{Page: page, PerPage: 100}.SQLLimitOffset()
+		if limit <= 0 {
+			t.Fatalf("page=%d: limit=%d, ожидался положительный", page, limit)
+		}
+		if offset < 0 {
+			t.Fatalf("page=%d: offset=%d — отрицательное смещение Postgres отвергнет", page, offset)
+		}
+	}
+}

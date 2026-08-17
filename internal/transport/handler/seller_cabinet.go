@@ -80,6 +80,7 @@ func (h *SellerCabinetHandler) List(w http.ResponseWriter, r *http.Request) {
 	workspaceRef, _ := middleware.WorkspaceRefFromContext(r.Context())
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
 	marketplace, ok := normalizeMarketplaceFilter(r.URL.Query().Get("marketplace"))
 	if !ok {
@@ -90,7 +91,7 @@ func (h *SellerCabinetHandler) List(w http.ResponseWriter, r *http.Request) {
 	cabinets, err := h.svc.List(r.Context(), principal.Token, workspaceRef, workspaceID, service.SellerCabinetListFilter{
 		Status:      r.URL.Query().Get("status"),
 		Marketplace: marketplace,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -140,7 +141,8 @@ func (h *SellerCabinetHandler) ListCampaigns(w http.ResponseWriter, r *http.Requ
 	workspaceRef, _ := middleware.WorkspaceRefFromContext(r.Context())
 
 	pg := pagination.Parse(r)
-	campaigns, err := h.svc.ListCampaigns(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	campaigns, err := h.svc.ListCampaigns(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -170,7 +172,8 @@ func (h *SellerCabinetHandler) ListProducts(w http.ResponseWriter, r *http.Reque
 	workspaceRef, _ := middleware.WorkspaceRefFromContext(r.Context())
 
 	pg := pagination.Parse(r)
-	products, err := h.svc.ListProducts(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	products, err := h.svc.ListProducts(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

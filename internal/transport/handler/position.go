@@ -82,12 +82,13 @@ func (h *PositionHandler) ListTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	targets, err := h.svc.ListTrackingTargets(r.Context(), workspaceID, service.PositionTargetListFilter{
 		ProductID:  productID,
 		Query:      r.URL.Query().Get("query"),
 		Region:     r.URL.Query().Get("region"),
 		ActiveOnly: r.URL.Query().Get("active_only") != "false",
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -157,6 +158,7 @@ func (h *PositionHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	dateFrom, dateTo := parseDateRangeWithDefault(r, 30)
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
 	positions, err := h.svc.List(r.Context(), workspaceID, service.PositionListFilter{
 		ProductID: productID,
@@ -164,7 +166,7 @@ func (h *PositionHandler) List(w http.ResponseWriter, r *http.Request) {
 		Region:    r.URL.Query().Get("region"),
 		DateFrom:  &dateFrom,
 		DateTo:    &dateTo,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

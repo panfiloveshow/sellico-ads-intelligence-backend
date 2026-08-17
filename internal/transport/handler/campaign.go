@@ -69,12 +69,13 @@ func (h *CampaignHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
 	campaigns, err := h.svc.List(r.Context(), workspaceID, service.CampaignListFilter{
 		SellerCabinetID: sellerCabinetID,
 		Status:          r.URL.Query().Get("status"),
 		Name:            r.URL.Query().Get("name"),
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -146,8 +147,9 @@ func (h *CampaignHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 	dateFrom, dateTo := parseDateRange(r)
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
-	stats, err := h.svc.GetStats(r.Context(), campaignID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset()))
+	stats, err := h.svc.GetStats(r.Context(), campaignID, dateFrom, dateTo, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -187,8 +189,9 @@ func (h *CampaignHandler) ListPhrases(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
-	phrases, err := h.svc.ListPhrases(r.Context(), campaignID, int32(pg.PerPage), int32(pg.Offset()))
+	phrases, err := h.svc.ListPhrases(r.Context(), campaignID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -222,6 +225,7 @@ func (h *CampaignHandler) ListRecommendations(w http.ResponseWriter, r *http.Req
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	taskFilters, err := recommendationTaskFiltersFromQuery(r)
 	if err != nil {
 		dto.WriteError(w, http.StatusBadRequest, apperror.ErrValidation.Code, err.Error())
@@ -235,7 +239,7 @@ func (h *CampaignHandler) ListRecommendations(w http.ResponseWriter, r *http.Req
 		TaskCategory:  taskFilters.TaskCategory,
 		TaskOwnerRole: taskFilters.TaskOwnerRole,
 		Overdue:       taskFilters.Overdue,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

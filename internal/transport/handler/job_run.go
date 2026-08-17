@@ -39,10 +39,11 @@ func (h *JobRunHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	jobRuns, err := h.svc.List(r.Context(), workspaceID, service.JobRunListFilter{
 		TaskType: r.URL.Query().Get("task_type"),
 		Status:   r.URL.Query().Get("status"),
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

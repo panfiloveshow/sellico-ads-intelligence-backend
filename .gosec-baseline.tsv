@@ -2,9 +2,13 @@ G101	internal/pkg/jwt/jwt.go	Potential hardcoded credentials	const ExtensionToke
 G101	internal/repository/sqlc/sellico_token_cache_manual.go	Potential hardcoded credentials	const cacheSellicoToken = ` UPDATE workspaces SET encrypted_sellico_token = $2, sellico_token_updated_at = now(), updated_at = now() WHERE id = $1 `
 G101	internal/repository/sqlc/sellico_token_cache_manual.go	Potential hardcoded credentials	const listWorkspacesWithSellicoToken = ` SELECT id, encrypted_sellico_token, sellico_token_updated_at, external_workspace_id, source FROM workspaces WHERE deleted_at IS NULL AND source = 'sellico' AND encrypted_sellico_token IS NOT NULL AND encrypted_sellico_token != '' ORDER BY sellico_token_updated_at DESC NULLS LAST LIMIT $1 `
 G101	internal/testutil/db.go	Potential hardcoded credentials: Password in URL	if dsn == "" { dsn = "postgres://sellico:sellico@localhost:5432/sellico_test?sslmode=disable" }
+G104	internal/integration/llm/client.go	Errors unhandled	respBody, readErr := io.ReadAll(resp.Body) resp.Body.Close() if readErr != nil {
+G104	internal/integration/ozon/perf_client.go	Errors unhandled	respBody, readErr := io.ReadAll(resp.Body) resp.Body.Close() if readErr != nil {
+G104	internal/integration/ozon/perf_client_actions.go	Errors unhandled	respBody, readErr := io.ReadAll(resp.Body) resp.Body.Close() if readErr != nil {
+G104	internal/integration/ozon/perf_client_phrases.go	Errors unhandled	content, readErr := io.ReadAll(fh) fh.Close() if readErr != nil {
+G104	internal/integration/ozon/seller_client.go	Errors unhandled	respBody, readErr := io.ReadAll(resp.Body) resp.Body.Close() if readErr != nil {
 G104	internal/integration/wb/client.go	Errors unhandled	respBody, err := io.ReadAll(resp.Body) resp.Body.Close() if err != nil {
 G104	internal/integration/wb/showcase.go	Errors unhandled	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) resp.Body.Close() if resp.StatusCode != http.StatusOK {
-G104	internal/service/bid_automation.go	Errors unhandled	s.queries.CreateBidChange(ctx, sqlcgen.CreateBidChangeParams{ WorkspaceID: uuidToPgtype(workspaceID), SellerCabinetID: uuidToPgtype(strategy.SellerCabinetID), CampaignID: uuidToPgtype(*binding.CampaignID), ProductID: uuidToPgtypePtr(binding.ProductID), StrategyID: uuidToPgtype(strategy.ID), Placement: decision.Placement, OldBid: int32(decision.OldBid), NewBid: int32(decision.NewBid), Reason: decision.Reason, Source: domain.BidSourceStrategy, Acos: acosVal, Roas: roasVal, WbStatus: wbStatus, })
 G104	internal/service/delivery.go	Errors unhandled	for _, info := range deliveryInfos { s.queries.CreateDeliveryData(ctx, sqlcgen.CreateDeliveryDataParams{ WorkspaceID: uuidToPgtype(workspaceID), ProductID: product.ID, Region: info.Region, Warehouse: textToPgtype(info.Warehouse), DeliveryDays: int32(info.DeliveryDays), DeliveryCost: 0, InStock: info.InStock, })
 G104	internal/service/delivery.go	Errors unhandled	if info.StockCount >= 0 { s.queries.UpdateProductStock(ctx, product.ID, int32(info.StockCount)) }
 G104	internal/service/export.go	Errors unhandled	const sheetName = "Export" file.SetSheetName(file.GetSheetName(0), sheetName)
@@ -28,12 +32,9 @@ G115	internal/app/bootstrap.go	integer overflow conversion int -> int32	} poolCo
 G115	internal/pkg/crypto/argon2.go	integer overflow conversion int -> uint32	computedHash := argon2.IDKey([]byte(password), salt, params.iterations, params.memory, params.parallelism, uint32(len(hash)))
 G115	internal/service/ads_read.go	integer overflow conversion int -> int32	if entityLimit > 0 { s.entityLimit = int32(entityLimit) }
 G115	internal/service/ads_read.go	integer overflow conversion int -> int32	if statsLimit > 0 { s.statsLimit = int32(statsLimit) }
-G115	internal/service/bid_automation.go	integer overflow conversion int -> int32	OldBid: int32(decision.OldBid), NewBid: int32(decision.NewBid), Reason: decision.Reason,
-G115	internal/service/bid_automation.go	integer overflow conversion int -> int32	Placement: decision.Placement, OldBid: int32(decision.OldBid), NewBid: int32(decision.NewBid),
 G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(currentBid), NewBid: int32(rollbackBid), Reason: reason,
 G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(oldBid), NewBid: int32(newBid), Reason: fmt.Sprintf("Manual bid set by user %s", actorID),
 G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(oldBid), NewBid: int32(suggestedBid), Reason: fmt.Sprintf("Applied phrase recommendation %s: %s", rec.Type, rec.Title),
-G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	OldBid: int32(oldBid), NewBid: int32(suggestedBid), Reason: fmt.Sprintf("Applied recommendation %s: %s", rec.Type, rec.Title),
 G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	Placement: "search", OldBid: int32(oldBid), NewBid: int32(suggestedBid),
 G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	Placement: placement, OldBid: int32(oldBid), NewBid: int32(newBid),
 G115	internal/service/campaign_actions.go	integer overflow conversion int -> int32	Placement: row.Placement, OldBid: int32(currentBid), NewBid: int32(rollbackBid),
@@ -46,6 +47,11 @@ G115	internal/service/extension_evidence_debug.go	integer overflow conversion in
 G115	internal/service/extension_evidence_debug.go	integer overflow conversion int -> int32	func limitPageContexts(items []domain.ExtensionPageContext, limit int32) []domain.ExtensionPageContext { if int32(len(items)) <= limit { return items
 G115	internal/service/extension_ingest.go	integer overflow conversion int -> int32	Region: region, VisiblePosition: int32(input.VisiblePosition), VisiblePage: optionalIntToPgInt4(input.VisiblePage),
 G115	internal/service/helpers.go	integer overflow conversion int -> int32	} return pgtype.Int4{Int32: int32(*value), Valid: true} }
+G115	internal/service/ozon_ai_manager.go	integer overflow conversion int -> int32	Error: errPg, PromptTokens: pgtype.Int4{Int32: int32(usage.PromptTokens), Valid: true}, CompletionTokens: pgtype.Int4{Int32: int32(usage.CompletionTokens), Valid: true},
+G115	internal/service/ozon_ai_manager.go	integer overflow conversion int -> int32	PromptTokens: pgtype.Int4{Int32: int32(usage.PromptTokens), Valid: true}, CompletionTokens: pgtype.Int4{Int32: int32(usage.CompletionTokens), Valid: true}, }); err != nil {
+G115	internal/service/ozon_api_budget.go	integer overflow conversion int -> int32	Category: category, Calls: int32(n), }); err != nil {
+G115	internal/service/ozon_sync.go	integer overflow conversion int -> int16	} return int16(iso - 1), int16(msk.Hour()) }
+G115	internal/service/ozon_sync.go	integer overflow conversion int64 -> int32	if product.TopPosition > 0 { params.TopPosition = pgtype.Int4{Int32: int32(product.TopPosition), Valid: true} }
 G115	internal/service/position.go	integer overflow conversion int -> int32	Position: int32(input.Position), Page: int32(input.Page), Source: input.Source,
 G115	internal/service/position.go	integer overflow conversion int -> int32	Region: input.Region, Position: int32(input.Position), Page: int32(input.Page),
 G115	internal/service/regional.go	integer overflow conversion int -> int32	WorstPosition: worst, CheckCount: int32(len(positions)), PeriodStart: pgtype.Date{Time: periodStart, Valid: true},
@@ -69,48 +75,19 @@ G115	internal/service/sync.go	integer overflow conversion int -> int16	if ts, ok
 G115	internal/service/sync.go	integer overflow conversion int -> int32	Status: campaign.Status, CampaignType: int32(campaign.CampaignType), BidType: campaign.BidType,
 G115	internal/service/sync.go	integer overflow conversion int -> int32	} return pgtype.Int4{Int32: int32(*value), Valid: true} }
 G115	internal/service/wb_rate_limit_guard.go	integer overflow conversion int -> int32	NextAllowedAt: pgtype.Timestamptz{Time: next, Valid: true}, RetryAfterSeconds: int32(retryAfterSeconds), LastStatus: 429,
-G115	internal/transport/handler/audit_log.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/bid.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	Name: r.URL.Query().Get("name"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	phrases, err := h.svc.ListPhrases(r.Context(), campaignID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/campaign.go	integer overflow conversion int -> int32	stats, err := h.svc.GetStats(r.Context(), campaignID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/campaign_actions.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) changes, err := h.actions.ListBidHistory(r.Context(), workspaceID, campaignID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/competitor.go	integer overflow conversion int -> int32	if productID != nil { competitors, err = h.svc.ListByProduct(r.Context(), *productID, int32(pg.PerPage), int32(pg.Offset())) } else {
-G115	internal/transport/handler/competitor.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) competitors, err := h.svc.ListByProduct(r.Context(), productID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/competitor.go	integer overflow conversion int -> int32	} else { competitors, err = h.svc.ListByWorkspace(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) }
-G115	internal/transport/handler/export.go	integer overflow conversion int -> int32	Status: r.URL.Query().Get("status"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/job_run.go	integer overflow conversion int -> int32	Status: r.URL.Query().Get("status"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	CampaignID: campaignID, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) bids, err := h.svc.ListBids(r.Context(), workspaceID, phraseID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/phrase.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) stats, err := h.svc.GetStats(r.Context(), workspaceID, phraseID, dateFrom, dateTo, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/position.go	integer overflow conversion int -> int32	ActiveOnly: r.URL.Query().Get("active_only") != "false", }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/position.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
 G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	Limit: int32(pg.PerPage), Offset: int32(pg.Offset()), }
 G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	Status: status, Limit: int32(pg.PerPage), Offset: int32(pg.Offset()),
-G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	} items, err := h.service.ListCatalog(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	} items, err := h.service.ListSchedules(r.Context(), workspaceID, status, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/price.go	integer overflow conversion int -> int32	} items, err := h.service.ListUploadTasks(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/product.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/product.go	integer overflow conversion int -> int32	SellerCabinetID: sellerCabinetID, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/product.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) positions, err := h.svc.ListPositions(r.Context(), workspaceID, productID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/product_economics.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) items, err := h.service.List(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/product_events.go	integer overflow conversion int -> int32	eventType := r.URL.Query().Get("event_type") events, err := h.svc.ListEventsByWorkspace(r.Context(), workspaceID, eventType, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/product_events.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) events, err := h.svc.ListEvents(r.Context(), productID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/recommendation.go	integer overflow conversion int -> int32	Overdue: taskFilters.Overdue, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/seller_cabinet.go	integer overflow conversion int -> int32	Status: r.URL.Query().Get("status"), }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/seller_cabinet.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) campaigns, err := h.svc.ListCampaigns(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/seller_cabinet.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) products, err := h.svc.ListProducts(r.Context(), principal.Token, workspaceRef, workspaceID, chi.URLParam(r, "id"), int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/semantics.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) clusters, err := h.svc.ListClusters(r.Context(), sellerCabinetID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/semantics.go	integer overflow conversion int -> int32	search := r.URL.Query().Get("search") keywords, err := h.svc.ListKeywords(r.Context(), sellerCabinetID, search, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/serp.go	integer overflow conversion int -> int32	DateTo: &dateTo, }, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/strategy.go	integer overflow conversion int -> int32	} strategies, err := h.svc.List(r.Context(), workspaceID, sellerCabinetID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/workspace.go	integer overflow conversion int -> int32	pg := pagination.Parse(r) members, err := h.svc.ListMembers(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
-G115	internal/transport/handler/workspace.go	integer overflow conversion int -> int32	workspaces, err := h.svc.List(r.Context(), userID, int32(pg.PerPage), int32(pg.Offset())) if err != nil {
+G117	internal/service/ozon_credentials.go	Marshaled struct field "APIKey" (JSON key "api_key") matches secret pattern	func encryptOzonCredentials(creds domain.OzonCredentials, key []byte) (string, error) { payload, err := json.Marshal(creds) if err != nil {
+G117	internal/testdb/fixtures.go	Marshaled struct field "APIKey" (JSON key "api_key") matches secret pattern	t.Helper() payload, err := json.Marshal(creds) if err != nil {
+G204	internal/testdb/testdb.go	Subprocess launched with variable	if err == nil { cmd := exec.Command(pgCtl, "-D", cluster.dataDir, "-m", "immediate", "-w", "-t", "30", "stop") _ = cmd.Run()
+G204	internal/testdb/testdb.go	Subprocess launched with variable	if migrateBin, err := exec.LookPath("migrate"); err == nil { out, runErr := exec.Command(migrateBin, "-path", migrationsDir, "-database", dsn(templateName), "up", ).CombinedOutput() if runErr == nil {
+G204	internal/testdb/testdb.go	Subprocess launched with variable	logFile := filepath.Join(cluster.dataDir, "postmaster.log") out, err = exec.Command(pgCtl, "-D", cluster.dataDir, "-o", postgresOpts, "-l", logFile, "-w", "-t", "60", "start", ).CombinedOutput() if err != nil {
+G204	internal/testdb/testdb.go	Subprocess launched with variable	out, err := exec.Command(initdb, "-D", cluster.dataDir, "-U", clusterUser, "-A", "trust", "--no-sync", "--encoding=UTF8", "--locale=C", ).CombinedOutput() if err != nil {
 G301	internal/service/export.go	Expect directory permissions to be 0750 or less	exportDir := filepath.Join(basePath, workspaceID.String()) if err := os.MkdirAll(exportDir, 0o755); err != nil { return "", apperror.New(apperror.ErrInternal, "failed to prepare export storage")
 G304	internal/app/memlimit.go	Potential file inclusion via variable	} { raw, err := os.ReadFile(p) if err != nil {
 G304	internal/service/export.go	Potential file inclusion via variable	func writeCSVFile(path string, headers []string, rows [][]string) error { file, err := os.Create(path) if err != nil {
+G304	internal/testdb/testdb.go	Potential file inclusion via variable	for _, file := range upFiles { sql, readErr := os.ReadFile(file) if readErr != nil {
+G304	internal/testdb/testdb.go	Potential file inclusion via variable	if err != nil { serverLog, _ := os.ReadFile(logFile) cluster.err = fmt.Errorf("pg_ctl start: %w\\n%s\\n%s", err, out, serverLog)
 G304	internal/testutil/db.go	Potential file inclusion via variable	for _, f := range upFiles { sql, err := os.ReadFile(f) if err != nil {
 G304	tools/check-openapi-drift/main.go	Potential file inclusion via variable	func readOpenAPIPaths(path string) ([]string, error) { f, err := os.Open(path) if err != nil {
 G304	tools/check-openapi-drift/main.go	Potential file inclusion via variable	func readRouterPaths(path string) ([]string, error) { f, err := os.Open(path) if err != nil {

@@ -40,7 +40,8 @@ func (h *ProductEconomicsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	items, err := h.service.List(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, err := h.service.List(r.Context(), workspaceID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

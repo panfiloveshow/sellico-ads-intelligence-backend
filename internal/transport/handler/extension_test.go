@@ -460,7 +460,7 @@ func TestExtensionEvidenceSupportReport_CampaignScope(t *testing.T) {
 					{
 						Stage:      "freshness",
 						Severity:   "warning",
-							Message:    "Нужно обновить сохраненные данные",
+						Message:    "Нужно обновить сохраненные данные",
 						ActionPath: "refresh",
 					},
 				},

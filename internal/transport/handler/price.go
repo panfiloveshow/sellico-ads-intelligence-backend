@@ -59,6 +59,7 @@ func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	var cabinetID *uuid.UUID
 	if raw := r.URL.Query().Get("seller_cabinet_id"); raw != "" {
 		id, err := parseNonNilUUID(raw)
@@ -73,7 +74,7 @@ func (h *PriceHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	items, err := h.service.ListCatalog(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	items, err := h.service.ListCatalog(r.Context(), workspaceID, cabinetID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

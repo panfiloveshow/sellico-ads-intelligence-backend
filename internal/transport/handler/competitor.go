@@ -36,14 +36,15 @@ func (h *CompetitorHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 
 	productID, _ := parseOptionalUUIDQuery(r, "product_id")
 	var competitors []domain.Competitor
 	var err error
 	if productID != nil {
-		competitors, err = h.svc.ListByProduct(r.Context(), *productID, int32(pg.PerPage), int32(pg.Offset()))
+		competitors, err = h.svc.ListByProduct(r.Context(), *productID, pgSQLLimit, pgSQLOffset)
 	} else {
-		competitors, err = h.svc.ListByWorkspace(r.Context(), workspaceID, int32(pg.PerPage), int32(pg.Offset()))
+		competitors, err = h.svc.ListByWorkspace(r.Context(), workspaceID, pgSQLLimit, pgSQLOffset)
 	}
 	if err != nil {
 		writeAppError(w, err)
@@ -59,7 +60,8 @@ func (h *CompetitorHandler) ListByProduct(w http.ResponseWriter, r *http.Request
 		return
 	}
 	pg := pagination.Parse(r)
-	competitors, err := h.svc.ListByProduct(r.Context(), productID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	competitors, err := h.svc.ListByProduct(r.Context(), productID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

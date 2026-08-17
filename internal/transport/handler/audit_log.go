@@ -42,13 +42,14 @@ func (h *AuditLogHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	dateFrom, dateTo := parseDateRangeWithDefault(r, 30)
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	logs, err := h.svc.List(r.Context(), workspaceID, service.AuditLogListFilter{
 		Action:     r.URL.Query().Get("action"),
 		EntityType: r.URL.Query().Get("entity_type"),
 		UserID:     userID,
 		DateFrom:   &dateFrom,
 		DateTo:     &dateTo,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

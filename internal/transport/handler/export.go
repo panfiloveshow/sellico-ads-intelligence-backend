@@ -52,12 +52,13 @@ func (h *ExportHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	exports, err := h.svc.List(r.Context(), workspaceID, service.ExportListFilter{
 		UserID:     userID,
 		EntityType: r.URL.Query().Get("entity_type"),
 		Format:     r.URL.Query().Get("format"),
 		Status:     r.URL.Query().Get("status"),
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

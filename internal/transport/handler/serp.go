@@ -92,12 +92,13 @@ func (h *SERPHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	dateFrom, dateTo := parseDateRangeWithDefault(r, 30)
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	snapshots, err := h.svc.List(r.Context(), workspaceID, service.SERPListFilter{
 		Query:    r.URL.Query().Get("query"),
 		Region:   r.URL.Query().Get("region"),
 		DateFrom: &dateFrom,
 		DateTo:   &dateTo,
-	}, int32(pg.PerPage), int32(pg.Offset()))
+	}, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

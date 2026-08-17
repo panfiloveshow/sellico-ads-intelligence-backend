@@ -57,7 +57,8 @@ func (h *OzonHandler) AIListRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.ai.ListRuns(r.Context(), workspaceID, cabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.ai.ListRuns(r.Context(), workspaceID, cabinetID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -119,7 +120,8 @@ func (h *OzonHandler) AIListDecisions(w http.ResponseWriter, r *http.Request) {
 		runID = &parsed
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.ai.ListDecisions(r.Context(), workspaceID, cabinetID, r.URL.Query().Get("status"), runID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.ai.ListDecisions(r.Context(), workspaceID, cabinetID, r.URL.Query().Get("status"), runID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

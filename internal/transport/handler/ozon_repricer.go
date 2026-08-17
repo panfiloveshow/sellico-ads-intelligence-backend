@@ -70,7 +70,8 @@ func (h *OzonHandler) ListPriceChanges(w http.ResponseWriter, r *http.Request) {
 		sku = &parsed
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.repricer.ListPriceChanges(r.Context(), workspaceID, cabinetID, sku, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.repricer.ListPriceChanges(r.Context(), workspaceID, cabinetID, sku, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -176,7 +177,8 @@ func (h *OzonHandler) ListPriceSchedules(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	pg := pagination.Parse(r)
-	items, total, err := h.repricer.ListSchedules(r.Context(), workspaceID, cabinetID, status, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	items, total, err := h.repricer.ListSchedules(r.Context(), workspaceID, cabinetID, status, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return

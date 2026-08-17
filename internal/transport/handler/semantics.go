@@ -51,8 +51,9 @@ func (h *SemanticsHandler) ListKeywords(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	pg := pagination.Parse(r)
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
 	search := r.URL.Query().Get("search")
-	keywords, err := h.svc.ListKeywords(r.Context(), sellerCabinetID, search, int32(pg.PerPage), int32(pg.Offset()))
+	keywords, err := h.svc.ListKeywords(r.Context(), sellerCabinetID, search, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
@@ -106,7 +107,8 @@ func (h *SemanticsHandler) ListClusters(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	pg := pagination.Parse(r)
-	clusters, err := h.svc.ListClusters(r.Context(), sellerCabinetID, int32(pg.PerPage), int32(pg.Offset()))
+	pgSQLLimit, pgSQLOffset := pg.SQLLimitOffset()
+	clusters, err := h.svc.ListClusters(r.Context(), sellerCabinetID, pgSQLLimit, pgSQLOffset)
 	if err != nil {
 		writeAppError(w, err)
 		return
