@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/google/uuid"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
@@ -154,5 +156,9 @@ func writeAppError(w http.ResponseWriter, err error) {
 		dto.WriteError(w, appErr.Status, appErr.Code, appErr.Message)
 		return
 	}
+	// Клиенту 500 уходит без подробностей — и раньше без них же оставался лог:
+	// строка «request completed» знала статус, но не причину. Разбор падения
+	// approve 2026-08-18 начался с того, что причины не было нигде.
+	log.Error().Err(err).Msg("unhandled error, responding 500")
 	dto.WriteError(w, http.StatusInternalServerError, apperror.ErrInternal.Code, apperror.ErrInternal.Message)
 }

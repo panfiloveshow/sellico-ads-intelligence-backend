@@ -122,19 +122,18 @@ func (c *PerfClient) GetCompetitiveBids(ctx context.Context, creds Credentials, 
 		var resp struct {
 			Bids []struct {
 				SKU flexInt64 `json:"sku"`
-				Bid string    `json:"bid"`
+				Bid bidRub    `json:"bid"`
 			} `json:"bids"`
 		}
 		if err := decodeJSON(body, &resp, "competitive bids"); err != nil {
 			return nil, err
 		}
 		for _, row := range resp.Bids {
-			bidRub, convErr := MicroRubToRubFloat(row.Bid)
-			if convErr != nil {
-				c.logger.Warn().Err(convErr).Int64("sku", int64(row.SKU)).Msg("unparseable competitive bid")
+			if !row.Bid.OK {
+				c.logger.Warn().Int64("sku", int64(row.SKU)).Msg("unparseable competitive bid")
 				continue
 			}
-			out = append(out, CompetitiveBid{SKU: int64(row.SKU), BidRub: bidRub})
+			out = append(out, CompetitiveBid{SKU: int64(row.SKU), BidRub: row.Bid.Rub})
 		}
 	}
 	return out, nil
@@ -156,9 +155,10 @@ func (c *PerfClient) GetMinSKUBids(ctx context.Context, creds Credentials, skus 
 		// Both key spellings are sent — the API has used "sku" and "skus"
 		// across revisions and ignores unknown fields.
 		payload := map[string]any{
-			"sku":         skuStrings,
-			"skus":        skuStrings,
-			"paymentType": paymentType,
+			"sku":           skuStrings,
+			"skus":          skuStrings,
+			"paymentType":   paymentType,
+			"marketplaceId": marketplaceIDRU,
 		}
 		body, err := c.doJSON(ctx, creds, http.MethodPost, "/api/client/min/sku", nil, payload)
 		if err != nil {
@@ -177,7 +177,7 @@ func (c *PerfClient) GetMinSKUBids(ctx context.Context, creds Credentials, skus 
 func parseMinSKUBids(body []byte) ([]MinSKUBid, error) {
 	type wireRow struct {
 		SKU flexInt64 `json:"sku"`
-		Bid string    `json:"bid"`
+		Bid bidRub    `json:"bid"`
 	}
 	var resp struct {
 		MinBids []wireRow `json:"minBids"`
@@ -196,11 +196,10 @@ func parseMinSKUBids(body []byte) ([]MinSKUBid, error) {
 	}
 	out := make([]MinSKUBid, 0, len(rows))
 	for _, row := range rows {
-		bidRub, err := MicroRubToRubFloat(row.Bid)
-		if err != nil {
+		if !row.Bid.OK {
 			continue // defensive: skip unparseable rows, keep the rest
 		}
-		out = append(out, MinSKUBid{SKU: int64(row.SKU), BidRub: bidRub})
+		out = append(out, MinSKUBid{SKU: int64(row.SKU), BidRub: row.Bid.Rub})
 	}
 	return out, nil
 }

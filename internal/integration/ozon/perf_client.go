@@ -271,7 +271,7 @@ func (c *PerfClient) ListCampaignProducts(ctx context.Context, creds Credentials
 	var resp struct {
 		Products []struct {
 			SKU flexInt64 `json:"sku"`
-			Bid string    `json:"bid"`
+			Bid bidRub    `json:"bid"`
 			// targetCir arrives as a plain number for TARGET_CIR campaigns
 			// (verified live 2026-08-10: {"targetCir":11}); topPosition mirrors
 			// the docs' TOP_PROMOTION field. Both absent on TARGET_BIDS.
@@ -284,13 +284,12 @@ func (c *PerfClient) ListCampaignProducts(ctx context.Context, creds Credentials
 	}
 	out := make([]CampaignProduct, 0, len(resp.Products))
 	for _, p := range resp.Products {
-		bidRub, convErr := MicroRubToRubFloat(p.Bid)
-		if convErr != nil {
-			c.logger.Warn().Err(convErr).Int64("campaign_id", campaignID).Int64("sku", int64(p.SKU)).Msg("unparseable bid")
+		if !p.Bid.OK {
+			c.logger.Warn().Int64("campaign_id", campaignID).Int64("sku", int64(p.SKU)).Msg("unparseable bid")
 		}
 		out = append(out, CampaignProduct{
 			SKU:         int64(p.SKU),
-			BidRub:      bidRub,
+			BidRub:      p.Bid.Rub,
 			TargetCIR:   float64(p.TargetCIR),
 			TopPosition: int64(p.TopPosition),
 		})

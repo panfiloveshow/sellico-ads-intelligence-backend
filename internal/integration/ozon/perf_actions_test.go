@@ -592,3 +592,32 @@ func TestValidateCredentials(t *testing.T) {
 	c := newTestPerfClient(srv.URL)
 	require.NoError(t, c.ValidateCredentials(context.Background(), testCreds))
 }
+
+// Ровно тот ответ, на котором 2026-08-18 упало применение решения ИИ: sku
+// строкой, ставка числом. Раньше это валило разбор всего пакета и уходило
+// пользователю как 500.
+func TestParseMinSKUBids_NumericBidIsRubles(t *testing.T) {
+	rows, err := parseMinSKUBids([]byte(`{"minBids":[{"sku":"1275704268", "bid":5}]}`))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(1275704268), rows[0].SKU)
+	assert.InDelta(t, 5.0, rows[0].BidRub, 1e-9)
+}
+
+// Строковая форма остаётся микрорублями — так отвечает боевой Ozon на другие
+// методы, и путать масштабы нельзя.
+func TestParseMinSKUBids_StringBidStaysMicroRubles(t *testing.T) {
+	rows, err := parseMinSKUBids([]byte(`{"minBids":[{"sku":7,"bid":"5000000"}]}`))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.InDelta(t, 5.0, rows[0].BidRub, 1e-9)
+}
+
+// Одна порченая строка не должна уносить с собой весь ответ.
+func TestParseMinSKUBids_BadRowSkippedRestKept(t *testing.T) {
+	rows, err := parseMinSKUBids([]byte(`{"minBids":[{"sku":1,"bid":"nonsense"},{"sku":2,"bid":7},{"sku":3,"bid":null}]}`))
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "остаётся только читаемая ставка")
+	assert.Equal(t, int64(2), rows[0].SKU)
+	assert.InDelta(t, 7.0, rows[0].BidRub, 1e-9)
+}
