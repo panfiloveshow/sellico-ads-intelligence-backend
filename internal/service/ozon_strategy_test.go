@@ -118,20 +118,38 @@ func TestWBAutomationSkipsOzonStrategies(t *testing.T) {
 	}
 }
 
-// Архивные кампании товаров не отдают — Ozon отвечает 400 «Кампания не
-// найдена». До этой проверки синк тратил на них 67 запросов в сутки, а с
-// 25.08.2026 Performance API считает запросы по квотам.
+// Кампании, у которых товаров не спросить, синк не должен спрашивать: Ozon
+// отвечает 400 «Кампания не найдена», а с 25.08.2026 Performance API считает
+// запросы по квотам, и каждый заведомый отказ отъедает лимит живых кампаний.
 func TestOzonCampaignSyncSkipsProducts(t *testing.T) {
-	skipped := []string{"CAMPAIGN_STATE_ARCHIVED", "CAMPAIGN_STATE_FINISHED", "campaign_state_archived", " CAMPAIGN_STATE_ARCHIVED "}
-	for _, state := range skipped {
-		if !ozonCampaignSyncSkipsProducts(state) {
+	// Архивные и завершённые — независимо от типа.
+	skippedStates := []string{"CAMPAIGN_STATE_ARCHIVED", "CAMPAIGN_STATE_FINISHED", "campaign_state_archived", " CAMPAIGN_STATE_ARCHIVED "}
+	for _, state := range skippedStates {
+		if !ozonCampaignSyncSkipsProducts(state, "SKU") {
 			t.Fatalf("состояние %q обязано пропускаться", state)
 		}
 	}
-	polled := []string{"CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_INACTIVE", "CAMPAIGN_STATE_PLANNED", ""}
-	for _, state := range polled {
-		if ozonCampaignSyncSkipsProducts(state) {
-			t.Fatalf("состояние %q обязано опрашиваться: остановленную кампанию можно запустить снова", state)
+
+	// Типы без поштучных товаров — даже когда кампания работает. Список снят
+	// с боевых ответов 2026-08-18.
+	skippedTypes := []string{"SEARCH_PROMO", "REF_VK", "REF_BLOGGER", "ALL_SKU_PROMO", "BRAND_SHELF", "BANNER", "search_promo"}
+	for _, advType := range skippedTypes {
+		if !ozonCampaignSyncSkipsProducts("CAMPAIGN_STATE_RUNNING", advType) {
+			t.Fatalf("тип %q обязан пропускаться даже у работающей кампании", advType)
 		}
+	}
+
+	// SKU опрашиваем в любом живом состоянии: остановленную кампанию можно
+	// запустить снова.
+	for _, state := range []string{"CAMPAIGN_STATE_RUNNING", "CAMPAIGN_STATE_INACTIVE", "CAMPAIGN_STATE_PLANNED", ""} {
+		if ozonCampaignSyncSkipsProducts(state, "SKU") {
+			t.Fatalf("SKU-кампанию в состоянии %q обязаны опрашивать", state)
+		}
+	}
+
+	// Незнакомый тип считаем поддерживаемым: один лишний запрос дешевле, чем
+	// молча не синхронизировать новый вид кампаний.
+	if ozonCampaignSyncSkipsProducts("CAMPAIGN_STATE_RUNNING", "SOMETHING_OZON_ADDED_LATER") {
+		t.Fatal("неизвестный тип обязан опрашиваться, а не пропускаться молча")
 	}
 }

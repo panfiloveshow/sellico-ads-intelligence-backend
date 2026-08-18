@@ -150,6 +150,7 @@ func (s *OzonSyncService) SyncCampaigns(ctx context.Context, cabinet domain.Sell
 	}
 
 	upsertedProducts := 0
+	skippedProducts, refusedProducts := 0, 0
 	for _, campaign := range campaigns {
 		row, upsertErr := s.queries.UpsertOzonCampaign(ctx, sqlcgen.UpsertOzonCampaignParams{
 			SellerCabinetID:   uuidToPgtype(cabinet.ID),
@@ -168,18 +169,23 @@ func (s *OzonSyncService) SyncCampaigns(ctx context.Context, cabinet domain.Sell
 			return fmt.Errorf("upsert campaign %d: %w", campaign.ID, upsertErr)
 		}
 
-		// Архивные и завершённые кампании товаров уже не отдают: Ozon отвечает
-		// 400 «Кампания не найдена». Это давало 67 бесполезных запросов в
-		// сутки, а с 25.08.2026 Performance API считает запросы по квотам —
-		// каждый такой отказ будет тратить лимит живых кампаний.
-		if ozonCampaignSyncSkipsProducts(campaign.State) {
+		// Кампании, у которых товаров не спросить, пропускаем не спрашивая:
+		// с 25.08.2026 Performance API считает запросы по квотам, и каждый
+		// заведомый отказ тратил бы лимит живых кампаний.
+		if ozonCampaignSyncSkipsProducts(campaign.State, campaign.AdvObjectType) {
+			skippedProducts++
 			continue
 		}
 
 		products, productsErr := s.perfClient.ListCampaignProducts(ctx, ozonClientCreds(creds), campaign.ID)
 		if productsErr != nil {
 			// Products are best-effort per campaign (some types have none).
-			s.logger.Warn().Err(productsErr).Int64("ozon_campaign_id", campaign.ID).Msg("failed to list campaign products")
+			// Уровень debug, а не warn, намеренно: пока отказ ловил каждую
+			// кампанию отдельной строкой warn, 61 одинаковая жалоба тонула в
+			// логе месяцами. Итог по кабинету печатается ниже одной строкой —
+			// возврат этого шума виден сразу, а не при разборе.
+			refusedProducts++
+			s.logger.Debug().Err(productsErr).Int64("ozon_campaign_id", campaign.ID).Str("adv_object_type", campaign.AdvObjectType).Msg("failed to list campaign products")
 			continue
 		}
 		for _, product := range products {
@@ -209,10 +215,19 @@ func (s *OzonSyncService) SyncCampaigns(ctx context.Context, cabinet domain.Sell
 		s.logger.Warn().Err(err).Msg("failed to touch ozon campaigns sync state")
 	}
 
-	s.logger.Info().
+	// refused > 0 значит, что квота всё-таки тратится впустую: появился тип
+	// кампаний, которого нет в списке пропускаемых. Одна строка на кабинет
+	// вместо десятков одинаковых warn.
+	event := s.logger.Info()
+	if refusedProducts > 0 {
+		event = s.logger.Warn()
+	}
+	event.
 		Str("cabinet_id", cabinet.ID.String()).
 		Int("campaigns", len(campaigns)).
 		Int("products", upsertedProducts).
+		Int("products_not_asked", skippedProducts).
+		Int("products_refused", refusedProducts).
 		Msg("ozon campaigns synced")
 	return nil
 }
@@ -722,12 +737,27 @@ func pgNumericToFloatPtr(numeric pgtype.Numeric) *float64 {
 	return &value
 }
 
-// ozonCampaignSyncSkipsProducts reports whether a campaign in this state can
-// still return products. Archived and finished campaigns cannot: the
-// Performance API answers 400 «Кампания не найдена» for them.
-func ozonCampaignSyncSkipsProducts(state string) bool {
+// ozonCampaignSyncSkipsProducts reports whether asking this campaign for its
+// products is pointless. Две причины, обе дают один и тот же ответ Ozon —
+// 400 «Кампания с id [...] не найдена», формулировку обманчивую: кампания
+// существует, просто спрашивать у неё товары нельзя.
+//
+// Первая: архивные и завершённые кампании товаров уже не отдают.
+//
+// Вторая: /v2/products обслуживает только кампании с товарами поштучно —
+// advObjectType SKU. Замер на проде 2026-08-18: 179 SKU-кампаний отвечают
+// нормально, а SEARCH_PROMO, REF_VK, REF_BLOGGER, ALL_SKU_PROMO, BRAND_SHELF
+// и BANNER — все 61 штука — отвечают отказом, независимо от состояния, в том
+// числе работающие. Документация ограничение не описывает, поэтому список
+// снят с боевых ответов; неизвестный тип считаем поддерживаемым — лучше один
+// лишний запрос, чем молча не синхронизировать новый вид кампаний.
+func ozonCampaignSyncSkipsProducts(state, advObjectType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(state)) {
 	case "CAMPAIGN_STATE_ARCHIVED", "CAMPAIGN_STATE_FINISHED":
+		return true
+	}
+	switch strings.ToUpper(strings.TrimSpace(advObjectType)) {
+	case "SEARCH_PROMO", "REF_VK", "REF_BLOGGER", "ALL_SKU_PROMO", "BRAND_SHELF", "BANNER":
 		return true
 	}
 	return false
