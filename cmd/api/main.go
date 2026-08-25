@@ -224,8 +224,16 @@ func main() {
 		},
 	})
 
+	// CRM RBAC: чекер прав подключается только при настроенном сервисном
+	// аккаунте — иначе middleware работает по легаси-ролям (bootable без CRM).
+	var crmPermissionChecker transport.PermissionChecker
+	if sellicoTokenManager.IsConfigured() {
+		crmPermissionChecker = sellico.NewPermissionChecker(sellicoClient, sellicoTokenManager, 0)
+	}
+
 	router := transport.NewRouter(transport.RouterDeps{
 		CORSAllowOrigins: cfg.CORSAllowOrigins,
+		PermissionChecker: crmPermissionChecker,
 		RateLimit: transport.RateLimitOpts{
 			RequestsPerSecond: cfg.RateLimitRPS,
 			Burst:             cfg.RateLimitBurst,

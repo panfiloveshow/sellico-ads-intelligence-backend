@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/handler"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -17,6 +16,9 @@ type RateLimitOpts struct {
 }
 
 // RouterDeps holds all dependencies needed to construct the router.
+// PermissionChecker re-exported for wiring in cmd without importing middleware.
+type PermissionChecker = middleware.PermissionChecker
+
 type RouterDeps struct {
 	CORSAllowOrigins         []string
 	RateLimit                RateLimitOpts
@@ -24,6 +26,7 @@ type RouterDeps struct {
 	MembershipChecker        middleware.MembershipChecker
 	WorkspaceResolver        middleware.WorkspaceResolver
 	Authenticator            middleware.Authenticator
+	PermissionChecker        middleware.PermissionChecker
 	DocsHandler              *handler.DocsHandler
 	HealthHandler            *handler.HealthHandler
 	AuthHandler              *handler.AuthHandler
@@ -74,6 +77,10 @@ func NewRouter(deps RouterDeps) chi.Router {
 	if deps.WorkspaceResolver != nil {
 		tenantMiddleware = middleware.SharedTenantScope(deps.WorkspaceResolver, deps.MembershipChecker)
 	}
+
+	// CRM RBAC: базовый view-гейт на workspace-scope, manage — на записи.
+	viewPermission := middleware.RequirePermission(deps.PermissionChecker, "marketing.view")
+	managePermission := middleware.RequirePermission(deps.PermissionChecker, "marketing.manage")
 
 	// --- Global middleware ---
 	r.Use(middleware.CORS(middleware.CORSConfig{AllowOrigins: deps.CORSAllowOrigins}))
@@ -161,6 +168,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 			// Workspace by ID — requires tenant scope via URL param
 			protected.Route("/workspaces/{workspaceId}", func(ws chi.Router) {
 				ws.Use(tenantMiddleware)
+				ws.Use(viewPermission)
 
 				if deps.WorkspaceHandler != nil {
 					ws.Get("/", deps.WorkspaceHandler.Get)
@@ -184,7 +192,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 					}
 
 					members.Group(func(writeMembers chi.Router) {
-						writeMembers.Use(middleware.RequireRole(domain.RoleOwner, domain.RoleManager))
+						writeMembers.Use(middleware.RequirePermission(deps.PermissionChecker, "users.edit"))
 						if deps.WorkspaceHandler != nil {
 							writeMembers.Post("/", deps.WorkspaceHandler.InviteMember)
 							writeMembers.Patch("/{memberId}", deps.WorkspaceHandler.UpdateMemberRole)
@@ -201,10 +209,11 @@ func NewRouter(deps RouterDeps) chi.Router {
 			// --- Workspace-scoped routes (auth + tenant via X-Workspace-ID header) ---
 			protected.Group(func(scoped chi.Router) {
 				scoped.Use(tenantMiddleware)
+				scoped.Use(viewPermission)
 
 				// Seller Cabinets — write requires owner/manager
 				scoped.Route("/seller-cabinets", func(sc chi.Router) {
-					sc.Use(middleware.RequireWriteAccess())
+					sc.Use(managePermission)
 					if deps.SellerCabinetHandler != nil {
 						sc.Post("/", deps.SellerCabinetHandler.Create)
 						sc.Get("/", deps.SellerCabinetHandler.List)
@@ -226,7 +235,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 					}
 				})
 				scoped.Route("/cabinets", func(sc chi.Router) {
-					sc.Use(middleware.RequireWriteAccess())
+					sc.Use(managePermission)
 					if deps.SellerCabinetHandler != nil {
 						sc.Post("/", deps.SellerCabinetHandler.Create)
 						sc.Get("/", deps.SellerCabinetHandler.List)
@@ -319,11 +328,11 @@ func NewRouter(deps RouterDeps) chi.Router {
 				// Bids
 				scoped.Route("/bids", func(b chi.Router) {
 					if deps.BidHandler != nil {
-						b.With(middleware.RequireWriteAccess()).Post("/history", deps.BidHandler.Create)
+						b.With(managePermission).Post("/history", deps.BidHandler.Create)
 						b.Get("/history", deps.BidHandler.ListHistory)
 						b.Get("/estimates", deps.BidHandler.GetEstimate)
 					} else {
-						b.With(middleware.RequireWriteAccess()).Post("/history", notImplemented)
+						b.With(managePermission).Post("/history", notImplemented)
 						b.Get("/history", notImplemented)
 						b.Get("/estimates", notImplemented)
 					}
@@ -347,16 +356,16 @@ func NewRouter(deps RouterDeps) chi.Router {
 				// Positions
 				scoped.Route("/positions", func(pos chi.Router) {
 					if deps.PositionHandler != nil {
-						pos.With(middleware.RequireWriteAccess()).Post("/targets", deps.PositionHandler.CreateTarget)
+						pos.With(managePermission).Post("/targets", deps.PositionHandler.CreateTarget)
 						pos.Get("/targets", deps.PositionHandler.ListTargets)
-						pos.With(middleware.RequireWriteAccess()).Post("/", deps.PositionHandler.Create)
+						pos.With(managePermission).Post("/", deps.PositionHandler.Create)
 						pos.Get("/", deps.PositionHandler.List)
 						pos.Get("/history", deps.PositionHandler.List)
 						pos.Get("/aggregate", deps.PositionHandler.Aggregate)
 					} else {
-						pos.With(middleware.RequireWriteAccess()).Post("/targets", notImplemented)
+						pos.With(managePermission).Post("/targets", notImplemented)
 						pos.Get("/targets", notImplemented)
-						pos.With(middleware.RequireWriteAccess()).Post("/", notImplemented)
+						pos.With(managePermission).Post("/", notImplemented)
 						pos.Get("/", notImplemented)
 						pos.Get("/history", notImplemented)
 						pos.Get("/aggregate", notImplemented)
@@ -366,11 +375,11 @@ func NewRouter(deps RouterDeps) chi.Router {
 				// SERP Snapshots
 				scoped.Route("/serp-snapshots", func(serp chi.Router) {
 					if deps.SERPHandler != nil {
-						serp.With(middleware.RequireWriteAccess()).Post("/", deps.SERPHandler.Create)
+						serp.With(managePermission).Post("/", deps.SERPHandler.Create)
 						serp.Get("/", deps.SERPHandler.List)
 						serp.Get("/{id}", deps.SERPHandler.Get)
 					} else {
-						serp.With(middleware.RequireWriteAccess()).Post("/", notImplemented)
+						serp.With(managePermission).Post("/", notImplemented)
 						serp.Get("/", notImplemented)
 						serp.Get("/{id}", notImplemented)
 					}
@@ -390,17 +399,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 					if deps.RecommendationHandler != nil {
 						rec.Get("/", deps.RecommendationHandler.List)
 						rec.Get("/{id}", deps.RecommendationHandler.Get)
-						rec.With(middleware.RequireWriteAccess()).Post("/generate", deps.RecommendationHandler.TriggerGenerate)
-						rec.With(middleware.RequireWriteAccess()).Patch("/{id}", deps.RecommendationHandler.UpdateStatus)
-						rec.With(middleware.RequireWriteAccess()).Post("/{id}/resolve", deps.RecommendationHandler.Resolve)
-						rec.With(middleware.RequireWriteAccess()).Post("/{id}/dismiss", deps.RecommendationHandler.Dismiss)
+						rec.With(managePermission).Post("/generate", deps.RecommendationHandler.TriggerGenerate)
+						rec.With(managePermission).Patch("/{id}", deps.RecommendationHandler.UpdateStatus)
+						rec.With(managePermission).Post("/{id}/resolve", deps.RecommendationHandler.Resolve)
+						rec.With(managePermission).Post("/{id}/dismiss", deps.RecommendationHandler.Dismiss)
 					} else {
 						rec.Get("/", notImplemented)
 						rec.Get("/{id}", notImplemented)
-						rec.With(middleware.RequireWriteAccess()).Post("/generate", notImplemented)
-						rec.With(middleware.RequireWriteAccess()).Patch("/{id}", notImplemented)
-						rec.With(middleware.RequireWriteAccess()).Post("/{id}/resolve", notImplemented)
-						rec.With(middleware.RequireWriteAccess()).Post("/{id}/dismiss", notImplemented)
+						rec.With(managePermission).Post("/generate", notImplemented)
+						rec.With(managePermission).Patch("/{id}", notImplemented)
+						rec.With(managePermission).Post("/{id}/resolve", notImplemented)
+						rec.With(managePermission).Post("/{id}/dismiss", notImplemented)
 					}
 				})
 
@@ -460,8 +469,8 @@ func NewRouter(deps RouterDeps) chi.Router {
 				// Semantics & Keywords
 				if deps.SemanticsHandler != nil {
 					scoped.Get("/keywords", deps.SemanticsHandler.ListKeywords)
-					scoped.With(middleware.RequireWriteAccess()).Post("/keywords/collect", deps.SemanticsHandler.CollectKeywords)
-					scoped.With(middleware.RequireWriteAccess()).Post("/keywords/cluster", deps.SemanticsHandler.AutoCluster)
+					scoped.With(managePermission).Post("/keywords/collect", deps.SemanticsHandler.CollectKeywords)
+					scoped.With(managePermission).Post("/keywords/cluster", deps.SemanticsHandler.AutoCluster)
 					scoped.Get("/keyword-clusters", deps.SemanticsHandler.ListClusters)
 				}
 
@@ -475,10 +484,10 @@ func NewRouter(deps RouterDeps) chi.Router {
 				scoped.Route("/product-economics", func(economics chi.Router) {
 					if deps.ProductEconomicsHandler != nil {
 						economics.Get("/", deps.ProductEconomicsHandler.List)
-						economics.With(middleware.RequireWriteAccess()).Post("/import", deps.ProductEconomicsHandler.Import)
+						economics.With(managePermission).Post("/import", deps.ProductEconomicsHandler.Import)
 					} else {
 						economics.Get("/", notImplemented)
-						economics.With(middleware.RequireWriteAccess()).Post("/import", notImplemented)
+						economics.With(managePermission).Post("/import", notImplemented)
 					}
 				})
 
@@ -486,46 +495,46 @@ func NewRouter(deps RouterDeps) chi.Router {
 				scoped.Route("/prices", func(prices chi.Router) {
 					if deps.PriceHandler != nil {
 						prices.Get("/", deps.PriceHandler.List)
-						prices.With(middleware.RequireWriteAccess()).Post("/sync", deps.PriceHandler.TriggerSync)
-						prices.With(middleware.RequireWriteAccess()).Post("/bulk", deps.PriceHandler.Bulk)
+						prices.With(managePermission).Post("/sync", deps.PriceHandler.TriggerSync)
+						prices.With(managePermission).Post("/bulk", deps.PriceHandler.Bulk)
 						prices.Get("/quarantine", deps.PriceHandler.ListQuarantine)
 						prices.Get("/cabinets-status", deps.PriceHandler.CabinetsStatus)
 						prices.Get("/heatmap", deps.PriceHandler.Heatmap)
 						prices.Get("/health", deps.PriceHandler.Health)
-						prices.With(middleware.RequireWriteAccess()).Post("/pause", deps.PriceHandler.Pause)
+						prices.With(managePermission).Post("/pause", deps.PriceHandler.Pause)
 					} else {
 						prices.Get("/", notImplemented)
-						prices.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
-						prices.With(middleware.RequireWriteAccess()).Post("/bulk", notImplemented)
+						prices.With(managePermission).Post("/sync", notImplemented)
+						prices.With(managePermission).Post("/bulk", notImplemented)
 						prices.Get("/quarantine", notImplemented)
 						prices.Get("/cabinets-status", notImplemented)
 						prices.Get("/heatmap", notImplemented)
 						prices.Get("/health", notImplemented)
-						prices.With(middleware.RequireWriteAccess()).Post("/pause", notImplemented)
+						prices.With(managePermission).Post("/pause", notImplemented)
 					}
 				})
 				scoped.Route("/price-changes", func(pc chi.Router) {
 					if deps.PriceHandler != nil {
 						pc.Get("/", deps.PriceHandler.ListChanges)
-						pc.With(middleware.RequireWriteAccess()).Post("/{changeId}/rollback", deps.PriceHandler.Rollback)
+						pc.With(managePermission).Post("/{changeId}/rollback", deps.PriceHandler.Rollback)
 					} else {
 						pc.Get("/", notImplemented)
-						pc.With(middleware.RequireWriteAccess()).Post("/{changeId}/rollback", notImplemented)
+						pc.With(managePermission).Post("/{changeId}/rollback", notImplemented)
 					}
 				})
 				if deps.PriceHandler != nil {
 					scoped.Get("/price-upload-tasks", deps.PriceHandler.ListUploadTasks)
-					scoped.With(middleware.RequireWriteAccess()).Post("/repricer/run", deps.PriceHandler.Run)
+					scoped.With(managePermission).Post("/repricer/run", deps.PriceHandler.Run)
 				}
 				scoped.Route("/price-schedules", func(ps chi.Router) {
 					if deps.PriceHandler != nil {
 						ps.Get("/", deps.PriceHandler.ListSchedules)
-						ps.With(middleware.RequireWriteAccess()).Post("/", deps.PriceHandler.CreateSchedule)
-						ps.With(middleware.RequireWriteAccess()).Delete("/{scheduleId}", deps.PriceHandler.CancelSchedule)
+						ps.With(managePermission).Post("/", deps.PriceHandler.CreateSchedule)
+						ps.With(managePermission).Delete("/{scheduleId}", deps.PriceHandler.CancelSchedule)
 					} else {
 						ps.Get("/", notImplemented)
-						ps.With(middleware.RequireWriteAccess()).Post("/", notImplemented)
-						ps.With(middleware.RequireWriteAccess()).Delete("/{scheduleId}", notImplemented)
+						ps.With(managePermission).Post("/", notImplemented)
+						ps.With(managePermission).Delete("/{scheduleId}", notImplemented)
 					}
 				})
 
@@ -542,27 +551,27 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.Get("/cpo/products", deps.OzonHandler.ListCPOProducts)
 						oz.Get("/cpo/orders", deps.OzonHandler.ListCPOOrders)
 						oz.Get("/limits", deps.OzonHandler.BidLimits)
-						oz.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/activate", deps.OzonHandler.ActivateCampaign)
-						oz.With(middleware.RequireWriteAccess()).Post("/campaigns/{id}/deactivate", deps.OzonHandler.DeactivateCampaign)
-						oz.With(middleware.RequireWriteAccess()).Patch("/campaigns/{id}/budget", deps.OzonHandler.UpdateBudget)
-						oz.With(middleware.RequireWriteAccess()).Put("/campaigns/{id}/products/bids", deps.OzonHandler.SetProductBids)
-						oz.With(middleware.RequireWriteAccess()).Post("/cpo/enable", deps.OzonHandler.EnableCPO)
-						oz.With(middleware.RequireWriteAccess()).Post("/cpo/disable", deps.OzonHandler.DisableCPO)
-						oz.With(middleware.RequireWriteAccess()).Post("/cpo/bids", deps.OzonHandler.SetCPOBids)
-						oz.With(middleware.RequireWriteAccess()).Post("/cpo/rate", deps.OzonHandler.SetCPORate)
-						oz.With(middleware.RequireWriteAccess()).Post("/cpo/activate", deps.OzonHandler.ActivateCPO)
-						oz.With(middleware.RequireWriteAccess()).Post("/cpo/deactivate", deps.OzonHandler.DeactivateCPO)
-						oz.With(middleware.RequireWriteAccess()).Post("/sync", deps.OzonHandler.TriggerSync)
+						oz.With(managePermission).Post("/campaigns/{id}/activate", deps.OzonHandler.ActivateCampaign)
+						oz.With(managePermission).Post("/campaigns/{id}/deactivate", deps.OzonHandler.DeactivateCampaign)
+						oz.With(managePermission).Patch("/campaigns/{id}/budget", deps.OzonHandler.UpdateBudget)
+						oz.With(managePermission).Put("/campaigns/{id}/products/bids", deps.OzonHandler.SetProductBids)
+						oz.With(managePermission).Post("/cpo/enable", deps.OzonHandler.EnableCPO)
+						oz.With(managePermission).Post("/cpo/disable", deps.OzonHandler.DisableCPO)
+						oz.With(managePermission).Post("/cpo/bids", deps.OzonHandler.SetCPOBids)
+						oz.With(managePermission).Post("/cpo/rate", deps.OzonHandler.SetCPORate)
+						oz.With(managePermission).Post("/cpo/activate", deps.OzonHandler.ActivateCPO)
+						oz.With(managePermission).Post("/cpo/deactivate", deps.OzonHandler.DeactivateCPO)
+						oz.With(managePermission).Post("/sync", deps.OzonHandler.TriggerSync)
 						// Phase 4: repricer (price changes audit, manual bulk, rollback)
 						oz.Get("/price-changes", deps.OzonHandler.ListPriceChanges)
-						oz.With(middleware.RequireWriteAccess()).Post("/price-changes/{id}/rollback", deps.OzonHandler.RollbackPriceChange)
-						oz.With(middleware.RequireWriteAccess()).Post("/prices/bulk", deps.OzonHandler.BulkPrices)
-						oz.With(middleware.RequireWriteAccess()).Post("/repricer/run", deps.OzonHandler.TriggerRepricerRun)
+						oz.With(managePermission).Post("/price-changes/{id}/rollback", deps.OzonHandler.RollbackPriceChange)
+						oz.With(managePermission).Post("/prices/bulk", deps.OzonHandler.BulkPrices)
+						oz.With(managePermission).Post("/repricer/run", deps.OzonHandler.TriggerRepricerRun)
 						// Phase 5: repricer parity (calendar, pause, health)
 						oz.Get("/price-schedules", deps.OzonHandler.ListPriceSchedules)
-						oz.With(middleware.RequireWriteAccess()).Post("/price-schedules", deps.OzonHandler.CreatePriceSchedule)
-						oz.With(middleware.RequireWriteAccess()).Delete("/price-schedules/{id}", deps.OzonHandler.CancelPriceSchedule)
-						oz.With(middleware.RequireWriteAccess()).Post("/prices/pause", deps.OzonHandler.PauseRepricer)
+						oz.With(managePermission).Post("/price-schedules", deps.OzonHandler.CreatePriceSchedule)
+						oz.With(managePermission).Delete("/price-schedules/{id}", deps.OzonHandler.CancelPriceSchedule)
+						oz.With(managePermission).Post("/prices/pause", deps.OzonHandler.PauseRepricer)
 						oz.Get("/repricer/health", deps.OzonHandler.RepricerHealth)
 						// Phase 6: postings-based 7×24 heatmap (peak-hours strategy)
 						oz.Get("/prices/heatmap", deps.OzonHandler.PricesHeatmap)
@@ -574,48 +583,48 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.Get("/ai/readiness", deps.OzonHandler.AIReadiness)
 						oz.Get("/ai/weekly-report", deps.OzonHandler.AIWeeklyReport)
 						oz.Get("/ai/decisions", deps.OzonHandler.AIListDecisions)
-						oz.With(middleware.RequireWriteAccess()).Post("/ai/run", deps.OzonHandler.AITriggerRun)
-						oz.With(middleware.RequireWriteAccess()).Post("/ai/decisions/{id}/approve", deps.OzonHandler.AIApproveDecision)
-						oz.With(middleware.RequireWriteAccess()).Post("/ai/decisions/{id}/reject", deps.OzonHandler.AIRejectDecision)
-						oz.With(middleware.RequireWriteAccess()).Post("/ai/decisions/approve-batch", deps.OzonHandler.AIApproveDecisionsBatch)
-						oz.With(middleware.RequireWriteAccess()).Post("/ai/decisions/reject-batch", deps.OzonHandler.AIRejectDecisionsBatch)
+						oz.With(managePermission).Post("/ai/run", deps.OzonHandler.AITriggerRun)
+						oz.With(managePermission).Post("/ai/decisions/{id}/approve", deps.OzonHandler.AIApproveDecision)
+						oz.With(managePermission).Post("/ai/decisions/{id}/reject", deps.OzonHandler.AIRejectDecision)
+						oz.With(managePermission).Post("/ai/decisions/approve-batch", deps.OzonHandler.AIApproveDecisionsBatch)
+						oz.With(managePermission).Post("/ai/decisions/reject-batch", deps.OzonHandler.AIRejectDecisionsBatch)
 					} else {
 						oz.Get("/campaigns", notImplemented)
 						oz.Get("/campaigns/{id}", notImplemented)
 						oz.Get("/campaigns/{id}/stats", notImplemented)
 						oz.Get("/prices", notImplemented)
-						oz.With(middleware.RequireWriteAccess()).Post("/sync", notImplemented)
+						oz.With(managePermission).Post("/sync", notImplemented)
 					}
 				})
 
 				// SEO Analysis
 				if deps.SEOHandler != nil {
-					scoped.With(middleware.RequireWriteAccess()).Post("/seo/analyze", deps.SEOHandler.AnalyzeAll)
+					scoped.With(managePermission).Post("/seo/analyze", deps.SEOHandler.AnalyzeAll)
 					scoped.Get("/products/{id}/seo", deps.SEOHandler.GetProductAnalysis)
 				}
 
 				// Delivery Data
 				if deps.DeliveryHandler != nil {
-					scoped.With(middleware.RequireWriteAccess()).Post("/delivery/collect", deps.DeliveryHandler.Collect)
+					scoped.With(managePermission).Post("/delivery/collect", deps.DeliveryHandler.Collect)
 				}
 
 				// Competitors
 				if deps.CompetitorHandler != nil {
 					scoped.Get("/competitors", deps.CompetitorHandler.List)
 					scoped.Get("/products/{id}/competitors", deps.CompetitorHandler.ListByProduct)
-					scoped.With(middleware.RequireWriteAccess()).Post("/competitors/extract", deps.CompetitorHandler.Extract)
+					scoped.With(managePermission).Post("/competitors/extract", deps.CompetitorHandler.Extract)
 				}
 
 				// Exports — POST requires write access
 				scoped.Route("/exports", func(exp chi.Router) {
 					if deps.ExportHandler != nil {
 						exp.Get("/", deps.ExportHandler.List)
-						exp.With(middleware.RequireWriteAccess()).Post("/", deps.ExportHandler.Create)
+						exp.With(managePermission).Post("/", deps.ExportHandler.Create)
 						exp.Get("/{id}", deps.ExportHandler.Get)
 						exp.Get("/{id}/download", deps.ExportHandler.Download)
 					} else {
 						exp.Get("/", notImplemented)
-						exp.With(middleware.RequireWriteAccess()).Post("/", notImplemented)
+						exp.With(managePermission).Post("/", notImplemented)
 						exp.Get("/{id}", notImplemented)
 						exp.Get("/{id}/download", notImplemented)
 					}
@@ -623,9 +632,9 @@ func NewRouter(deps RouterDeps) chi.Router {
 
 				// Audit Logs — owner/manager only
 				if deps.AuditLogHandler != nil {
-					scoped.With(middleware.RequireRole(domain.RoleOwner, domain.RoleManager)).Get("/audit-logs", deps.AuditLogHandler.List)
+					scoped.With(managePermission).Get("/audit-logs", deps.AuditLogHandler.List)
 				} else {
-					scoped.With(middleware.RequireRole(domain.RoleOwner, domain.RoleManager)).Get("/audit-logs", notImplemented)
+					scoped.With(managePermission).Get("/audit-logs", notImplemented)
 				}
 
 				// Job Runs
@@ -633,17 +642,17 @@ func NewRouter(deps RouterDeps) chi.Router {
 					if deps.JobRunHandler != nil {
 						jobRuns.Get("/", deps.JobRunHandler.List)
 						jobRuns.Get("/{id}", deps.JobRunHandler.Get)
-						jobRuns.With(middleware.RequireWriteAccess()).Post("/{id}/retry", deps.JobRunHandler.Retry)
+						jobRuns.With(managePermission).Post("/{id}/retry", deps.JobRunHandler.Retry)
 					} else {
 						jobRuns.Get("/", notImplemented)
 						jobRuns.Get("/{id}", notImplemented)
-						jobRuns.With(middleware.RequireWriteAccess()).Post("/{id}/retry", notImplemented)
+						jobRuns.With(managePermission).Post("/{id}/retry", notImplemented)
 					}
 				})
 
 				// Workspace Settings
 				scoped.Route("/settings", func(settings chi.Router) {
-					settings.Use(middleware.RequireRole(domain.RoleOwner, domain.RoleManager))
+					settings.Use(managePermission)
 					if deps.WorkspaceSettingsHandler != nil {
 						settings.Get("/", deps.WorkspaceSettingsHandler.GetSettings)
 						settings.Put("/", deps.WorkspaceSettingsHandler.UpdateSettings)
