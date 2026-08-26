@@ -85,7 +85,7 @@ jobs:
           # MITM and DNS hijack on the deploy path. Get the fingerprint with:
           #   ssh-keyscan -t ed25519 <host> | ssh-keygen -lf - -E sha256
           fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
-          envs: GHCR_TOKEN,GHCR_USER,DEPLOY_PATH,GITHUB_SHA
+          envs: GHCR_TOKEN,GHCR_USER,DEPLOY_PATH,GITHUB_SHA,GITHUB_REPOSITORY
           script_stop: true
           script: |
             set -euo pipefail
