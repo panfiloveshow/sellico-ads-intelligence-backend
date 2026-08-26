@@ -78,7 +78,7 @@ func legacyRoleAllows(r *http.Request) bool {
 func writeForbiddenPermission(w http.ResponseWriter, permission string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"data": nil,
 		"errors": []map[string]string{{
 			"code":       "PERMISSION_DENIED",
@@ -91,7 +91,7 @@ func writeForbiddenPermission(w http.ResponseWriter, permission string) {
 func writeServiceUnavailable(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"data": nil,
 		"errors": []map[string]string{{
 			"code":    "PERMISSION_CHECK_UNAVAILABLE",

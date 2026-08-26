@@ -120,6 +120,8 @@ jobs:
             docker logout ghcr.io
             docker image prune -f
         env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          # PAT не нужен: токен джобы умеет читать пакеты этого репо,
+          # свой GHCR_TOKEN задавайте только если образы приватные в другом owner
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
           GHCR_USER: ${{ github.actor }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
