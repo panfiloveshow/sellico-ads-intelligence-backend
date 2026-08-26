@@ -114,6 +114,10 @@ jobs:
             EOF
             # Token is read from env — never echoed, never interpolated.
             printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            echo "--- deploy.override.yml:"; cat "$tmpdir/deploy.override.yml"
+            echo "--- server docker-compose.prod.yml (head):"; head -5 docker-compose.prod.yml
+            docker compose version
+            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" config >/dev/null
             docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" pull api worker
             docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" run --rm migrate
             docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" up -d api worker
