@@ -86,7 +86,8 @@ jobs:
           #   ssh-keyscan -t ed25519 <host> | ssh-keygen -lf - -E sha256
           fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
           envs: GHCR_TOKEN,GHCR_USER,DEPLOY_PATH,GITHUB_SHA,GITHUB_REPOSITORY
-          script_stop: true
+          # script_stop нарезает скрипт построчно и ломает heredoc —
+          # строгий режим обеспечивает set -euo pipefail внутри скрипта
           script: |
             set -euo pipefail
             cd "${DEPLOY_PATH:-/opt/sellico}"
