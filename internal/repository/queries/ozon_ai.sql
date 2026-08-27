@@ -172,6 +172,14 @@ SELECT * FROM ozon_product_prices
 WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND sku = ANY(sqlc.arg('skus')::bigint[]);
 
+-- ListOzonProductPricesByOffers — тот же список, но по артикулам. Нужен из-за
+-- раздвоения SKU у Ozon: кампании оперируют «рекламным» SKU, а зеркала цен,
+-- стоков и продаж — «продажным»; общий ключ — offer_id (через ozon_products).
+-- name: ListOzonProductPricesByOffers :many
+SELECT * FROM ozon_product_prices
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND offer_id = ANY(sqlc.arg('offers')::text[]);
+
 -- GetOzonAIBidGuardState mirrors GetOzonStrategyGuardState for a single
 -- (campaign, sku) target, counting both strategy and AI writes so the two
 -- automation paths share one cooldown budget.

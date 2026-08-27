@@ -1155,6 +1155,59 @@ func (q *Queries) ListOzonCampaignDailyStatsSince(ctx context.Context, arg ListO
 	return items, nil
 }
 
+const listOzonProductPricesByOffers = `-- name: ListOzonProductPricesByOffers :many
+SELECT id, seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub, min_price_rub, net_price_rub, marketing_seller_price_rub, color_index, commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at, ozon_index_min_price_rub, external_index_min_price_rub, self_index_min_price_rub FROM ozon_product_prices
+WHERE seller_cabinet_id = $1
+  AND offer_id = ANY($2::text[])
+`
+
+type ListOzonProductPricesByOffersParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Offers          []string    `json:"offers"`
+}
+
+// ListOzonProductPricesByOffers — тот же список, но по артикулам. Нужен из-за
+// раздвоения SKU у Ozon: кампании оперируют «рекламным» SKU, а зеркала цен,
+// стоков и продаж — «продажным»; общий ключ — offer_id (через ozon_products).
+func (q *Queries) ListOzonProductPricesByOffers(ctx context.Context, arg ListOzonProductPricesByOffersParams) ([]OzonProductPrice, error) {
+	rows, err := q.db.Query(ctx, listOzonProductPricesByOffers, arg.SellerCabinetID, arg.Offers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []OzonProductPrice{}
+	for rows.Next() {
+		var i OzonProductPrice
+		if err := rows.Scan(
+			&i.ID,
+			&i.SellerCabinetID,
+			&i.Sku,
+			&i.OfferID,
+			&i.Name,
+			&i.PriceRub,
+			&i.OldPriceRub,
+			&i.MinPriceRub,
+			&i.NetPriceRub,
+			&i.MarketingSellerPriceRub,
+			&i.ColorIndex,
+			&i.CommissionFboPct,
+			&i.CommissionFbsPct,
+			&i.AcquiringPct,
+			&i.SyncedAt,
+			&i.OzonIndexMinPriceRub,
+			&i.ExternalIndexMinPriceRub,
+			&i.SelfIndexMinPriceRub,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOzonProductPricesBySkus = `-- name: ListOzonProductPricesBySkus :many
 SELECT id, seller_cabinet_id, sku, offer_id, name, price_rub, old_price_rub, min_price_rub, net_price_rub, marketing_seller_price_rub, color_index, commission_fbo_pct, commission_fbs_pct, acquiring_pct, synced_at, ozon_index_min_price_rub, external_index_min_price_rub, self_index_min_price_rub FROM ozon_product_prices
 WHERE seller_cabinet_id = $1

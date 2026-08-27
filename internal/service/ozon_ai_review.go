@@ -131,7 +131,13 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 		return nil, fmt.Errorf("list campaign products: %w", err)
 	}
 
-	stocks := loadCabinetStocks(ctx, s.queries, s.logger, cabinetID)
+	skus := make([]int64, 0, len(productRows))
+	for _, row := range productRows {
+		skus = append(skus, row.Sku)
+	}
+	// Мост идентификаторов: рекламный SKU кампании → артикул → продажные
+	// цены/стоки/продажи (см. ozonSKUBridge).
+	bridge := s.buildOzonSKUBridge(ctx, cabinetID, skus)
 	unitsPerDay := map[int64]float64{}
 	if velocityRows, velErr := s.queries.OzonSalesVelocityByCabinet(ctx, sqlcgen.OzonSalesVelocityByCabinetParams{
 		SellerCabinetID: uuidToPgtype(cabinetID),
@@ -146,47 +152,39 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 	funnelBySKU, _ := s.loadCardFunnel(ctx, cabinetID)
 	_, ratingByName := s.loadReviewRatings(ctx, cabinetID)
 
-	// Маржа и offer_id — из зеркала цен (тот же расчёт, что в контексте ИИ).
-	skus := make([]int64, 0, len(productRows))
-	for _, row := range productRows {
-		skus = append(skus, row.Sku)
-	}
-	marginBySKU := map[int64]*float64{}
-	offerBySKU := map[int64]string{}
-	if len(skus) > 0 {
-		if priceRows, priceErr := s.queries.ListOzonProductPricesBySkus(ctx, sqlcgen.ListOzonProductPricesBySkusParams{
-			SellerCabinetID: uuidToPgtype(cabinetID), Skus: skus,
-		}); priceErr == nil {
-			for _, row := range priceRows {
-				offerBySKU[row.Sku] = pgTextValue(row.OfferID)
-				price := pgNumericToFloatPtr(row.PriceRub)
-				cost := pgNumericToFloatPtr(row.NetPriceRub)
-				if price != nil && cost != nil {
-					commission := pgNumericToFloat(row.CommissionFboPct)
-					if fbs := pgNumericToFloat(row.CommissionFbsPct); fbs > commission {
-						commission = fbs
-					}
-					marginBySKU[row.Sku] = ozonSKUMarginPct(*price, *cost, commission, pgNumericToFloat(row.AcquiringPct))
-				}
-			}
-		}
-	}
-
 	insights := make([]domain.OzonProductInsight, 0, len(productRows))
 	for _, row := range productRows {
-		insight := domain.OzonProductInsight{SKU: row.Sku, MarginPct: marginBySKU[row.Sku]}
-		if stock, ok := stocks[row.Sku]; ok {
+		insight := domain.OzonProductInsight{SKU: row.Sku}
+		if price, ok := bridge.priceBySKU[row.Sku]; ok {
+			priceRub := pgNumericToFloatPtr(price.PriceRub)
+			cost := pgNumericToFloatPtr(price.NetPriceRub)
+			if priceRub != nil && cost != nil {
+				commission := pgNumericToFloat(price.CommissionFboPct)
+				if fbs := pgNumericToFloat(price.CommissionFbsPct); fbs > commission {
+					commission = fbs
+				}
+				insight.MarginPct = ozonSKUMarginPct(*priceRub, *cost, commission, pgNumericToFloat(price.AcquiringPct))
+			}
+		}
+		if stock, ok := bridge.stockBySKU[row.Sku]; ok {
 			v := stock
 			insight.Stock = &v
-			if perDay := unitsPerDay[row.Sku]; perDay > 0 {
-				cover := roundRub(float64(stock) / perDay)
-				insight.DaysOfCover = &cover
+			if salesSKU, has := bridge.salesSKUBySKU[row.Sku]; has {
+				if perDay := unitsPerDay[salesSKU]; perDay > 0 {
+					cover := roundRub(float64(stock) / perDay)
+					insight.DaysOfCover = &cover
+				}
 			}
 		}
 		funnel, hasFunnel := funnelBySKU[strconv.FormatInt(row.Sku, 10)]
 		if !hasFunnel {
-			if offer := offerBySKU[row.Sku]; offer != "" {
+			if offer := bridge.offerBySKU[row.Sku]; offer != "" {
 				funnel, hasFunnel = funnelBySKU[offer]
+			}
+		}
+		if !hasFunnel {
+			if salesSKU, has := bridge.salesSKUBySKU[row.Sku]; has {
+				funnel, hasFunnel = funnelBySKU[strconv.FormatInt(salesSKU, 10)]
 			}
 		}
 		if hasFunnel {
@@ -198,7 +196,13 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 				toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)
 				insight.ConvToOrderPct = &toOrder
 			}
-			if rating, ok := ratingByName[funnel.Name]; ok {
+		}
+		ratingName := bridge.nameBySKU[row.Sku]
+		if ratingName == "" && hasFunnel {
+			ratingName = funnel.Name
+		}
+		if ratingName != "" {
+			if rating, ok := ratingByName[ratingName]; ok {
 				r, cnt := rating.Rating, rating.ReviewsCount
 				insight.Rating = &r
 				insight.ReviewsCount = &cnt
@@ -371,7 +375,13 @@ func (s *OzonAIManagerService) loadFreshCabinetData(ctx context.Context, cabinet
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
 		spend14ByOzonID:   map[int64]float64{},
-		stockBySKU:        loadCabinetStocks(ctx, s.queries, s.logger, cabinetID),
+		stockBySKU:        map[int64]int64{},
+	}
+	if proposal.Target.SKU > 0 {
+		// Сток для guardrail — через мост идентификаторов (рекламный SKU →
+		// артикул → продажный сток), как и в контексте прогона.
+		bridge := s.buildOzonSKUBridge(ctx, cabinetID, []int64{proposal.Target.SKU})
+		data.stockBySKU = bridge.stockBySKU
 	}
 	campaigns, err := s.queries.ListOzonCampaignsByCabinet(ctx, sqlcgen.ListOzonCampaignsByCabinetParams{
 		SellerCabinetID: uuidToPgtype(cabinetID), Limit: 500, Offset: 0,

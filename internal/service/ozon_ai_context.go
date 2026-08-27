@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/collector"
@@ -326,7 +325,8 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
 		spend14ByOzonID:   map[int64]float64{},
-		stockBySKU:        loadCabinetStocks(ctx, s.queries, s.logger, cabinetID),
+		// stockBySKU заполняет мост идентификаторов ниже (ключ — рекламный SKU).
+		stockBySKU: map[int64]int64{},
 	}
 
 	// Воронка карточек из СЕО-сервиса (best-effort, ключи — sku и offer_id).
@@ -510,12 +510,11 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		skus = skus[:aiPackEconomicsLimit]
 	}
 	if len(skus) > 0 {
-		priceRows, pricesErr := s.queries.ListOzonProductPricesBySkus(ctx, sqlcgen.ListOzonProductPricesBySkusParams{
-			SellerCabinetID: uuidToPgtype(cabinetID), Skus: skus,
-		})
-		if pricesErr != nil {
-			return nil, nil, fmt.Errorf("list product prices: %w", pricesErr)
-		}
+		// Мост идентификаторов: у Ozon рекламный SKU кампаний ≠ продажному SKU
+		// зеркал цен/стоков/продаж; общий ключ — артикул. Без моста экономика
+		// и склад для таких кабинетов были пустыми.
+		bridge := s.buildOzonSKUBridge(ctx, cabinetID, skus)
+		data.stockBySKU = bridge.stockBySKU
 		// Cost fallback: when Ozon does not report net_price, take the cost
 		// from the Sellico unit-economics mirror (cost_price + other_costs;
 		// logistics is already inside Ozon commissions, never added). Failures
@@ -528,23 +527,34 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				economics[econ.OfferID] = econ
 			}
 		}
-		for _, row := range priceRows {
-			entry := aiPackEconomics{
-				SKU:              row.Sku,
-				OfferID:          pgTextValue(row.OfferID),
-				PriceRub:         pgNumericToFloatPtr(row.PriceRub),
-				MinPriceRub:      pgNumericToFloatPtr(row.MinPriceRub),
-				NetPriceRub:      pgNumericToFloatPtr(row.NetPriceRub),
-				CommissionFBOPct: pgNumericToFloatPtr(row.CommissionFboPct),
-				CommissionFBSPct: pgNumericToFloatPtr(row.CommissionFbsPct),
-				ColorIndex:       pgTextValue(row.ColorIndex),
+		for _, sku := range skus {
+			row, hasPrice := bridge.priceBySKU[sku]
+			stock, hasStock := bridge.stockBySKU[sku]
+			// SKU без единого сигнала не тратит токены пака.
+			if !hasPrice && !hasStock {
+				continue
+			}
+			entry := aiPackEconomics{SKU: sku}
+			if offer := bridge.offerBySKU[sku]; offer != "" {
+				entry.OfferID = offer
+			}
+			if hasPrice {
+				if entry.OfferID == "" {
+					entry.OfferID = pgTextValue(row.OfferID)
+				}
+				entry.PriceRub = pgNumericToFloatPtr(row.PriceRub)
+				entry.MinPriceRub = pgNumericToFloatPtr(row.MinPriceRub)
+				entry.NetPriceRub = pgNumericToFloatPtr(row.NetPriceRub)
+				entry.CommissionFBOPct = pgNumericToFloatPtr(row.CommissionFboPct)
+				entry.CommissionFBSPct = pgNumericToFloatPtr(row.CommissionFbsPct)
+				entry.ColorIndex = pgTextValue(row.ColorIndex)
 			}
 			costSource := ""
 			if entry.NetPriceRub != nil && *entry.NetPriceRub > 0 {
 				costSource = "ozon"
 			}
-			if (entry.NetPriceRub == nil || *entry.NetPriceRub <= 0) && row.OfferID.Valid {
-				if econ, ok := economics[row.OfferID.String]; ok {
+			if (entry.NetPriceRub == nil || *entry.NetPriceRub <= 0) && entry.OfferID != "" {
+				if econ, ok := economics[entry.OfferID]; ok {
 					if cost := ozonEffectiveNetPrice(0, &econ); cost > 0 {
 						entry.NetPriceRub = &cost
 						costSource = "sellico"
@@ -554,25 +564,38 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			entry.CostSource = costSource
 			// Остаток и покрытие: без них модель масштабирует товары, которых
 			// нет на складе. Отсутствие данных не пишем как ноль.
-			if stock, ok := data.stockBySKU[row.Sku]; ok {
+			if hasStock {
 				v := stock
 				entry.Stock = &v
-				if perDay := unitsPerDay[row.Sku]; perDay > 0 {
-					cover := roundRub(float64(stock) / perDay)
-					entry.DaysOfCover = &cover
+				if salesSKU, ok := bridge.salesSKUBySKU[sku]; ok {
+					if perDay := unitsPerDay[salesSKU]; perDay > 0 {
+						cover := roundRub(float64(stock) / perDay)
+						entry.DaysOfCover = &cover
+					}
 				}
 			}
-			// Воронка карточки: матчим по числовому SKU, затем по артикулу —
-			// в СЕО-базе поле sku может держать любой из двух.
-			funnel, hasFunnel := funnelBySKU[strconv.FormatInt(row.Sku, 10)]
-			if !hasFunnel && row.OfferID.Valid {
-				funnel, hasFunnel = funnelByOffer[row.OfferID.String]
+			// Воронка карточки: рекламный SKU → артикул → продажный SKU —
+			// в СЕО-базе поле sku может держать любой из идентификаторов.
+			funnel, hasFunnel := funnelBySKU[strconv.FormatInt(sku, 10)]
+			if !hasFunnel && entry.OfferID != "" {
+				funnel, hasFunnel = funnelByOffer[entry.OfferID]
+			}
+			if !hasFunnel {
+				if salesSKU, ok := bridge.salesSKUBySKU[sku]; ok {
+					funnel, hasFunnel = funnelBySKU[strconv.FormatInt(salesSKU, 10)]
+				}
 			}
 			if hasFunnel {
 				applyCardFunnel(&entry, funnel)
-				// Рейтинг товара: у отзывов нет ключа SKU, матчим по названию
-				// карточки, которое пришло из СЕО-моста.
-				if rating, ok := ratingByName[funnel.Name]; ok {
+			}
+			// Рейтинг товара: ключ — название карточки. Своё имя из каталога
+			// надёжнее, имя из СЕО-моста — запасной вариант.
+			ratingName := bridge.nameBySKU[sku]
+			if ratingName == "" && hasFunnel {
+				ratingName = funnel.Name
+			}
+			if ratingName != "" {
+				if rating, ok := ratingByName[ratingName]; ok {
 					r, cnt := rating.Rating, rating.ReviewsCount
 					entry.Rating = &r
 					entry.ReviewsCount = &cnt
@@ -581,7 +604,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			// Per-SKU margin: the model reasons on BOTH margin and ДРР (system
 			// prompt). Uses the conservative max(FBO, FBS) commission and the
 			// same cost resolution as the repricer's ozonEffectiveNetPrice.
-			if entry.PriceRub != nil && entry.NetPriceRub != nil {
+			if hasPrice && entry.PriceRub != nil && entry.NetPriceRub != nil {
 				commission := 0.0
 				if entry.CommissionFBOPct != nil {
 					commission = *entry.CommissionFBOPct
@@ -703,21 +726,6 @@ func shopRatingCount(shop *collector.ShopRating) *int64 {
 	return &v
 }
 
-// loadCabinetStocks mirrors ozon_product_stocks into a SKU→present map.
-// Best-effort: a failed read returns an empty map, which every consumer
-// treats as «сток неизвестен» — increases are then NOT blocked (unknown ≠ 0).
-func loadCabinetStocks(ctx context.Context, queries *sqlcgen.Queries, logger zerolog.Logger, cabinetID uuid.UUID) map[int64]int64 {
-	rows, err := queries.ListOzonProductStocksByCabinet(ctx, uuidToPgtype(cabinetID))
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to load product stocks for ai context")
-		return map[int64]int64{}
-	}
-	out := make(map[int64]int64, len(rows))
-	for _, row := range rows {
-		out[row.Sku] = int64(row.Present)
-	}
-	return out
-}
 
 // marshalAIContextPack serializes the pack under maxBytes, degrading detail
 // step by step: daily rows go first, then campaign and product depth, then

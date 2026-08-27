@@ -309,6 +309,10 @@ type Querier interface {
 	ListOzonPriceScheduleEntriesByCabinet(ctx context.Context, arg ListOzonPriceScheduleEntriesByCabinetParams) ([]OzonPriceScheduleEntry, error)
 	ListOzonProductEconomicsByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) ([]OzonProductEconomic, error)
 	ListOzonProductPrices(ctx context.Context, arg ListOzonProductPricesParams) ([]OzonProductPrice, error)
+	// ListOzonProductPricesByOffers — тот же список, но по артикулам. Нужен из-за
+	// раздвоения SKU у Ozon: кампании оперируют «рекламным» SKU, а зеркала цен,
+	// стоков и продаж — «продажным»; общий ключ — offer_id (через ozon_products).
+	ListOzonProductPricesByOffers(ctx context.Context, arg ListOzonProductPricesByOffersParams) ([]OzonProductPrice, error)
 	ListOzonProductPricesBySkus(ctx context.Context, arg ListOzonProductPricesBySkusParams) ([]OzonProductPrice, error)
 	ListOzonProductStocksByCabinet(ctx context.Context, sellerCabinetID pgtype.UUID) ([]OzonProductStock, error)
 	// ListOzonProductsByCabinet feeds the price-sync name fill (map by product_id).
