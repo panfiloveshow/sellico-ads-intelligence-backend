@@ -44,10 +44,9 @@ func (s *OzonSyncService) SyncCampaignSkuStats(ctx context.Context, cabinet doma
 
 	dateTo := time.Now().UTC()
 	dateFrom := dateTo.AddDate(0, 0, -ozonCampaignSkuWindowDays)
-	rows, err := s.perfClient.GetCampaignObjectsReport(ctx, ozonClientCreds(creds), campaignIDs, dateFrom, dateTo)
-	if err != nil {
-		return fmt.Errorf("statistics (campaign objects): %w", err)
-	}
+	// Best-effort: клиент отдаёт строки успешных кампаний даже при ошибке
+	// части кампаний — сохраняем что есть, ошибку возвращаем в конце.
+	rows, reportErr := s.perfClient.GetCampaignObjectsReport(ctx, ozonClientCreds(creds), campaignIDs, dateFrom, dateTo)
 
 	upserted := 0
 	for _, row := range rows {
@@ -75,6 +74,9 @@ func (s *OzonSyncService) SyncCampaignSkuStats(ctx context.Context, cabinet doma
 		Int("campaigns", len(campaignIDs)).
 		Int("rows", upserted).
 		Msg("ozon campaign sku stats synced")
+	if reportErr != nil {
+		return fmt.Errorf("statistics (campaign objects): %w", reportErr)
+	}
 	return nil
 }
 

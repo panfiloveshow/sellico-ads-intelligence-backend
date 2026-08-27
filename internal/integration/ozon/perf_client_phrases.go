@@ -149,7 +149,14 @@ func (c *PerfClient) submitPhrasesReport(ctx context.Context, creds Credentials,
 // waitStatisticsReport polls GET /api/client/statistics/{uuid} until the
 // report state is OK, an error state arrives, or the timeout elapses.
 func (c *PerfClient) waitStatisticsReport(ctx context.Context, creds Credentials, reportUUID string) error {
-	deadline := time.Now().Add(phrasesPollTimeout)
+	return c.waitStatisticsReportUntil(ctx, creds, reportUUID, phrasesPollTimeout)
+}
+
+// waitStatisticsReportUntil polls a report's state with an explicit timeout —
+// reports queue behind each other account-wide, so callers that submit many
+// reports in a row need a longer wait than the phrases default.
+func (c *PerfClient) waitStatisticsReportUntil(ctx context.Context, creds Credentials, reportUUID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for {
 		body, err := c.doGet(ctx, creds, "/api/client/statistics/"+reportUUID, nil)
 		if err != nil {
@@ -170,7 +177,7 @@ func (c *PerfClient) waitStatisticsReport(ctx context.Context, creds Credentials
 			return fmt.Errorf("ozon perf: statistics report %s failed: %s", reportUUID, parsed.Error)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("ozon perf: statistics report %s not ready after %s (state %q)", reportUUID, phrasesPollTimeout, parsed.State)
+			return fmt.Errorf("ozon perf: statistics report %s not ready after %s (state %q)", reportUUID, timeout, parsed.State)
 		}
 		if err := sleepWithContext(ctx, phrasesPollInterval); err != nil {
 			return err

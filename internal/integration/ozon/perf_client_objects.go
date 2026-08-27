@@ -3,14 +3,14 @@ package ozon
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"time"
-
-	"context"
 )
 
 // Campaign objects (per-SKU) statistics via the same async report flow as
@@ -23,6 +23,10 @@ import (
 // For SKU campaigns the report rows carry per-SKU (and per-day with
 // groupBy DATE) counters — the only surface where «сколько заказов принесла
 // именно эта кампания этому товару» exists.
+
+// objectsPollTimeout: reports queue account-wide behind phrases/CPO reports
+// kicked at the same worker boot — 5 minutes in NOT_STARTED is normal.
+const objectsPollTimeout = 15 * time.Minute
 
 // CampaignObjectStatRow is one parsed row: a campaign's SKU on one day.
 type CampaignObjectStatRow struct {
@@ -43,14 +47,21 @@ type CampaignObjectStatRow struct {
 // known from the request itself.
 func (c *PerfClient) GetCampaignObjectsReport(ctx context.Context, creds Credentials, campaignIDs []int64, from, to time.Time) ([]CampaignObjectStatRow, error) {
 	var out []CampaignObjectStatRow
+	var errs []error
 	for _, id := range campaignIDs {
 		rows, err := c.campaignObjectsChunk(ctx, creds, []int64{id}, from, to)
 		if err != nil {
-			return out, err
+			// Одна кампания не должна рушить остальные (таймаут очереди
+			// отчётов, 400 на конкретный id) — best-effort с общей ошибкой.
+			errs = append(errs, fmt.Errorf("campaign %d: %w", id, err))
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		out = append(out, rows...)
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 func (c *PerfClient) campaignObjectsChunk(ctx context.Context, creds Credentials, campaignIDs []int64, from, to time.Time) ([]CampaignObjectStatRow, error) {
@@ -83,7 +94,7 @@ func (c *PerfClient) campaignObjectsChunk(ctx context.Context, creds Credentials
 	if reportUUID == "" {
 		return nil, fmt.Errorf("ozon perf: statistics submit returned no UUID (raw: %s)", rawSnippet(body))
 	}
-	if err := c.waitStatisticsReport(ctx, creds, reportUUID); err != nil {
+	if err := c.waitStatisticsReportUntil(ctx, creds, reportUUID, objectsPollTimeout); err != nil {
 		return nil, err
 	}
 	report, err := c.downloadStatisticsReport(ctx, creds, reportUUID)
