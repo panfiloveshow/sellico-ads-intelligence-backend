@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/seo"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
 
@@ -109,6 +111,19 @@ type aiPackEconomics struct {
 	// Omitted when stock is unknown or the SKU had no sales in the window —
 	// a missing value must read as «не измерено», never as «запаса нет».
 	DaysOfCover *float64 `json:"days_of_cover,omitempty"`
+
+	// Card funnel over the last 14 days from the SEO-service mirror of
+	// /v1/analytics/data: search impressions → card views → cart → orders.
+	// Distinguishes «чинить ставки» from «чинить карточку»: high ДРР with a
+	// healthy card conversion is a bidding problem, with a poor one — a card
+	// problem ads cannot fix. All omitted when the SEO bridge has no data.
+	CardImpressions *int64 `json:"card_impressions_14d,omitempty"`
+	CardViews       *int64 `json:"card_views_14d,omitempty"`
+	CardCartAdds    *int64 `json:"card_cart_adds_14d,omitempty"`
+	// ConvToCartPct = корзина / просмотры карточки × 100 (просмотры > 0).
+	ConvToCartPct *float64 `json:"conv_to_cart_pct,omitempty"`
+	// ConvToOrderPct = заказы карточки / просмотры карточки × 100.
+	ConvToOrderPct *float64 `json:"conv_to_order_pct,omitempty"`
 }
 
 // aiPackDecisionOutcome is one past applied decision + its measured result, fed
@@ -301,6 +316,9 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		spend14ByOzonID:   map[int64]float64{},
 		stockBySKU:        loadCabinetStocks(ctx, s.queries, s.logger, cabinetID),
 	}
+
+	// Воронка карточек из СЕО-сервиса (best-effort, ключи — sku и offer_id).
+	funnelBySKU, funnelByOffer := s.loadCardFunnel(ctx, cabinetID)
 
 	// Скорость продаж за 28 дней — знаменатель для days_of_cover.
 	unitsPerDay := map[int64]float64{}
@@ -526,6 +544,15 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 					entry.DaysOfCover = &cover
 				}
 			}
+			// Воронка карточки: матчим по числовому SKU, затем по артикулу —
+			// в СЕО-базе поле sku может держать любой из двух.
+			funnel, hasFunnel := funnelBySKU[strconv.FormatInt(row.Sku, 10)]
+			if !hasFunnel && row.OfferID.Valid {
+				funnel, hasFunnel = funnelByOffer[row.OfferID.String]
+			}
+			if hasFunnel {
+				applyCardFunnel(&entry, funnel)
+			}
 			// Per-SKU margin: the model reasons on BOTH margin and ДРР (system
 			// prompt). Uses the conservative max(FBO, FBS) commission and the
 			// same cost resolution as the repricer's ozonEffectiveNetPrice.
@@ -560,6 +587,54 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	}
 
 	return pack, data, nil
+}
+
+// loadCardFunnel pulls the 14-day card funnel from the SEO service, keyed by
+// its sku string and (as a fallback key) nothing else — the same value serves
+// both maps because СЕО хранит в products.sku либо числовой Ozon SKU, либо
+// артикул. Best-effort: any failure returns empty maps and the pack simply
+// has no funnel section.
+func (s *OzonAIManagerService) loadCardFunnel(ctx context.Context, cabinetID uuid.UUID) (map[string]seo.CardMetric, map[string]seo.CardMetric) {
+	empty := map[string]seo.CardMetric{}
+	if s.seoFunnel == nil || !s.seoFunnel.Enabled() {
+		return empty, empty
+	}
+	row, err := s.queries.GetSellerCabinetByID(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return empty, empty
+	}
+	creds, err := decryptOzonCredentialsBlob(sellerCabinetFromSqlc(row).EncryptedCredentials, s.encryptionKey)
+	if err != nil || creds.ClientID == "" {
+		return empty, empty
+	}
+	metrics, err := s.seoFunnel.GetOzonCardMetrics(ctx, creds.ClientID, aiPackStatsWindowDays)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to load card funnel from seo service")
+		return empty, empty
+	}
+	bySKU := make(map[string]seo.CardMetric, len(metrics))
+	for _, m := range metrics {
+		if m.SKU != "" {
+			bySKU[m.SKU] = m
+		}
+	}
+	return bySKU, bySKU
+}
+
+// applyCardFunnel fills the funnel fields of one economics entry. Conversions
+// are only computed over non-zero card views — деление на ноль тут читалось
+// бы моделью как «нулевая конверсия», что неправда.
+func applyCardFunnel(entry *aiPackEconomics, funnel seo.CardMetric) {
+	impressions, views, cart := funnel.Impressions, funnel.CardViews, funnel.CartAdds
+	entry.CardImpressions = &impressions
+	entry.CardViews = &views
+	entry.CardCartAdds = &cart
+	if views > 0 {
+		toCart := roundRub(float64(cart) / float64(views) * 100)
+		entry.ConvToCartPct = &toCart
+		toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)
+		entry.ConvToOrderPct = &toOrder
+	}
 }
 
 // loadCabinetStocks mirrors ozon_product_stocks into a SKU→present map.

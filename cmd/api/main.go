@@ -18,6 +18,7 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/seo"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/transport"
@@ -165,7 +166,8 @@ func main() {
 		Timeout:        cfg.LLMTimeout,
 		MaxTokens:      cfg.LLMMaxTokens,
 	}, deps.Logger), []byte(cfg.EncryptionKey), deps.Logger).
-		WithContentModel(cfg.LLMContentModel)
+		WithContentModel(cfg.LLMContentModel).
+		WithSEOFunnel(seo.NewClient(cfg.SEOAPIBaseURL, cfg.SEOAPIToken, 0))
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)
@@ -233,7 +235,7 @@ func main() {
 	}
 
 	router := transport.NewRouter(transport.RouterDeps{
-		CORSAllowOrigins: cfg.CORSAllowOrigins,
+		CORSAllowOrigins:  cfg.CORSAllowOrigins,
 		PermissionChecker: crmPermissionChecker,
 		RateLimit: transport.RateLimitOpts{
 			RequestsPerSecond: cfg.RateLimitRPS,

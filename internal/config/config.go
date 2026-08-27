@@ -110,6 +110,11 @@ type Config struct {
 	SellicoServiceEmail    string // env: SELLICO_EMAIL, optional
 	SellicoServicePassword string // env: SELLICO_PASSWORD, optional
 
+	// SEO-service internal exports (card funnel for the AI context).
+	// Empty SEO_API_TOKEN disables the bridge entirely.
+	SEOAPIBaseURL string // env: SEO_API_BASE_URL, default: "https://seo.sellico.ru/api"
+	SEOAPIToken   string // env: SEO_API_TOKEN (= ACCOUNT_SYNC_TOKEN СЕО-сервиса)
+
 	// CORS
 	CORSAllowOrigins []string // env: CORS_ALLOW_ORIGINS, comma-separated
 
@@ -190,6 +195,8 @@ func Load() *Config {
 		SellicoServiceToken:                getEnvOrDefault("SELLICO_API_TOKEN", ""),
 		SellicoServiceEmail:                getEnvOrDefault("SELLICO_EMAIL", ""),
 		SellicoServicePassword:             getEnvOrDefault("SELLICO_PASSWORD", ""),
+		SEOAPIBaseURL:                      getEnvOrDefault("SEO_API_BASE_URL", "https://seo.sellico.ru/api"),
+		SEOAPIToken:                        getEnvOrDefault("SEO_API_TOKEN", ""),
 		SyncInterval:                       getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
 		RecommendationInterval:             getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
 		BidAutomationInterval:              getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),

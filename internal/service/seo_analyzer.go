@@ -15,9 +15,9 @@ import (
 
 // SEOAnalyzerService scores product listings and generates SEO recommendations.
 type SEOAnalyzerService struct {
-	queries    *sqlcgen.Queries
-	semantics  *SemanticsService
-	logger     zerolog.Logger
+	queries   *sqlcgen.Queries
+	semantics *SemanticsService
+	logger    zerolog.Logger
 }
 
 func NewSEOAnalyzerService(queries *sqlcgen.Queries, semantics *SemanticsService, logger zerolog.Logger) *SEOAnalyzerService {

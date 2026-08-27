@@ -13,6 +13,7 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/seo"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/telegram"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/wb"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/service"
@@ -140,7 +141,8 @@ func main() {
 		ozonActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 		ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonActionsService, llmClient, []byte(cfg.EncryptionKey), deps.Logger).
 			WithNotifier(service.NewOzonAINotifier(deps.Queries, sellicoClient, sellicoTokenManager, deps.Logger)).
-			WithContentModel(cfg.LLMContentModel)
+			WithContentModel(cfg.LLMContentModel).
+			WithSEOFunnel(seo.NewClient(cfg.SEOAPIBaseURL, cfg.SEOAPIToken, 0))
 		ozonRuntimeOpts = append(ozonRuntimeOpts, worker.WithOzonAIManager(ozonAIManager))
 		deps.Logger.Info().Str("model", cfg.LLMModel).Msg("ozon ai autopilot enabled")
 	} else {

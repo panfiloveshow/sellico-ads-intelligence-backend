@@ -15,14 +15,17 @@ import (
 
 // WBSuggestClient fetches search suggestions and frequency data from WB.
 type WBSuggestClient interface {
-	GetSuggest(ctx context.Context, query string) ([]struct{ Query string; Frequency int }, error)
+	GetSuggest(ctx context.Context, query string) ([]struct {
+		Query     string
+		Frequency int
+	}, error)
 	GetSearchTotalResults(ctx context.Context, query string) (int, error)
 }
 
 // SemanticsService manages keywords, clusters, and frequency tracking.
 type SemanticsService struct {
-	queries  *sqlcgen.Queries
-	logger   zerolog.Logger
+	queries *sqlcgen.Queries
+	logger  zerolog.Logger
 }
 
 func NewSemanticsService(queries *sqlcgen.Queries, logger zerolog.Logger) *SemanticsService {

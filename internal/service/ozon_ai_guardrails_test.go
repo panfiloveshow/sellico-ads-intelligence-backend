@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/seo"
 )
 
 func aiTestParams() domain.StrategyParams {
@@ -294,5 +295,26 @@ func TestStockIncreaseGuard(t *testing.T) {
 	params.AllowIncreaseWithoutStock = true
 	if reason := ozonAIStockIncreaseGuardReason(&low, params); reason != "" {
 		t.Fatalf("allow_increase_without_stock должен выключать проверку: %s", reason)
+	}
+}
+
+// Воронка карточки: конверсии считаются только при ненулевых просмотрах —
+// деление на ноль читалось бы моделью как «нулевая конверсия».
+func TestApplyCardFunnel(t *testing.T) {
+	entry := aiPackEconomics{}
+	applyCardFunnel(&entry, seo.CardMetric{Impressions: 1000, CardViews: 200, CartAdds: 10, Orders: 4})
+	if entry.ConvToCartPct == nil || *entry.ConvToCartPct != 5 {
+		t.Fatalf("conv_to_cart: получено %v, ожидалось 5", entry.ConvToCartPct)
+	}
+	if entry.ConvToOrderPct == nil || *entry.ConvToOrderPct != 2 {
+		t.Fatalf("conv_to_order: получено %v, ожидалось 2", entry.ConvToOrderPct)
+	}
+	noViews := aiPackEconomics{}
+	applyCardFunnel(&noViews, seo.CardMetric{Impressions: 500})
+	if noViews.ConvToCartPct != nil || noViews.ConvToOrderPct != nil {
+		t.Fatal("без просмотров конверсии должны отсутствовать, а не быть нулём")
+	}
+	if noViews.CardImpressions == nil || *noViews.CardImpressions != 500 {
+		t.Fatal("показы должны заполняться и без просмотров")
 	}
 }

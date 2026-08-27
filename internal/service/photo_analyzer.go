@@ -132,8 +132,8 @@ func (s *PhotoAnalyzerService) GeneratePhotoRecommendations(ctx context.Context,
 
 // PhotoAnalysisResult holds the result of photo quality analysis.
 type PhotoAnalysisResult struct {
-	ProductID      uuid.UUID        `json:"product_id"`
-	Score          int              `json:"score"`
-	ImageSizeBytes int64            `json:"image_size_bytes"`
+	ProductID      uuid.UUID         `json:"product_id"`
+	Score          int               `json:"score"`
+	ImageSizeBytes int64             `json:"image_size_bytes"`
 	Issues         []domain.SEOIssue `json:"issues"`
 }

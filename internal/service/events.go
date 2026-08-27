@@ -8,7 +8,7 @@ import (
 
 // Event represents a real-time event pushed to SSE subscribers.
 type Event struct {
-	Type        string `json:"type"`        // e.g. "sync_complete", "recommendation_new", "export_ready"
+	Type        string `json:"type"` // e.g. "sync_complete", "recommendation_new", "export_ready"
 	WorkspaceID string `json:"workspace_id"`
 	Payload     any    `json:"payload"`
 }

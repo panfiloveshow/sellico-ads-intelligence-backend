@@ -22,10 +22,10 @@ func NewCompetitorCardService(queries *sqlcgen.Queries) *CompetitorCardService {
 
 // CompetitorCard is a full competitor view with history and comparison.
 type CompetitorCard struct {
-	Competitor domain.Competitor            `json:"competitor"`
-	Comparison domain.CompetitorComparison  `json:"comparison"`
-	History    []domain.CompetitorSnapshot  `json:"history"`
-	Queries    []string                     `json:"queries"` // all queries where this competitor appears
+	Competitor domain.Competitor           `json:"competitor"`
+	Comparison domain.CompetitorComparison `json:"comparison"`
+	History    []domain.CompetitorSnapshot `json:"history"`
+	Queries    []string                    `json:"queries"` // all queries where this competitor appears
 }
 
 // GetCard returns a full competitor card with comparison and history.
