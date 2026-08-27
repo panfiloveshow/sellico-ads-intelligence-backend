@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
@@ -101,6 +102,13 @@ type aiPackEconomics struct {
 	MarginPct  *float64 `json:"margin_pct,omitempty"`
 	CostSource string   `json:"cost_source,omitempty"`
 	ColorIndex string   `json:"color_index,omitempty"`
+	// Stock is the warehouse quantity (ozon_product_stocks.present); omitted
+	// when the stocks sync has no row for the SKU (unknown ≠ zero).
+	Stock *int64 `json:"stock,omitempty"`
+	// DaysOfCover = stock / average units per day over the last 28 days.
+	// Omitted when stock is unknown or the SKU had no sales in the window —
+	// a missing value must read as «не измерено», never as «запаса нет».
+	DaysOfCover *float64 `json:"days_of_cover,omitempty"`
 }
 
 // aiPackDecisionOutcome is one past applied decision + its measured result, fed
@@ -132,6 +140,9 @@ type aiPackRules struct {
 	MaxBidRub        int     `json:"max_bid_rub"`
 	CooldownMinutes  int     `json:"cooldown_minutes"`
 	MaxChangesPerDay int     `json:"max_changes_per_day"`
+	// MinStockForIncrease — порог склада: повышение ставки/включение CPO для
+	// SKU с известным остатком ниже порога отклоняется автоматикой.
+	MinStockForIncrease int `json:"min_stock_for_increase"`
 
 	// «ДРР от общего оборота» — the cabinet-wide ratio and its ceiling. Status
 	// is ok|no_data|stale; on anything but ok the value is meaningless and the
@@ -186,6 +197,9 @@ type aiCabinetData struct {
 	// spend14ByOzonID is each campaign's spend over the stats window — the
 	// anchor for budget proposals on campaigns that have no configured budget.
 	spend14ByOzonID map[int64]float64
+	// stockBySKU is the warehouse quantity per SKU (nil-able through lookup:
+	// a missing key means the stocks sync has no data — unknown, not zero).
+	stockBySKU map[int64]int64
 	// totalDRR is the cabinet-wide «ДРР от общего оборота» measured once per
 	// run; the guardrail phase reads it to gate every spend increase.
 	totalDRR totalDRR
@@ -285,6 +299,22 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
 		spend14ByOzonID:   map[int64]float64{},
+		stockBySKU:        loadCabinetStocks(ctx, s.queries, s.logger, cabinetID),
+	}
+
+	// Скорость продаж за 28 дней — знаменатель для days_of_cover.
+	unitsPerDay := map[int64]float64{}
+	if velocityRows, velErr := s.queries.OzonSalesVelocityByCabinet(ctx, sqlcgen.OzonSalesVelocityByCabinetParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Date:            pgtype.Date{Time: time.Now().UTC().AddDate(0, 0, -28), Valid: true},
+	}); velErr != nil {
+		s.logger.Warn().Err(velErr).Msg("failed to load sales velocity for ai context")
+	} else {
+		for _, row := range velocityRows {
+			if row.Units > 0 {
+				unitsPerDay[row.Sku] = float64(row.Units) / 28
+			}
+		}
 	}
 
 	// Per-SKU spend from the phrases mirror: ranks the product detail cut by
@@ -320,13 +350,14 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 
 	pack := &aiContextPack{
 		Rules: aiPackRules{
-			TargetDRRPct:     params.TargetACoS,
-			AutomationLevel:  params.AutomationLevel,
-			MaxChangePercent: params.MaxChangePercent,
-			MinBidRub:        params.MinBid,
-			MaxBidRub:        params.MaxBid,
-			CooldownMinutes:  params.CooldownMinutes,
-			MaxChangesPerDay: params.MaxChangesPerDay,
+			TargetDRRPct:        params.TargetACoS,
+			AutomationLevel:     params.AutomationLevel,
+			MaxChangePercent:    params.MaxChangePercent,
+			MinBidRub:           params.MinBid,
+			MaxBidRub:           params.MaxBid,
+			CooldownMinutes:     params.CooldownMinutes,
+			MaxChangesPerDay:    params.MaxChangesPerDay,
+			MinStockForIncrease: params.MinStockForIncrease,
 
 			TotalDRRPct:       data.totalDRR.Value,
 			TotalDRRStatus:    data.totalDRR.Status,
@@ -485,6 +516,16 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				}
 			}
 			entry.CostSource = costSource
+			// Остаток и покрытие: без них модель масштабирует товары, которых
+			// нет на складе. Отсутствие данных не пишем как ноль.
+			if stock, ok := data.stockBySKU[row.Sku]; ok {
+				v := stock
+				entry.Stock = &v
+				if perDay := unitsPerDay[row.Sku]; perDay > 0 {
+					cover := roundRub(float64(stock) / perDay)
+					entry.DaysOfCover = &cover
+				}
+			}
 			// Per-SKU margin: the model reasons on BOTH margin and ДРР (system
 			// prompt). Uses the conservative max(FBO, FBS) commission and the
 			// same cost resolution as the repricer's ozonEffectiveNetPrice.
@@ -519,6 +560,22 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	}
 
 	return pack, data, nil
+}
+
+// loadCabinetStocks mirrors ozon_product_stocks into a SKU→present map.
+// Best-effort: a failed read returns an empty map, which every consumer
+// treats as «сток неизвестен» — increases are then NOT blocked (unknown ≠ 0).
+func loadCabinetStocks(ctx context.Context, queries *sqlcgen.Queries, logger zerolog.Logger, cabinetID uuid.UUID) map[int64]int64 {
+	rows, err := queries.ListOzonProductStocksByCabinet(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to load product stocks for ai context")
+		return map[int64]int64{}
+	}
+	out := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		out[row.Sku] = int64(row.Present)
+	}
+	return out
 }
 
 // marshalAIContextPack serializes the pack under maxBytes, degrading detail

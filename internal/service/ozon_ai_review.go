@@ -271,6 +271,7 @@ func (s *OzonAIManagerService) loadFreshCabinetData(ctx context.Context, cabinet
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
 		spend14ByOzonID:   map[int64]float64{},
+		stockBySKU:        loadCabinetStocks(ctx, s.queries, s.logger, cabinetID),
 	}
 	campaigns, err := s.queries.ListOzonCampaignsByCabinet(ctx, sqlcgen.ListOzonCampaignsByCabinetParams{
 		SellerCabinetID: uuidToPgtype(cabinetID), Limit: 500, Offset: 0,

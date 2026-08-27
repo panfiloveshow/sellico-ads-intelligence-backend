@@ -275,3 +275,24 @@ func TestUnbudgetedBudgetGuard(t *testing.T) {
 		t.Fatal("без расхода любое предложение обязано отклоняться")
 	}
 }
+
+// Повышение ставки для SKU без остатка жгло бюджет: guardrail блокирует
+// известный сток ниже порога, но НЕ трогает неизвестный (синк мог не пройти).
+func TestStockIncreaseGuard(t *testing.T) {
+	params := domain.StrategyParams{MinStockForIncrease: 1}
+	low := int64(0)
+	ok := int64(5)
+	if reason := ozonAIStockIncreaseGuardReason(&low, params); reason == "" {
+		t.Fatal("нулевой остаток обязан блокировать повышение")
+	}
+	if reason := ozonAIStockIncreaseGuardReason(&ok, params); reason != "" {
+		t.Fatalf("остаток выше порога должен проходить: %s", reason)
+	}
+	if reason := ozonAIStockIncreaseGuardReason(nil, params); reason != "" {
+		t.Fatalf("неизвестный остаток не должен блокировать: %s", reason)
+	}
+	params.AllowIncreaseWithoutStock = true
+	if reason := ozonAIStockIncreaseGuardReason(&low, params); reason != "" {
+		t.Fatalf("allow_increase_without_stock должен выключать проверку: %s", reason)
+	}
+}

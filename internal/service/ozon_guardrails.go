@@ -124,6 +124,24 @@ func ozonAIChangePercentReason(current, proposed, maxChangePercent float64, what
 	return ""
 }
 
+// ozonAIStockIncreaseGuardReason blocks scaling a SKU the warehouse cannot
+// back: raising a bid (or enabling CPO) for an out-of-stock product burns
+// budget and then tanks the card when it sells out. Mirrors the WB bid
+// automation contract: an UNKNOWN stock never blocks (the sync may simply not
+// have run), only a known stock below min_stock_for_increase does.
+func ozonAIStockIncreaseGuardReason(stock *int64, params domain.StrategyParams) string {
+	if params.AllowIncreaseWithoutStock {
+		return ""
+	}
+	if stock == nil {
+		return ""
+	}
+	if *stock < int64(params.MinStockForIncrease) {
+		return fmt.Sprintf("остаток %d шт. ниже порога масштабирования (%d шт.) — повышение заблокировано", *stock, params.MinStockForIncrease)
+	}
+	return ""
+}
+
 // ozonAICampaignStateGuardReason gates pause/activate proposals: pausing only
 // makes sense for a running campaign, activating only for a stopped/inactive
 // one. Unknown states block the write — the next sync will refresh them.

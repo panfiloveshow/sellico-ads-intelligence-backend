@@ -535,6 +535,10 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 			if reason := totalDRRIncreaseBlockReason(data.totalDRRCeiling, data.totalDRR); reason != "" {
 				return reason
 			}
+			// Склад: повышать ставку SKU, которого нет в наличии, — жечь бюджет.
+			if reason := ozonAIStockIncreaseGuardReason(stockPtr(data.stockBySKU, proposal.Target.SKU), params); reason != "" {
+				return reason
+			}
 		}
 		return s.bidCooldownReason(ctx, campaign.ID, cabinetID, proposal, params, now)
 	case domain.AIActionBudgetChange:
@@ -611,6 +615,13 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 	case domain.AIActionCPOEnable, domain.AIActionCPODisable:
 		if proposal.Target.SKU <= 0 {
 			return proposal.ActionType + " requires target.sku"
+		}
+		// Включать «Оплату за заказ» товару без остатка бессмысленно: заказов
+		// не будет, а карточка получит показы без покупок. Выключение — всегда.
+		if proposal.ActionType == domain.AIActionCPOEnable {
+			if reason := ozonAIStockIncreaseGuardReason(stockPtr(data.stockBySKU, proposal.Target.SKU), params); reason != "" {
+				return reason
+			}
 		}
 		return s.decisionCooldownReason(ctx, cabinetID, proposal, params, now)
 	default:
@@ -720,6 +731,18 @@ func (s *OzonAIManagerService) cabinetActionCapReason(ctx context.Context, cabin
 		return fmt.Sprintf("дневной лимит действий по кабинету исчерпан (%d/%d)", applied, params.MaxActionsPerDay)
 	}
 	return ""
+}
+
+// stockPtr resolves a SKU's stock as a nil-able value: nil = сток неизвестен
+// (нет строки в ozon_product_stocks), и это никогда не блокирует.
+func stockPtr(stocks map[int64]int64, sku int64) *int64 {
+	if stocks == nil {
+		return nil
+	}
+	if v, ok := stocks[sku]; ok {
+		return &v
+	}
+	return nil
 }
 
 func campaignBudget(campaign sqlcgen.OzonCampaign) (current *int64, weekly bool) {
@@ -885,6 +908,7 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 - Поле max_total_drr_source говорит, откуда взят потолок: "explicit" — задан вручную, "unit_economics" — рассчитан из маржи кабинета с поправкой на выкуп, "none" — потолка нет. Если в rules задан max_total_drr_pct и total_drr_pct уже достиг его, любое повышение ставки или бюджета будет отклонено. В этом случае предлагай только снижения, паузы и CPO. Когда total_drr_status не равен "ok", показатель не измерен — ориентируйся на ДРР кампаний.
 - Цель по ДРР %.1f%% остаётся главной, но учитывай маржу SKU (поле margin_pct в экономике, источник себестоимости — cost_source): у товаров с высокой маржой допустим более высокий ДРР, у низкомаржинальных — жёстче. Не масштабируй SKU с отрицательной или неизвестной маржой (margin_pct отсутствует).
 - CPO («Продвижение в поиске») списывает деньги только за заказ — безрисково по ДРР: включай смело для SKU с положительной маржой.
+- Склад: в экономике у SKU есть stock (остаток, шт.) и days_of_cover (на сколько дней продаж хватит запаса). Не масштабируй SKU с остатком ниже min_stock_for_increase (автоматика отклонит) и не разгоняй товары с days_of_cover меньше ~14 — товар кончится раньше, чем окупится разгон; при низком покрытии предложи снижение или паузу и упомяни риск в summary. Отсутствие stock — «не измерено», а не ноль.
 - Кампании с ДРР сильно выше цели — снижай ставки или ставь на паузу; с ДРР ниже цели и хорошей маржой — масштабируй.
 - Учитывай, что из твоих прошлых решений сработало, а что нет (секция recent_decisions: действие, что предлагал, ДРР до→после, изменение расхода/выручки). Не повторяй то, что уже не дало эффекта.
 - В recent_decisions те же два показателя: drr_before/drr_after — ДРР кампании, total_drr_before/total_drr_after — ДРР от общего оборота. Решение, которое улучшило первый, но подняло второй, реального оборота не добавило. Такие решения не повторяй, даже если по кампании они выглядят удачными.
