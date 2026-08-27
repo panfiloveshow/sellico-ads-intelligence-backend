@@ -52,6 +52,19 @@ type OzonAIManagerService struct {
 	llm           aiChatClient
 	encryptionKey []byte
 	logger        zerolog.Logger
+	// notifier is optional (worker only): CRM bell digests for applied
+	// actions and downgrade alerts. Nil = silent, as before.
+	notifier *OzonAINotifier
+	// contentModel, when set, serves text-only generations (weekly recaps)
+	// instead of the primary reasoning model — the task is simpler and the
+	// primary's free-pool quota is better spent on decisions.
+	contentModel string
+}
+
+// WithContentModel routes weekly-recap generation to a dedicated model.
+func (s *OzonAIManagerService) WithContentModel(model string) *OzonAIManagerService {
+	s.contentModel = model
+	return s
 }
 
 // NewOzonAIManagerService wires the AI manager. llmClient may be a disabled
@@ -294,6 +307,13 @@ func (s *OzonAIManagerService) execute(ctx context.Context, run sqlcgen.AiRun, w
 		Int("prompt_tokens", usage.PromptTokens).
 		Int("completion_tokens", usage.CompletionTokens).
 		Msg("ai run completed")
+	// The autopilot must never act silently: owners get a bell digest for
+	// every run that actually changed something.
+	if applied > 0 {
+		s.notifier.NotifyWorkspaceOwners(ctx, workspaceID, "ads-ai-applied",
+			"ИИ-автопилот применил изменения",
+			fmt.Sprintf("Применено изменений: %d. %s", applied, submission.Summary))
+	}
 	return submission.Summary, usage, nil
 }
 
@@ -455,7 +475,7 @@ func (s *OzonAIManagerService) processProposal(ctx context.Context, run sqlcgen.
 		return status, nil
 	}
 
-	applyVerdict, applyErr := s.applyProposal(ctx, workspaceID, cabinetID, proposal, data)
+	applyVerdict, applyErr := s.applyProposal(ctx, workspaceID, cabinetID, params, proposal, data)
 	final := domain.AIDecisionStatusAutoApplied
 	var errText pgtype.Text
 	switch {
@@ -535,6 +555,15 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		if reason := ozonAIBudgetGuardReason(current, int64(*proposal.NewValue), weekly, params); reason != "" {
 			return reason
 		}
+		// No configured budget = no anchor for the percent clamp. Bound the
+		// proposal by the campaign's own observed spend instead — without this
+		// the model could set any number at all.
+		if current == nil {
+			if reason := ozonAIUnbudgetedBudgetGuardReason(int64(*proposal.NewValue),
+				data.spend14ByOzonID[proposal.Target.OzonCampaignID], weekly, aiPackStatsWindowDays); reason != "" {
+				return reason
+			}
+		}
 		// A budget raise spends more just as surely as a bid raise does.
 		if current != nil && int64(*proposal.NewValue) > *current {
 			if reason := totalDRRIncreaseBlockReason(data.totalDRRCeiling, data.totalDRR); reason != "" {
@@ -549,6 +578,20 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		}
 		if reason := ozonAICampaignStateGuardReason(proposal.ActionType, pgTextValue(campaign.State)); reason != "" {
 			return reason
+		}
+		if proposal.ActionType == domain.AIActionCampaignActivate {
+			// Activation resumes spend — the same ceiling as any bid/budget raise.
+			if reason := totalDRRIncreaseBlockReason(data.totalDRRCeiling, data.totalDRR); reason != "" {
+				return reason
+			}
+			// Autopilot may only re-activate campaigns it paused itself. A
+			// campaign a human switched off stays off until a human decides
+			// otherwise (on copilot the human IS the approval, so level 2 passes).
+			if params.AutomationLevel >= 3 {
+				if reason := s.activateWithoutPriorAIPauseReason(ctx, cabinetID, proposal); reason != "" {
+					return reason
+				}
+			}
 		}
 		return s.decisionCooldownReason(ctx, cabinetID, proposal, params, now)
 	case domain.AIActionCPOBid:
@@ -639,6 +682,46 @@ func (s *OzonAIManagerService) mergedCooldownReason(ctx context.Context, cabinet
 	return ozonStrategyGuardReason(changes, last, params, now)
 }
 
+// activateWithoutPriorAIPauseReason blocks autopilot re-activation of
+// campaigns the AI never paused: a campaign a human switched off is a human
+// decision, and resurrecting it silently is exactly the kind of surprise an
+// autopilot must not produce. Fail-closed: an unavailable history blocks.
+func (s *OzonAIManagerService) activateWithoutPriorAIPauseReason(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal) string {
+	targetJSON, _ := json.Marshal(domain.AIDecisionTarget{OzonCampaignID: proposal.Target.OzonCampaignID})
+	pauses, err := s.queries.CountAppliedAIPausesForTarget(ctx, sqlcgen.CountAppliedAIPausesForTargetParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Target:          targetJSON,
+	})
+	if err != nil {
+		return "pause history unavailable: " + truncateError(err.Error())
+	}
+	if pauses == 0 {
+		return "кампанию останавливал не ИИ — включение обратно только вручную или через Копилот"
+	}
+	return ""
+}
+
+// cabinetActionCapReason is the cabinet-wide daily brake: no matter how many
+// distinct targets pass their per-target caps, one cabinet gets at most
+// MaxActionsPerDay APPLIED actions per day. Checked at apply time only —
+// shadow and proposed rows spend nothing. Fail-closed.
+func (s *OzonAIManagerService) cabinetActionCapReason(ctx context.Context, cabinetID uuid.UUID, params domain.StrategyParams) string {
+	if params.MaxActionsPerDay <= 0 {
+		return ""
+	}
+	applied, err := s.queries.CountAppliedAIActionsToday(ctx, sqlcgen.CountAppliedAIActionsTodayParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		DayStart:        pgtype.Timestamptz{Time: ozonStrategyDayStart(time.Now().UTC()), Valid: true},
+	})
+	if err != nil {
+		return "cabinet action count unavailable: " + truncateError(err.Error())
+	}
+	if applied >= int64(params.MaxActionsPerDay) {
+		return fmt.Sprintf("дневной лимит действий по кабинету исчерпан (%d/%d)", applied, params.MaxActionsPerDay)
+	}
+	return ""
+}
+
 func campaignBudget(campaign sqlcgen.OzonCampaign) (current *int64, weekly bool) {
 	// The budget field the campaign already uses wins; weekly when both or
 	// only weekly is set (Ozon CPC campaigns are typically weekly-budgeted).
@@ -656,7 +739,12 @@ func campaignBudget(campaign sqlcgen.OzonCampaign) (current *int64, weekly bool)
 // applyProposal performs the real write through the audited action paths.
 // It returns (guardrailReason, err): a non-empty reason means the apply-time
 // clamp (Ozon minimum bids) rejected the write.
-func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, cabinetID uuid.UUID, proposal aiProposal, data *aiCabinetData) (string, error) {
+func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, cabinetID uuid.UUID, params domain.StrategyParams, proposal aiProposal, data *aiCabinetData) (string, error) {
+	// Cabinet-wide daily brake — one choke point for autopilot AND copilot
+	// approvals, checked at the moment of the real write.
+	if capReason := s.cabinetActionCapReason(ctx, cabinetID, params); capReason != "" {
+		return capReason, nil
+	}
 	reason := "AI: " + truncateError(proposal.Rationale)
 	switch proposal.ActionType {
 	case domain.AIActionBidChange:
@@ -801,6 +889,8 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 - Учитывай, что из твоих прошлых решений сработало, а что нет (секция recent_decisions: действие, что предлагал, ДРР до→после, изменение расхода/выручки). Не повторяй то, что уже не дало эффекта.
 - В recent_decisions те же два показателя: drr_before/drr_after — ДРР кампании, total_drr_before/total_drr_after — ДРР от общего оборота. Решение, которое улучшило первый, но подняло второй, реального оборота не добавило. Такие решения не повторяй, даже если по кампании они выглядят удачными.
 - Не трогай кампании без статистики за окно (мало данных — не действие, а наблюдение).
+- campaign_activate на Автопилоте проходит только для кампаний, которые ранее остановил ты сам; кампании, выключенные человеком, не включай — предложи это в summary как рекомендацию.
+- Для кампании без установленного бюджета budget_change ограничен 2× её фактического расхода за окно; если расхода нет — первый бюджет задаёт человек, не предлагай его.
 - Каждое предложение обосновывай цифрами из контекста (rationale) и ожидаемым эффектом (expected_effect).
 
 Инструменты:

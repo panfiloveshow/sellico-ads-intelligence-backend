@@ -3947,7 +3947,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [shadow, proposed, approved, auto_applied, applied, failed, rejected_by_user, rejected_by_guardrail]
+            enum: [shadow, proposed, approved, auto_applied, applied, failed, rejected_by_user, rejected_by_guardrail, expired]
         - name: run_id
           in: query
           schema: { type: string, format: uuid }
@@ -6107,7 +6107,7 @@ components:
         guardrail_verdict: { type: string }
         status:
           type: string
-          enum: [shadow, proposed, approved, auto_applied, applied, failed, rejected_by_user, rejected_by_guardrail]
+          enum: [shadow, proposed, approved, auto_applied, applied, failed, rejected_by_user, rejected_by_guardrail, expired]
         error: { type: string }
         created_at: { type: string, format: date-time }
         applied_at: { type: string, format: date-time, nullable: true }
@@ -6142,6 +6142,7 @@ components:
         revenue_delta_rub: { type: number, description: "Σ (revenue_after − revenue_before) по evaluated-решениям" }
         saved_rub: { type: number, description: "Σ max(0, spend_before − spend_after) где revenue_after ≥ 0.9 × revenue_before" }
         extra_revenue_rub: { type: number, description: "Σ max(0, revenue_after − revenue_before)" }
+        low_data: { type: boolean, description: "true когда оценённых решений меньше порога достоверности (5) — агрегат статистически шумный, UI показывает «данных пока мало»" }
     AIImpactEnvelope:
       type: object
       properties:
@@ -6694,6 +6695,9 @@ components:
         max_changes_per_day:
           type: integer
           description: Maximum automated bid changes per campaign/product in 24 hours. Defaults to 3.
+        max_actions_per_day:
+          type: integer
+          description: Cabinet-wide daily cap on APPLIED AI actions (autopilot + copilot approvals). Defaults to 10.
         max_data_age_hours:
           type: integer
           description: Maximum age of synced campaign stats before autopilot skips bid changes. Defaults to 36.

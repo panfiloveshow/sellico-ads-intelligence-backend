@@ -138,7 +138,9 @@ func main() {
 			MaxTokens:      cfg.LLMMaxTokens,
 		}, deps.Logger)
 		ozonActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
-		ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonActionsService, llmClient, []byte(cfg.EncryptionKey), deps.Logger)
+		ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonActionsService, llmClient, []byte(cfg.EncryptionKey), deps.Logger).
+			WithNotifier(service.NewOzonAINotifier(deps.Queries, sellicoClient, sellicoTokenManager, deps.Logger)).
+			WithContentModel(cfg.LLMContentModel)
 		ozonRuntimeOpts = append(ozonRuntimeOpts, worker.WithOzonAIManager(ozonAIManager))
 		deps.Logger.Info().Str("model", cfg.LLMModel).Msg("ozon ai autopilot enabled")
 	} else {

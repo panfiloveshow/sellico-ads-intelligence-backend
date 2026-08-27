@@ -164,7 +164,8 @@ func main() {
 		FallbackModels: cfg.LLMFallbackModels,
 		Timeout:        cfg.LLMTimeout,
 		MaxTokens:      cfg.LLMMaxTokens,
-	}, deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
+	}, deps.Logger), []byte(cfg.EncryptionKey), deps.Logger).
+		WithContentModel(cfg.LLMContentModel)
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)

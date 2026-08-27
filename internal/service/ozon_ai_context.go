@@ -61,6 +61,10 @@ type aiPackDay [6]any
 type aiPackProduct struct {
 	SKU    int64   `json:"sku"`
 	BidRub float64 `json:"bid_rub"`
+	// Spend30dRub is the SKU's ad spend from the phrases-report mirror over
+	// the search-query window — the only per-SKU spend surface there is.
+	// Omitted when the sync has no data for the SKU.
+	Spend30dRub *float64 `json:"spend_30d_rub,omitempty"`
 }
 
 type aiPackCampaign struct {
@@ -179,6 +183,9 @@ type aiCabinetData struct {
 	campaignsByOzonID map[int64]sqlcgen.OzonCampaign
 	bidsByCampaignSKU map[int64]map[int64]float64 // ozon campaign id → sku → current bid
 	cpoBySKU          map[int64]domain.OzonCPOProduct
+	// spend14ByOzonID is each campaign's spend over the stats window — the
+	// anchor for budget proposals on campaigns that have no configured budget.
+	spend14ByOzonID map[int64]float64
 	// totalDRR is the cabinet-wide «ДРР от общего оборота» measured once per
 	// run; the guardrail phase reads it to gate every spend increase.
 	totalDRR totalDRR
@@ -277,9 +284,28 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		campaignsByOzonID: map[int64]sqlcgen.OzonCampaign{},
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
+		spend14ByOzonID:   map[int64]float64{},
+	}
+
+	// Per-SKU spend from the phrases mirror: ranks the product detail cut by
+	// money actually spent instead of bid size, so the SKUs burning budget are
+	// the ones the model sees. Best-effort — empty map degrades to bid order.
+	skuSpend := map[int64]float64{}
+	if spendRows, spendErr := s.queries.AggregateOzonSearchSpendBySku(ctx, sqlcgen.AggregateOzonSearchSpendBySkuParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		DateFrom:        pgtype.Date{Time: time.Now().UTC().AddDate(0, 0, -aiPackSearchQueryWindowDays), Valid: true},
+	}); spendErr != nil {
+		s.logger.Warn().Err(spendErr).Msg("failed to load per-sku spend for ai context")
+	} else {
+		for _, row := range spendRows {
+			skuSpend[row.Sku] = pgNumericToFloat(row.SpendRub)
+		}
 	}
 	for _, campaign := range campaigns {
 		data.campaignsByOzonID[campaign.OzonCampaignID] = campaign
+		if t := totalsByCampaign[uuidFromPgtype(campaign.ID)]; t != nil {
+			data.spend14ByOzonID[campaign.OzonCampaignID] = t.SpendRub
+		}
 	}
 
 	// The cabinet-wide ДРР over the same window the pack reports. The model
@@ -364,13 +390,24 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				continue
 			}
 			bids[row.Sku] = bid
-			active = append(active, aiPackProduct{SKU: row.Sku, BidRub: bid})
+			product := aiPackProduct{SKU: row.Sku, BidRub: bid}
+			if spend, ok := skuSpend[row.Sku]; ok && spend > 0 {
+				v := roundRub(spend)
+				product.Spend30dRub = &v
+			}
+			active = append(active, product)
 		}
 		data.bidsByCampaignSKU[campaign.OzonCampaignID] = bids
 		entry.ProductsTotal = len(active)
-		// Per-SKU spend does not exist on this surface (stats are per
-		// campaign/day), so the detail cut keeps the highest-bid SKUs.
-		sort.SliceStable(active, func(i, j int) bool { return active[i].BidRub > active[j].BidRub })
+		// The detail cut keeps the SKUs that actually spend money (phrases
+		// mirror); bid size breaks ties and covers SKUs the sync has no data for.
+		sort.SliceStable(active, func(i, j int) bool {
+			spendI, spendJ := skuSpend[active[i].SKU], skuSpend[active[j].SKU]
+			if spendI != spendJ {
+				return spendI > spendJ
+			}
+			return active[i].BidRub > active[j].BidRub
+		})
 		if len(active) > aiPackTopProductsPerCampaign {
 			active = active[:aiPackTopProductsPerCampaign]
 		}

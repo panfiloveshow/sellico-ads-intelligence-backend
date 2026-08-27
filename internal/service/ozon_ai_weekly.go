@@ -259,7 +259,7 @@ func (s *OzonAIManagerService) weeklyReportText(
 		{Role: "system", Content: aiWeeklyReportSystemPrompt()},
 		{Role: "user", Content: "Данные за неделю (JSON):\n" + string(payload)},
 	}
-	resp, err := s.llm.ChatCompletion(ctx, llm.ChatRequest{Messages: messages})
+	resp, err := s.llm.ChatCompletion(ctx, llm.ChatRequest{Messages: messages, Model: s.contentModel})
 	if err != nil {
 		return "", fmt.Errorf("llm weekly report: %w", err)
 	}

@@ -55,14 +55,19 @@ type Config struct {
 	// Empty LLM_API_KEY disables the AI module entirely (no scheduling, runs
 	// recorded as 'skipped'). The default free-tier provider has multi-minute
 	// latency per request — hence the 10m default timeout.
-	LLMBaseURL string // env: LLM_BASE_URL, default: "https://integrate.api.nvidia.com/v1"
+	LLMBaseURL string // env: LLM_BASE_URL, default: "https://openrouter.ai/api/v1"
 	LLMAPIKey  string // env: LLM_API_KEY, empty = AI disabled
-	LLMModel   string // env: LLM_MODEL, default: "z-ai/glm-5.2"
+	LLMModel   string // env: LLM_MODEL, default: "z-ai/glm-5.2:free"
 	// LLMFallbackModels — модели, на которые переходим, когда основная отвечает
-	// 404 (провайдер её выгрузил). env: LLM_FALLBACK_MODELS, через запятую.
+	// 404/402 или исчерпала ретраи на 429/5xx. env: LLM_FALLBACK_MODELS, через
+	// запятую.
 	LLMFallbackModels []string
-	LLMTimeout        time.Duration // env: LLM_TIMEOUT, default: 10m
-	LLMMaxTokens      int           // env: LLM_MAX_TOKENS, default: 8192
+	// LLMContentModel — модель для текстового контента (недельные отчёты):
+	// задача проще, подходит лёгкая бесплатная модель. Пустая = основная.
+	// env: LLM_CONTENT_MODEL
+	LLMContentModel string
+	LLMTimeout      time.Duration // env: LLM_TIMEOUT, default: 10m
+	LLMMaxTokens    int           // env: LLM_MAX_TOKENS, default: 8192
 
 	// WB Catalog Parser
 	WBParserMinDelay time.Duration // env: WB_PARSER_MIN_DELAY, default: 2s
@@ -157,10 +162,11 @@ func Load() *Config {
 		AdsReadStatsLimit:                  getEnvAsInt("ADS_READ_STATS_LIMIT", 20000),
 		OzonSellerAPIBaseURL:               getEnvOrDefault("OZON_SELLER_API_BASE_URL", "https://api-seller.ozon.ru"),
 		OzonPerfAPIBaseURL:                 getEnvOrDefault("OZON_PERF_API_BASE_URL", "https://api-performance.ozon.ru"),
-		LLMBaseURL:                         getEnvOrDefault("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		LLMBaseURL:                         getEnvOrDefault("LLM_BASE_URL", "https://openrouter.ai/api/v1"),
 		LLMAPIKey:                          getEnvOrDefault("LLM_API_KEY", ""),
-		LLMModel:                           getEnvOrDefault("LLM_MODEL", "z-ai/glm-5.2"),
-		LLMFallbackModels:                  splitAndTrim(getEnvOrDefault("LLM_FALLBACK_MODELS", "openai/gpt-oss-20b,z-ai/glm-5.2")),
+		LLMModel:                           getEnvOrDefault("LLM_MODEL", "z-ai/glm-5.2:free"),
+		LLMFallbackModels:                  splitAndTrim(getEnvOrDefault("LLM_FALLBACK_MODELS", "nvidia/nemotron-3-super-120b-a12b:free")),
+		LLMContentModel:                    getEnvOrDefault("LLM_CONTENT_MODEL", "google/gemma-4-31b-it:free"),
 		LLMTimeout:                         getEnvAsDuration("LLM_TIMEOUT", 10*time.Minute),
 		LLMMaxTokens:                       getEnvAsInt("LLM_MAX_TOKENS", 8192),
 		WBParserMinDelay:                   getEnvAsDuration("WB_PARSER_MIN_DELAY", 2*time.Second),

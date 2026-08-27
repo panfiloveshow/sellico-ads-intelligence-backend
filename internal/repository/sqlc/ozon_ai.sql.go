@@ -11,6 +11,48 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const aggregateOzonSearchSpendBySku = `-- name: AggregateOzonSearchSpendBySku :many
+SELECT sku, COALESCE(SUM(spend_rub), 0)::numeric AS spend_rub
+FROM ozon_search_queries
+WHERE seller_cabinet_id = $1
+  AND date >= $2
+  AND sku <> 0
+GROUP BY sku
+`
+
+type AggregateOzonSearchSpendBySkuParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	DateFrom        pgtype.Date `json:"date_from"`
+}
+
+type AggregateOzonSearchSpendBySkuRow struct {
+	Sku      int64          `json:"sku"`
+	SpendRub pgtype.Numeric `json:"spend_rub"`
+}
+
+// AggregateOzonSearchSpendBySku sums per-SKU ad spend from the phrases-report
+// mirror — the closest thing to per-SKU spend the data model has. Feeds the
+// context pack's SKU ranking and the spend_30d_rub field per product.
+func (q *Queries) AggregateOzonSearchSpendBySku(ctx context.Context, arg AggregateOzonSearchSpendBySkuParams) ([]AggregateOzonSearchSpendBySkuRow, error) {
+	rows, err := q.db.Query(ctx, aggregateOzonSearchSpendBySku, arg.SellerCabinetID, arg.DateFrom)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AggregateOzonSearchSpendBySkuRow{}
+	for rows.Next() {
+		var i AggregateOzonSearchSpendBySkuRow
+		if err := rows.Scan(&i.Sku, &i.SpendRub); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countAIDecisions = `-- name: CountAIDecisions :one
 SELECT COUNT(*) FROM ai_decisions
 WHERE workspace_id = $1
@@ -54,6 +96,70 @@ func (q *Queries) CountAIRunsByCabinet(ctx context.Context, arg CountAIRunsByCab
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countAppliedAIActionsToday = `-- name: CountAppliedAIActionsToday :one
+SELECT COUNT(*)::bigint FROM ai_decisions
+WHERE seller_cabinet_id = $1
+  AND status IN ('applied', 'auto_applied')
+  AND applied_at >= $2
+`
+
+type CountAppliedAIActionsTodayParams struct {
+	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`
+	DayStart        pgtype.Timestamptz `json:"day_start"`
+}
+
+// CountAppliedAIActionsToday is the cabinet-wide daily action cap: how many
+// decisions actually reached Ozon today (applied by autopilot or by a human).
+// Per-target caps bound each campaign/SKU; this bounds the whole cabinet.
+func (q *Queries) CountAppliedAIActionsToday(ctx context.Context, arg CountAppliedAIActionsTodayParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAppliedAIActionsToday, arg.SellerCabinetID, arg.DayStart)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countAppliedAIPausesForTarget = `-- name: CountAppliedAIPausesForTarget :one
+SELECT COUNT(*)::bigint FROM ai_decisions
+WHERE seller_cabinet_id = $1
+  AND action_type = 'campaign_pause'
+  AND target @> $2::jsonb
+  AND status IN ('applied', 'auto_applied')
+`
+
+type CountAppliedAIPausesForTargetParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Target          []byte      `json:"target"`
+}
+
+// CountAppliedAIPausesForTarget answers «останавливал ли ИИ эту кампанию сам»:
+// autopilot may only re-activate campaigns it paused itself, never ones a
+// human switched off deliberately.
+func (q *Queries) CountAppliedAIPausesForTarget(ctx context.Context, arg CountAppliedAIPausesForTargetParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAppliedAIPausesForTarget, arg.SellerCabinetID, arg.Target)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const expireStaleProposedAIDecisions = `-- name: ExpireStaleProposedAIDecisions :execrows
+UPDATE ai_decisions SET
+    status = 'expired',
+    error = 'предложение устарело: не подтверждено за 72 часа, данные могли измениться'
+WHERE status = 'proposed'
+  AND created_at < now() - INTERVAL '72 hours'
+`
+
+// ExpireStaleProposedAIDecisions retires copilot proposals nobody acted on:
+// the rationale is built on a data snapshot that is now days old, so the card
+// must leave the «Требуют решения» queue instead of hanging there forever.
+func (q *Queries) ExpireStaleProposedAIDecisions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, expireStaleProposedAIDecisions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const finishAIRun = `-- name: FinishAIRun :exec
@@ -421,6 +527,45 @@ func (q *Queries) GetOzonCampaignStatsWindowTotals(ctx context.Context, arg GetO
 	row := q.db.QueryRow(ctx, getOzonCampaignStatsWindowTotals, arg.CampaignID, arg.DateFrom, arg.DateTo)
 	var i GetOzonCampaignStatsWindowTotalsRow
 	err := row.Scan(&i.SpendRub, &i.RevenueRub, &i.Days)
+	return i, err
+}
+
+const getOzonSKUSalesWindowTotals = `-- name: GetOzonSKUSalesWindowTotals :one
+SELECT
+    COALESCE(SUM(revenue_rub), 0)::numeric  AS revenue_rub,
+    COALESCE(SUM(ordered_units), 0)::bigint AS ordered_units,
+    COUNT(*)::bigint                        AS days
+FROM ozon_sales_daily
+WHERE seller_cabinet_id = $1
+  AND sku = $2
+  AND date BETWEEN $3 AND $4
+`
+
+type GetOzonSKUSalesWindowTotalsParams struct {
+	SellerCabinetID pgtype.UUID `json:"seller_cabinet_id"`
+	Sku             int64       `json:"sku"`
+	DateFrom        pgtype.Date `json:"date_from"`
+	DateTo          pgtype.Date `json:"date_to"`
+}
+
+type GetOzonSKUSalesWindowTotalsRow struct {
+	RevenueRub   pgtype.Numeric `json:"revenue_rub"`
+	OrderedUnits int64          `json:"ordered_units"`
+	Days         int64          `json:"days"`
+}
+
+// GetOzonSKUSalesWindowTotals sums one SKU's sales over a closed date window —
+// the before/after comparison for cpo_* decisions (CPO has no campaign-level
+// stats; per-SKU turnover is the only measurable surface).
+func (q *Queries) GetOzonSKUSalesWindowTotals(ctx context.Context, arg GetOzonSKUSalesWindowTotalsParams) (GetOzonSKUSalesWindowTotalsRow, error) {
+	row := q.db.QueryRow(ctx, getOzonSKUSalesWindowTotals,
+		arg.SellerCabinetID,
+		arg.Sku,
+		arg.DateFrom,
+		arg.DateTo,
+	)
+	var i GetOzonSKUSalesWindowTotalsRow
+	err := row.Scan(&i.RevenueRub, &i.OrderedUnits, &i.Days)
 	return i, err
 }
 
@@ -1128,6 +1273,37 @@ func (q *Queries) ListRecentAppliedAIDecisions(ctx context.Context, arg ListRece
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceOwnerExternalUserIDs = `-- name: ListWorkspaceOwnerExternalUserIDs :many
+SELECT u.external_user_id
+FROM workspace_members wm
+JOIN users u ON u.id = wm.user_id
+WHERE wm.workspace_id = $1
+  AND wm.role = 'owner'
+  AND u.external_user_id IS NOT NULL
+`
+
+// ListWorkspaceOwnerExternalUserIDs resolves the CRM user ids of a local
+// workspace's owners — the recipients of autopilot notifications.
+func (q *Queries) ListWorkspaceOwnerExternalUserIDs(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.Text, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceOwnerExternalUserIDs, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Text{}
+	for rows.Next() {
+		var external_user_id pgtype.Text
+		if err := rows.Scan(&external_user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, external_user_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

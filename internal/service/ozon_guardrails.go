@@ -70,6 +70,32 @@ func ozonAIBudgetGuardReason(currentBudget *int64, proposedBudget int64, weekly 
 	return ""
 }
 
+// ozonAIUnbudgetedBudgetGuardReason covers the case the percent clamp cannot:
+// a campaign with NO configured budget has no anchor, so without this check
+// the model could set any number at all. The proposal is bounded by the
+// campaign's own recent spend instead: at most 2× the observed run-rate over
+// the stats window. No spend history → nothing to anchor on → a human must
+// set the first budget.
+func ozonAIUnbudgetedBudgetGuardReason(proposedBudget int64, spend14d float64, weekly bool, windowDays int) string {
+	if windowDays <= 0 {
+		windowDays = aiPackStatsWindowDays
+	}
+	perDay := spend14d / float64(windowDays)
+	cap := perDay * 2
+	kind := "дневной"
+	if weekly {
+		cap *= 7
+		kind = "недельный"
+	}
+	if spend14d <= 0 || cap < 1 {
+		return "у кампании нет ни бюджета, ни расхода за окно — безопасный бюджет не рассчитать, первый бюджет задаёт человек"
+	}
+	if float64(proposedBudget) > cap {
+		return fmt.Sprintf("у кампании нет текущего бюджета; предложенный %s бюджет %d₽ превышает 2× фактического расхода (%0.f₽)", kind, proposedBudget, cap)
+	}
+	return ""
+}
+
 // ozonAICPOBidGuardReason validates a proposed CPO (search promo) fixed bid.
 // CPO charges only on orders, so only the hard clamps apply: positivity and
 // Ozon's CPO minimum when it was fetchable.

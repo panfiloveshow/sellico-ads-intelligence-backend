@@ -39,6 +39,9 @@ const (
 	AIDecisionStatusFailed              = "failed"
 	AIDecisionStatusRejectedByUser      = "rejected_by_user"
 	AIDecisionStatusRejectedByGuardrail = "rejected_by_guardrail"
+	// AIDecisionStatusExpired — a copilot proposal nobody confirmed within the
+	// TTL; the underlying data snapshot is stale, so the card leaves the queue.
+	AIDecisionStatusExpired = "expired"
 )
 
 // AI decision impact outcome states (ai_decisions.outcome_status).
@@ -120,6 +123,10 @@ type AIImpactSummary struct {
 	RevenueDeltaRub    float64  `json:"revenue_delta_rub"`
 	SavedRub           float64  `json:"saved_rub"`
 	ExtraRevenueRub    float64  `json:"extra_revenue_rub"`
+	// LowData: fewer evaluated decisions than the display threshold — the
+	// aggregate is statistical noise and the UI must say «данных пока мало»
+	// instead of rendering the numbers as a verdict.
+	LowData bool `json:"low_data"`
 }
 
 // OzonAIWeeklyReport is a manager-facing plain-Russian recap of a cabinet's

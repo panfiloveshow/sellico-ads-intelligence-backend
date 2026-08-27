@@ -239,6 +239,7 @@ type StrategyParams struct {
 	MinStockForIncrease       int     `json:"min_stock_for_increase,omitempty"`       // default: 1
 	CooldownMinutes           int     `json:"cooldown_minutes,omitempty"`             // default: 120
 	MaxChangesPerDay          int     `json:"max_changes_per_day,omitempty"`          // default: 3
+	MaxActionsPerDay          int     `json:"max_actions_per_day,omitempty"`          // default: 10 — cabinet-wide daily cap on APPLIED AI actions
 	MaxDataAgeHours           int     `json:"max_data_age_hours,omitempty"`           // default: 36
 	AllowIncreaseWithoutStock bool    `json:"allow_increase_without_stock,omitempty"` // default: false
 
@@ -417,6 +418,7 @@ func DefaultStrategyParams() StrategyParams {
 		MinStockForIncrease: 1,
 		CooldownMinutes:     120,
 		MaxChangesPerDay:    3,
+		MaxActionsPerDay:    10,
 		MaxDataAgeHours:     36,
 	}
 }
@@ -456,6 +458,9 @@ func (p StrategyParams) Merged() StrategyParams {
 	}
 	if p.MaxChangesPerDay == 0 {
 		p.MaxChangesPerDay = defaults.MaxChangesPerDay
+	}
+	if p.MaxActionsPerDay == 0 {
+		p.MaxActionsPerDay = defaults.MaxActionsPerDay
 	}
 	if p.MaxDataAgeHours == 0 {
 		p.MaxDataAgeHours = defaults.MaxDataAgeHours

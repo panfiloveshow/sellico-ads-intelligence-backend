@@ -3,10 +3,11 @@
 // surface the Ozon AI manager needs is implemented: non-streaming chat with
 // tool calling and token usage accounting.
 //
-// The default provider (NVIDIA NIM free tier serving a reasoning model) has
-// multi-minute latency per request and a ~40 RPM global budget, so the client
-// is deliberately synchronous, retries conservatively (max 3 attempts) and
-// runs with a long per-request timeout (LLM_TIMEOUT, default 10m).
+// The default provider is OpenRouter (paid z-ai/glm-5.2 — seconds per
+// request), with the model's :free variant as the shipped fallback for when
+// credits run out. The client stays deliberately synchronous with a generous
+// per-request timeout (LLM_TIMEOUT, default 10m) so slower providers (NVIDIA
+// NIM free tier: multi-minute latency, ~40 RPM global) keep working too.
 package llm
 
 import (
@@ -24,10 +25,13 @@ import (
 )
 
 const (
-	// DefaultBaseURL is the NVIDIA NIM OpenAI-compatible endpoint.
-	DefaultBaseURL = "https://integrate.api.nvidia.com/v1"
-	// DefaultModel is GLM-5.2 served through NVIDIA NIM.
-	DefaultModel = "z-ai/glm-5.2"
+	// DefaultBaseURL is the OpenRouter OpenAI-compatible endpoint.
+	DefaultBaseURL = "https://openrouter.ai/api/v1"
+	// DefaultModel is the free GLM-5.2 variant on OpenRouter (~50 req/day
+	// under $10 lifetime credits, 1000/day above; ~20 RPM). Free-only setup:
+	// the shipped fallback is another vendor's free model so a saturated GLM
+	// pool does not take the autopilot down with it.
+	DefaultModel = "z-ai/glm-5.2:free"
 	// DefaultTimeout accommodates the reasoning model's multi-minute thinking.
 	DefaultTimeout = 10 * time.Minute
 	// DefaultMaxTokens bounds one completion (reasoning + final tool call).
@@ -46,9 +50,10 @@ const (
 // timeouts) — callers can present them as "повторим позже", not as errors.
 var ErrTransient = errors.New("transient llm failure")
 
-// ErrModelUnavailable marks a model the provider is not serving right now
-// (HTTP 404 on chat/completions). Distinct from ErrTransient: retrying the same
-// model does not help, switching models does.
+// ErrModelUnavailable marks a model the provider will not serve right now:
+// HTTP 404 (model unloaded) or 402 (credits exhausted on a paid model) on
+// chat/completions. Distinct from ErrTransient: retrying the same model does
+// not help, switching models (e.g. to the :free variant) does.
 var ErrModelUnavailable = errors.New("llm model unavailable")
 
 // Config configures the client; zero fields fall back to the defaults above.
@@ -169,6 +174,10 @@ type ChatRequest struct {
 	Messages   []Message
 	Tools      []Tool
 	ToolChoice any
+	// Model overrides the client's primary model for this request (e.g. a
+	// cheaper content model for weekly recaps). The configured primary and
+	// fallbacks still serve as the fallback chain behind it. Empty = default.
+	Model string
 }
 
 // ChatResponse is the parsed first choice plus token usage.
@@ -218,7 +227,20 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResp
 	if !c.Enabled() {
 		return nil, fmt.Errorf("llm: client is disabled (no API key configured)")
 	}
-	models := append([]string{c.cfg.Model}, c.cfg.FallbackModels...)
+	chain := append([]string{c.cfg.Model}, c.cfg.FallbackModels...)
+	if req.Model != "" {
+		chain = append([]string{req.Model}, chain...)
+	}
+	// Dedup preserving order: a request override may repeat a chain entry.
+	seen := map[string]struct{}{}
+	models := chain[:0]
+	for _, m := range chain {
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		models = append(models, m)
+	}
 	var lastErr error
 	for i, model := range models {
 		resp, err := c.chatOnce(ctx, model, req)
@@ -232,12 +254,15 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResp
 			return resp, nil
 		}
 		lastErr = err
-		// Дальше по списку идём только когда модель именно недоступна.
-		// Прочие 4xx — наша ошибка в запросе, её сменой модели не исправить.
-		if !errors.Is(err, ErrModelUnavailable) {
+		// Дальше по списку идём, когда модель недоступна (404/402) ИЛИ когда
+		// все ретраи упёрлись в 429/5xx: у :free-вариантов общий пул провайдера
+		// бывает исчерпан часами, и единственное рабочее лекарство — платный
+		// фолбэк. Прочие 4xx — наша ошибка в запросе, её сменой модели не
+		// исправить.
+		if !errors.Is(err, ErrModelUnavailable) && !errors.Is(err, ErrTransient) {
 			return nil, err
 		}
-		c.logger.Warn().Err(err).Str("model", model).Msg("llm model unavailable; trying next")
+		c.logger.Warn().Err(err).Str("model", model).Msg("llm model unavailable or saturated; trying next")
 	}
 	return nil, lastErr
 }
@@ -303,10 +328,11 @@ func (c *Client) chatOnce(ctx context.Context, model string, req ChatRequest) (*
 				}
 			}
 			continue
-		case resp.StatusCode == http.StatusNotFound:
-			// Провайдер выгрузил модель. Повторять тот же запрос бессмысленно —
-			// отвечает часами; помогает только другая модель.
-			return nil, fmt.Errorf("%w: %s returned 404: %s", ErrModelUnavailable, url, truncate(string(respBody), 300))
+		case resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusPaymentRequired:
+			// 404 — провайдер выгрузил модель; 402 — на платной модели кончились
+			// кредиты. В обоих случаях повторять тот же запрос бессмысленно —
+			// помогает только другая модель (для 402 — :free-вариант из фолбэков).
+			return nil, fmt.Errorf("%w: %s returned %d: %s", ErrModelUnavailable, url, resp.StatusCode, truncate(string(respBody), 300))
 		case resp.StatusCode >= 400:
 			return nil, fmt.Errorf("llm: %s returned %d: %s", url, resp.StatusCode, truncate(string(respBody), 500))
 		}

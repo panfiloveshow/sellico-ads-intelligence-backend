@@ -37,12 +37,24 @@ type Querier interface {
 	// rows that actually reported a position; top_sku is the highest-views SKU of
 	// the query (used for product-name enrichment).
 	AggregateOzonSearchQueries(ctx context.Context, arg AggregateOzonSearchQueriesParams) ([]AggregateOzonSearchQueriesRow, error)
+	// AggregateOzonSearchSpendBySku sums per-SKU ad spend from the phrases-report
+	// mirror — the closest thing to per-SKU spend the data model has. Feeds the
+	// context pack's SKU ranking and the spend_30d_rub field per product.
+	AggregateOzonSearchSpendBySku(ctx context.Context, arg AggregateOzonSearchSpendBySkuParams) ([]AggregateOzonSearchSpendBySkuRow, error)
 	BatchCreateSERPResultItems(ctx context.Context, arg []BatchCreateSERPResultItemsParams) (int64, error)
 	// CancelOzonPriceScheduleEntry cancels a pending entry (only pending rows
 	// can be cancelled; the WHERE clause makes the transition race-safe).
 	CancelOzonPriceScheduleEntry(ctx context.Context, id pgtype.UUID) (OzonPriceScheduleEntry, error)
 	CountAIDecisions(ctx context.Context, arg CountAIDecisionsParams) (int64, error)
 	CountAIRunsByCabinet(ctx context.Context, arg CountAIRunsByCabinetParams) (int64, error)
+	// CountAppliedAIActionsToday is the cabinet-wide daily action cap: how many
+	// decisions actually reached Ozon today (applied by autopilot or by a human).
+	// Per-target caps bound each campaign/SKU; this bounds the whole cabinet.
+	CountAppliedAIActionsToday(ctx context.Context, arg CountAppliedAIActionsTodayParams) (int64, error)
+	// CountAppliedAIPausesForTarget answers «останавливал ли ИИ эту кампанию сам»:
+	// autopilot may only re-activate campaigns it paused itself, never ones a
+	// human switched off deliberately.
+	CountAppliedAIPausesForTarget(ctx context.Context, arg CountAppliedAIPausesForTargetParams) (int64, error)
 	CountAuditLogsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
 	CountBidSnapshotsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
 	CountCampaignsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) (int64, error)
@@ -121,6 +133,10 @@ type Querier interface {
 	DeleteStrategy(ctx context.Context, id pgtype.UUID) error
 	DeleteStrategyBinding(ctx context.Context, id pgtype.UUID) error
 	DeleteWorkspaceMember(ctx context.Context, id pgtype.UUID) error
+	// ExpireStaleProposedAIDecisions retires copilot proposals nobody acted on:
+	// the rationale is built on a data snapshot that is now days old, so the card
+	// must leave the «Требуют решения» queue instead of hanging there forever.
+	ExpireStaleProposedAIDecisions(ctx context.Context) (int64, error)
 	FinishAIRun(ctx context.Context, arg FinishAIRunParams) error
 	GetAIDecisionByID(ctx context.Context, arg GetAIDecisionByIDParams) (AiDecision, error)
 	// GetAIDecisionGuardState feeds the per-target cooldown/daily-cap guardrail
@@ -179,6 +195,10 @@ type Querier interface {
 	GetOzonPriceChangeByID(ctx context.Context, id pgtype.UUID) (OzonPriceChange, error)
 	GetOzonPriceScheduleEntry(ctx context.Context, id pgtype.UUID) (OzonPriceScheduleEntry, error)
 	GetOzonProductPriceBySku(ctx context.Context, arg GetOzonProductPriceBySkuParams) (OzonProductPrice, error)
+	// GetOzonSKUSalesWindowTotals sums one SKU's sales over a closed date window —
+	// the before/after comparison for cpo_* decisions (CPO has no campaign-level
+	// stats; per-SKU turnover is the only measurable surface).
+	GetOzonSKUSalesWindowTotals(ctx context.Context, arg GetOzonSKUSalesWindowTotalsParams) (GetOzonSKUSalesWindowTotalsRow, error)
 	// GetOzonStrategyGuardState feeds the per-(campaign, sku) cooldown and
 	// daily-cap guardrails. The deterministic strategy scales every SKU of a
 	// campaign uniformly, so the worst (max) per-SKU counter is the campaign
@@ -329,6 +349,9 @@ type Querier interface {
 	ListStrategyBindings(ctx context.Context, strategyID pgtype.UUID) ([]StrategyBinding, error)
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
 	ListWorkspaceMembers(ctx context.Context, arg ListWorkspaceMembersParams) ([]WorkspaceMember, error)
+	// ListWorkspaceOwnerExternalUserIDs resolves the CRM user ids of a local
+	// workspace's owners — the recipients of autopilot notifications.
+	ListWorkspaceOwnerExternalUserIDs(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.Text, error)
 	ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) ([]Workspace, error)
 	ListWorkspacesByUserID(ctx context.Context, arg ListWorkspacesByUserIDParams) ([]Workspace, error)
 	MarkOzonBidChangeResult(ctx context.Context, arg MarkOzonBidChangeResultParams) error

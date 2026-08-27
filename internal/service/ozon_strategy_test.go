@@ -97,10 +97,17 @@ func TestOzonStrategyGuardReason(t *testing.T) {
 }
 
 func TestOzonStrategyDayStart(t *testing.T) {
-	now := time.Date(2026, 8, 7, 23, 59, 59, 0, time.FixedZone("MSK", 3*3600))
+	msk := time.FixedZone("MSK", 3*3600)
+	now := time.Date(2026, 8, 7, 23, 59, 59, 0, msk)
 	dayStart := ozonStrategyDayStart(now)
-	if dayStart != time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC) {
+	if !dayStart.Equal(time.Date(2026, 8, 7, 0, 0, 0, 0, msk)) {
 		t.Fatalf("unexpected day start %v", dayStart)
+	}
+	// 01:00 UTC is already 04:00 MSK — the seller's day has begun, so the
+	// boundary is MSK midnight, not the previous UTC midnight.
+	early := time.Date(2026, 8, 7, 1, 0, 0, 0, time.UTC)
+	if got := ozonStrategyDayStart(early); !got.Equal(time.Date(2026, 8, 7, 0, 0, 0, 0, msk)) {
+		t.Fatalf("unexpected early-UTC day start %v", got)
 	}
 }
 

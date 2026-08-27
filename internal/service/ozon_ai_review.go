@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -108,6 +109,19 @@ func (s *OzonAIManagerService) CheckManualRunAllowed(ctx context.Context, worksp
 	return nil
 }
 
+// ExpireStaleProposals retires copilot proposals older than 72 hours (SQL-side
+// TTL). Best-effort: called from the sweep, a failure only logs.
+func (s *OzonAIManagerService) ExpireStaleProposals(ctx context.Context) {
+	n, err := s.queries.ExpireStaleProposedAIDecisions(ctx)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to expire stale ai proposals")
+		return
+	}
+	if n > 0 {
+		s.logger.Info().Int64("expired", n).Msg("stale ai proposals expired")
+	}
+}
+
 // ApproveDecision applies one 'proposed' (copilot) decision. Guardrails run
 // again against fresh data — the cabinet may have changed since the run.
 func (s *OzonAIManagerService) ApproveDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error) {
@@ -160,7 +174,7 @@ func (s *OzonAIManagerService) ApproveDecision(ctx context.Context, workspaceID,
 	if verdict := s.evaluateProposal(ctx, cabinetID, params, proposal, data); verdict != "" {
 		return markRejected(verdict)
 	}
-	applyVerdict, applyErr := s.applyProposal(ctx, workspaceID, cabinetID, proposal, data)
+	applyVerdict, applyErr := s.applyProposal(ctx, workspaceID, cabinetID, params, proposal, data)
 	if applyVerdict != "" {
 		return markRejected(applyVerdict)
 	}
@@ -256,6 +270,7 @@ func (s *OzonAIManagerService) loadFreshCabinetData(ctx context.Context, cabinet
 		campaignsByOzonID: map[int64]sqlcgen.OzonCampaign{},
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
+		spend14ByOzonID:   map[int64]float64{},
 	}
 	campaigns, err := s.queries.ListOzonCampaignsByCabinet(ctx, sqlcgen.ListOzonCampaignsByCabinetParams{
 		SellerCabinetID: uuidToPgtype(cabinetID), Limit: 500, Offset: 0,
@@ -279,6 +294,16 @@ func (s *OzonAIManagerService) loadFreshCabinetData(ctx context.Context, cabinet
 				}
 			}
 			data.bidsByCampaignSKU[campaign.OzonCampaignID] = bids
+			// Spend over the same window the run used — the anchor for budget
+			// proposals on campaigns without a configured budget.
+			since := time.Now().UTC().AddDate(0, 0, -aiPackStatsWindowDays)
+			if totals, totalsErr := s.queries.GetOzonCampaignStatsWindowTotals(ctx, sqlcgen.GetOzonCampaignStatsWindowTotalsParams{
+				CampaignID: campaign.ID,
+				DateFrom:   pgtype.Date{Time: since, Valid: true},
+				DateTo:     pgtype.Date{Time: time.Now().UTC(), Valid: true},
+			}); totalsErr == nil {
+				data.spend14ByOzonID[campaign.OzonCampaignID] = pgNumericToFloat(totals.SpendRub)
+			}
 		}
 	}
 	return data, nil

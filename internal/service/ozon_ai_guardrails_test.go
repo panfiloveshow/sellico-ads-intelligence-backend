@@ -255,3 +255,23 @@ func TestClampBudgetToChangeLimit(t *testing.T) {
 		t.Fatalf("получено %d (%q), ожидалось без изменений", v, n)
 	}
 }
+
+// Кампания без бюджета не имела якоря для процентного предела: модель могла
+// поставить любой бюджет. Теперь якорь — собственный расход кампании (2×).
+func TestUnbudgetedBudgetGuard(t *testing.T) {
+	// Расход 7000₽ за 14 дней = 500₽/день → недельный потолок 7000₽.
+	if reason := ozonAIUnbudgetedBudgetGuardReason(7000, 7000, true, 14); reason != "" {
+		t.Fatalf("бюджет в пределах 2× расхода должен проходить: %s", reason)
+	}
+	if reason := ozonAIUnbudgetedBudgetGuardReason(7001, 7000, true, 14); reason == "" {
+		t.Fatal("бюджет выше 2× расхода обязан отклоняться")
+	}
+	// Дневной вариант: потолок 1000₽.
+	if reason := ozonAIUnbudgetedBudgetGuardReason(1001, 7000, false, 14); reason == "" {
+		t.Fatal("дневной бюджет выше 2× дневного расхода обязан отклоняться")
+	}
+	// Нет расхода — нет якоря: первый бюджет задаёт человек.
+	if reason := ozonAIUnbudgetedBudgetGuardReason(5000, 0, true, 14); reason == "" {
+		t.Fatal("без расхода любое предложение обязано отклоняться")
+	}
+}

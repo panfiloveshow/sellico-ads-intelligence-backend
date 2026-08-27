@@ -30,9 +30,9 @@ import (
 //   - after-window has ≥ 3 days of data           → 'evaluated'
 //   - fewer days but decision younger than 14d    → 'pending_eval' (retry later)
 //   - fewer days and decision older than 14 days  → 'not_evaluable'
-//   - cpo_* actions (no campaign-level stats)     → 'not_evaluable'
-//     TODO: evaluate cpo_* decisions from per-SKU sales (ozon_sales_daily)
-//     once the attribution question is settled.
+//   - cpo_* actions: per-SKU turnover from ozon_sales_daily, revenue-only
+//     (CPO spend is not tracked per SKU, so ДРР stays NULL and the decision
+//     never enters the money aggregate)
 const (
 	// aiImpactWindowDays is the length of each comparison window.
 	aiImpactWindowDays = 7
@@ -42,6 +42,13 @@ const (
 	aiImpactMaxAgeDays = 14
 	// aiImpactSummaryDays is the GET /ozon/ai/impact aggregation window.
 	aiImpactSummaryDays = 30
+	// aiImpactMinEvaluatedForDisplay: below this many evaluated decisions the
+	// aggregate is noise, and the summary is flagged low_data so the UI shows
+	// «данных пока мало» instead of a verdict.
+	aiImpactMinEvaluatedForDisplay = 5
+	// aiImpactDowngradeStreak: this many consecutive evaluated decisions that
+	// worsened their campaign's ДРР switch a level-3 cabinet back to copilot.
+	aiImpactDowngradeStreak = 3
 )
 
 // EvaluateImpactSweep is the ozon:ai_impact_sweep entry point: it scans every
@@ -53,6 +60,7 @@ func (s *OzonAIManagerService) EvaluateImpactSweep(ctx context.Context) error {
 		return fmt.Errorf("list decisions for impact eval: %w", err)
 	}
 	evaluated, pending, skipped := 0, 0, 0
+	touchedCabinets := map[uuid.UUID]uuid.UUID{} // cabinet → workspace
 	var errs []error
 	for _, row := range rows {
 		status, evalErr := s.evaluateDecisionImpact(ctx, row)
@@ -66,11 +74,17 @@ func (s *OzonAIManagerService) EvaluateImpactSweep(ctx context.Context) error {
 		switch status {
 		case domain.AIOutcomeEvaluated:
 			evaluated++
+			touchedCabinets[uuidFromPgtype(row.SellerCabinetID)] = uuidFromPgtype(row.WorkspaceID)
 		case domain.AIOutcomePendingEval:
 			pending++
 		default:
 			skipped++
 		}
+	}
+	// Safety brake: a level-3 cabinet whose last decisions keep making the ДРР
+	// worse loses the right to act on its own until a human looks at it.
+	for cabinetID, workspaceID := range touchedCabinets {
+		s.maybeDowngradeAutopilot(ctx, workspaceID, cabinetID)
 	}
 	s.logger.Info().
 		Int("decisions", len(rows)).
@@ -81,6 +95,81 @@ func (s *OzonAIManagerService) EvaluateImpactSweep(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// maybeDowngradeAutopilot switches a cabinet's strategy from level 3 back to
+// level 2 (copilot) when the last aiImpactDowngradeStreak evaluated decisions
+// all worsened their campaign's ДРР. Best-effort: any read/write failure is
+// logged and skipped — the brake must never break the sweep.
+func (s *OzonAIManagerService) maybeDowngradeAutopilot(ctx context.Context, workspaceID, cabinetID uuid.UUID) {
+	strategyRow, err := s.queries.GetActiveOzonAIStrategyForCabinet(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return
+	}
+	strategy := strategyFromSqlc(strategyRow)
+	if strategy.Params.Merged().AutomationLevel < 3 {
+		return
+	}
+	recent, err := s.queries.ListRecentAppliedAIDecisions(ctx, sqlcgen.ListRecentAppliedAIDecisionsParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Lim:             int32(aiImpactDowngradeStreak * 3),
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("autopilot downgrade check: history read failed")
+		return
+	}
+	streak := 0
+	for _, row := range recent { // newest first
+		if pgTextValue(row.OutcomeStatus) != domain.AIOutcomeEvaluated {
+			continue
+		}
+		before := pgNumericToFloatPtr(row.DrrBefore)
+		after := pgNumericToFloatPtr(row.DrrAfter)
+		if before == nil || after == nil {
+			continue
+		}
+		if *after <= *before {
+			return // the newest evaluated decisions include a non-worsening one
+		}
+		streak++
+		if streak >= aiImpactDowngradeStreak {
+			break
+		}
+	}
+	if streak < aiImpactDowngradeStreak {
+		return
+	}
+	// Patch only automation_level in the stored params — a full re-marshal of
+	// the merged struct would bake defaults into the row.
+	var raw map[string]any
+	if len(strategyRow.Params) > 0 {
+		if err := json.Unmarshal(strategyRow.Params, &raw); err != nil {
+			s.logger.Warn().Err(err).Msg("autopilot downgrade: params unmarshal failed")
+			return
+		}
+	}
+	if raw == nil {
+		raw = map[string]any{}
+	}
+	raw["automation_level"] = 2
+	patched, err := json.Marshal(raw)
+	if err != nil {
+		return
+	}
+	if _, err := s.queries.UpdateStrategy(ctx, sqlcgen.UpdateStrategyParams{
+		ID: strategyRow.ID, Name: strategyRow.Name, Type: strategyRow.Type,
+		Params: patched, IsActive: strategyRow.IsActive,
+	}); err != nil {
+		s.logger.Warn().Err(err).Msg("autopilot downgrade: strategy update failed")
+		return
+	}
+	s.logger.Warn().
+		Str("cabinet_id", cabinetID.String()).
+		Int("streak", streak).
+		Msg("autopilot downgraded to copilot after consecutive worsened decisions")
+	s.notifier.NotifyWorkspaceOwners(ctx, workspaceID, "ads-ai-downgraded",
+		"ИИ-автопилот переведён в режим Копилот",
+		fmt.Sprintf("Последние %d оценённых решений ИИ ухудшили ДРР кампаний. Автопилот остановлен: новые предложения будут ждать вашего подтверждения.", aiImpactDowngradeStreak))
+}
+
 // evaluateDecisionImpact measures one decision and persists the outcome.
 func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row sqlcgen.AiDecision) (string, error) {
 	if !row.AppliedAt.Valid {
@@ -88,11 +177,14 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 	}
 	now := time.Now().UTC()
 
-	// cpo_* targets a SKU, not a campaign — ozon_campaign_stats has nothing
-	// to attribute. TODO: per-SKU evaluation via ozon_sales_daily.
+	// cpo_* targets a SKU, not a campaign — ozon_campaign_stats has nothing to
+	// attribute. Its measurable surface is the SKU's own turnover
+	// (ozon_sales_daily): revenue before/after only. CPO spend is not tracked
+	// per SKU, so spend/ДРР stay NULL and the decision never enters the
+	// «Эффект ИИ» aggregate — visible per decision, not counted as money.
 	switch row.ActionType {
 	case domain.AIActionCPOBid, domain.AIActionCPOEnable, domain.AIActionCPODisable:
-		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
+		return s.evaluateCPODecisionImpact(ctx, row, now)
 	}
 
 	var target domain.AIDecisionTarget
@@ -140,6 +232,69 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 	totals := s.cabinetTotalDRRWindows(ctx, row.SellerCabinetID, windows)
 
 	return outcome.Status, s.writeDecisionOutcome(ctx, row.ID, outcome.Status, &before, &after, totals)
+}
+
+// evaluateCPODecisionImpact measures a cpo_* decision by the target SKU's own
+// turnover over the same 7d/7d windows. Unlike campaign decisions, «enough
+// data» is calendar time here: a SKU that sold nothing after the change has no
+// sales rows at all, and that zero IS the result — so we evaluate as soon as
+// the after-window has fully elapsed.
+func (s *OzonAIManagerService) evaluateCPODecisionImpact(ctx context.Context, row sqlcgen.AiDecision, now time.Time) (string, error) {
+	var target domain.AIDecisionTarget
+	if len(row.Target) > 0 {
+		if err := json.Unmarshal(row.Target, &target); err != nil {
+			return "", fmt.Errorf("parse decision target: %w", err)
+		}
+	}
+	if target.SKU == 0 {
+		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
+	}
+	windows := aiImpactWindows(row.AppliedAt.Time)
+	if now.Before(windows.AfterTo.Add(24 * time.Hour)) {
+		if now.Sub(row.AppliedAt.Time) > time.Duration(aiImpactMaxAgeDays)*24*time.Hour {
+			return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
+		}
+		return domain.AIOutcomePendingEval, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomePendingEval, nil, nil, aiImpactTotalDRR{})
+	}
+
+	skuWindow := func(from, to time.Time) (float64, error) {
+		totals, err := s.queries.GetOzonSKUSalesWindowTotals(ctx, sqlcgen.GetOzonSKUSalesWindowTotalsParams{
+			SellerCabinetID: row.SellerCabinetID,
+			Sku:             target.SKU,
+			DateFrom:        pgtype.Date{Time: from, Valid: true},
+			DateTo:          pgtype.Date{Time: to, Valid: true},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("sku sales window totals: %w", err)
+		}
+		return pgNumericToFloat(totals.RevenueRub), nil
+	}
+	beforeRev, err := skuWindow(windows.BeforeFrom, windows.BeforeTo)
+	if err != nil {
+		return "", err
+	}
+	afterRev, err := skuWindow(windows.AfterFrom, windows.AfterTo)
+	if err != nil {
+		return "", err
+	}
+	totals := s.cabinetTotalDRRWindows(ctx, row.SellerCabinetID, windows)
+
+	params := sqlcgen.SetAIDecisionOutcomeParams{
+		ID:               row.ID,
+		OutcomeStatus:    textToPgtype(domain.AIOutcomeEvaluated),
+		RevenueBeforeRub: floatToPgNumeric(roundRub(beforeRev)),
+		RevenueAfterRub:  floatToPgNumeric(roundRub(afterRev)),
+	}
+	if totals.Before != nil {
+		params.TotalDrrBefore = floatToPgNumeric(*totals.Before)
+	}
+	if totals.After != nil {
+		params.TotalDrrAfter = floatToPgNumeric(*totals.After)
+	}
+	if err := s.queries.SetAIDecisionOutcome(ctx, params); err != nil {
+		return "", fmt.Errorf("set cpo decision outcome: %w", err)
+	}
+	return domain.AIOutcomeEvaluated, nil
 }
 
 // aiImpactTotalDRR carries the cabinet-wide ДРР of both comparison windows.
@@ -342,6 +497,7 @@ func aiImpactAggregate(rows []aiImpactRow) domain.AIImpactSummary {
 	summary.RevenueDeltaRub = roundRub(summary.RevenueDeltaRub)
 	summary.SavedRub = roundRub(summary.SavedRub)
 	summary.ExtraRevenueRub = roundRub(summary.ExtraRevenueRub)
+	summary.LowData = summary.DecisionsEvaluated < aiImpactMinEvaluatedForDisplay
 	return summary
 }
 

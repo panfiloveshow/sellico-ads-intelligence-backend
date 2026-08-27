@@ -97,6 +97,45 @@ WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND target @> sqlc.arg('target')::jsonb
   AND status IN ('shadow', 'proposed', 'approved', 'auto_applied', 'applied');
 
+-- CountAppliedAIActionsToday is the cabinet-wide daily action cap: how many
+-- decisions actually reached Ozon today (applied by autopilot or by a human).
+-- Per-target caps bound each campaign/SKU; this bounds the whole cabinet.
+-- name: CountAppliedAIActionsToday :one
+SELECT COUNT(*)::bigint FROM ai_decisions
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND status IN ('applied', 'auto_applied')
+  AND applied_at >= sqlc.arg('day_start');
+
+-- CountAppliedAIPausesForTarget answers «останавливал ли ИИ эту кампанию сам»:
+-- autopilot may only re-activate campaigns it paused itself, never ones a
+-- human switched off deliberately.
+-- name: CountAppliedAIPausesForTarget :one
+SELECT COUNT(*)::bigint FROM ai_decisions
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND action_type = 'campaign_pause'
+  AND target @> sqlc.arg('target')::jsonb
+  AND status IN ('applied', 'auto_applied');
+
+-- ExpireStaleProposedAIDecisions retires copilot proposals nobody acted on:
+-- the rationale is built on a data snapshot that is now days old, so the card
+-- must leave the «Требуют решения» queue instead of hanging there forever.
+-- name: ExpireStaleProposedAIDecisions :execrows
+UPDATE ai_decisions SET
+    status = 'expired',
+    error = 'предложение устарело: не подтверждено за 72 часа, данные могли измениться'
+WHERE status = 'proposed'
+  AND created_at < now() - INTERVAL '72 hours';
+
+-- ListWorkspaceOwnerExternalUserIDs resolves the CRM user ids of a local
+-- workspace's owners — the recipients of autopilot notifications.
+-- name: ListWorkspaceOwnerExternalUserIDs :many
+SELECT u.external_user_id
+FROM workspace_members wm
+JOIN users u ON u.id = wm.user_id
+WHERE wm.workspace_id = sqlc.arg('workspace_id')
+  AND wm.role = 'owner'
+  AND u.external_user_id IS NOT NULL;
+
 -- ListActiveOzonAICabinets enumerates cabinets the ozon:ai_sweep fans out to:
 -- every active Ozon cabinet that has at least one active ozon_ai_autopilot
 -- strategy.
@@ -198,6 +237,30 @@ SELECT
     COUNT(*)::bigint AS days
 FROM ozon_campaign_stats
 WHERE campaign_id = sqlc.arg('campaign_id')
+  AND date BETWEEN sqlc.arg('date_from') AND sqlc.arg('date_to');
+
+-- AggregateOzonSearchSpendBySku sums per-SKU ad spend from the phrases-report
+-- mirror — the closest thing to per-SKU spend the data model has. Feeds the
+-- context pack's SKU ranking and the spend_30d_rub field per product.
+-- name: AggregateOzonSearchSpendBySku :many
+SELECT sku, COALESCE(SUM(spend_rub), 0)::numeric AS spend_rub
+FROM ozon_search_queries
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND date >= sqlc.arg('date_from')
+  AND sku <> 0
+GROUP BY sku;
+
+-- GetOzonSKUSalesWindowTotals sums one SKU's sales over a closed date window —
+-- the before/after comparison for cpo_* decisions (CPO has no campaign-level
+-- stats; per-SKU turnover is the only measurable surface).
+-- name: GetOzonSKUSalesWindowTotals :one
+SELECT
+    COALESCE(SUM(revenue_rub), 0)::numeric  AS revenue_rub,
+    COALESCE(SUM(ordered_units), 0)::bigint AS ordered_units,
+    COUNT(*)::bigint                        AS days
+FROM ozon_sales_daily
+WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
+  AND sku = sqlc.arg('sku')
   AND date BETWEEN sqlc.arg('date_from') AND sqlc.arg('date_to');
 
 -- name: GetOzonCampaignByCabinetAndOzonID :one

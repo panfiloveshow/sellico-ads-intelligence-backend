@@ -128,6 +128,7 @@ type ozonAIRunner interface {
 	RunForCabinetID(ctx context.Context, cabinetID uuid.UUID, trigger string) error
 	EvaluateImpactSweep(ctx context.Context) error
 	GenerateWeeklyReports(ctx context.Context) error
+	ExpireStaleProposals(ctx context.Context)
 }
 
 // ozonRepricerRunner executes ozon_price_* strategies for a workspace and
@@ -805,6 +806,9 @@ func (p *Processor) HandleOzonAISweep(ctx context.Context, _ *asynq.Task) error 
 		p.logger.Debug().Msg("ozon ai manager not configured, skipping sweep")
 		return nil
 	}
+	// Retire copilot proposals nobody confirmed within the TTL before new
+	// runs generate fresh ones.
+	p.ozonAI.ExpireStaleProposals(ctx)
 	cabinetIDs, err := p.ozonAI.ListAICabinetIDs(ctx)
 	if err != nil {
 		return err

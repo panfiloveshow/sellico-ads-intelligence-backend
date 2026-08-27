@@ -557,11 +557,16 @@ func ozonStrategyGuardReason(changesToday int64, lastChangeAt *time.Time, params
 	return ""
 }
 
-// ozonStrategyDayStart returns the UTC midnight preceding now — the daily-cap
+// ozonStrategyDayStartTZ is the timezone the daily caps count in. Ozon sellers
+// live in Moscow time; a UTC boundary shifted every «day» by 3 hours. Fixed
+// offset on purpose — MSK has no DST, and a fixed zone cannot fail to load.
+var ozonStrategyDayStartTZ = time.FixedZone("MSK", 3*60*60)
+
+// ozonStrategyDayStart returns the MSK midnight preceding now — the daily-cap
 // counting window boundary.
 func ozonStrategyDayStart(now time.Time) time.Time {
-	utc := now.UTC()
-	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	msk := now.In(ozonStrategyDayStartTZ)
+	return time.Date(msk.Year(), msk.Month(), msk.Day(), 0, 0, 0, 0, ozonStrategyDayStartTZ)
 }
 
 // roundRub rounds a ruble amount to kopecks (2dp).
