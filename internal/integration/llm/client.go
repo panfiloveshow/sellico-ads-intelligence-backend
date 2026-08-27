@@ -60,9 +60,9 @@ var ErrModelUnavailable = errors.New("llm model unavailable")
 // An empty APIKey means "AI disabled": Enabled() reports false and every call
 // fails fast without touching the network.
 type Config struct {
-	BaseURL   string
-	APIKey    string
-	Model     string
+	BaseURL string
+	APIKey  string
+	Model   string
 	// FallbackModels are tried, in order, when the primary model is not
 	// available. NVIDIA's free tier unloads models and answers 404 for hours:
 	// half of the AI runs died on «returned 404» while the same model worked

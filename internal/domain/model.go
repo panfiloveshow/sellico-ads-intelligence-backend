@@ -262,26 +262,26 @@ type SellerCabinet struct {
 	// Marketplace is 'wb' or 'ozon'. WB cabinets keep their API token in
 	// EncryptedToken; Ozon cabinets keep an AES-GCM encrypted OzonCredentials
 	// JSON blob in EncryptedCredentials.
-	Marketplace           string                        `json:"marketplace"`
-	EncryptedToken        string                        `json:"-"`
-	EncryptedCredentials  string                        `json:"-"`
+	Marketplace          string `json:"marketplace"`
+	EncryptedToken       string `json:"-"`
+	EncryptedCredentials string `json:"-"`
 	// HasPerformanceAPI is set for Ozon cabinets only: whether the Sellico
 	// integration carries Performance API credentials (ads management).
-	HasPerformanceAPI *bool `json:"has_performance_api,omitempty"`
-	Status                string                        `json:"status"`
-	ExternalIntegrationID *string                       `json:"external_integration_id,omitempty"`
-	Source                string                        `json:"source"`
-	IntegrationType       *string                       `json:"integration_type,omitempty"`
-	LastSyncedAt          *time.Time                    `json:"last_synced_at,omitempty"`
-	LastSellicoSyncAt     *time.Time                    `json:"last_sellico_sync_at,omitempty"`
+	HasPerformanceAPI     *bool      `json:"has_performance_api,omitempty"`
+	Status                string     `json:"status"`
+	ExternalIntegrationID *string    `json:"external_integration_id,omitempty"`
+	Source                string     `json:"source"`
+	IntegrationType       *string    `json:"integration_type,omitempty"`
+	LastSyncedAt          *time.Time `json:"last_synced_at,omitempty"`
+	LastSellicoSyncAt     *time.Time `json:"last_sellico_sync_at,omitempty"`
 	// RepricerPausedUntil is the repricer freeze switch (WB and Ozon alike):
 	// while in the future, strategy sweeps and scheduled price changes skip
 	// this cabinet; manual writes are unaffected.
-	RepricerPausedUntil *time.Time `json:"repricer_paused_until,omitempty"`
-	LastAutoSync          *SellerCabinetAutoSyncSummary `json:"last_auto_sync,omitempty"`
-	CreatedAt             time.Time                     `json:"created_at"`
-	UpdatedAt             time.Time                     `json:"updated_at"`
-	DeletedAt             *time.Time                    `json:"deleted_at,omitempty"`
+	RepricerPausedUntil *time.Time                    `json:"repricer_paused_until,omitempty"`
+	LastAutoSync        *SellerCabinetAutoSyncSummary `json:"last_auto_sync,omitempty"`
+	CreatedAt           time.Time                     `json:"created_at"`
+	UpdatedAt           time.Time                     `json:"updated_at"`
+	DeletedAt           *time.Time                    `json:"deleted_at,omitempty"`
 }
 
 // Campaign represents a Wildberries advertising campaign.

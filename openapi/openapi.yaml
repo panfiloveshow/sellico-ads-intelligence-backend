@@ -3271,6 +3271,29 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OzonCompetitiveBidListEnvelope" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/campaigns/{id}/insights:
+    get:
+      tags: [Ozon]
+      summary: Per-product AI-context signals of a campaign (склад, воронка карточки, рейтинг, маржа) — «глазами ИИ» для страницы деталей
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Product insights (nil-поля = «не измерено»)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OzonProductInsight" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/bid-changes:
     get:
       tags: [Ozon]
@@ -6143,6 +6166,19 @@ components:
         saved_rub: { type: number, description: "Σ max(0, spend_before − spend_after) где revenue_after ≥ 0.9 × revenue_before" }
         extra_revenue_rub: { type: number, description: "Σ max(0, revenue_after − revenue_before)" }
         low_data: { type: boolean, description: "true когда оценённых решений меньше порога достоверности (5) — агрегат статистически шумный, UI показывает «данных пока мало»" }
+    OzonProductInsight:
+      type: object
+      description: Сигналы контекста ИИ по одному товару кампании. Отсутствующее поле = «не измерено», никогда не ноль.
+      properties:
+        sku: { type: integer, format: int64 }
+        stock: { type: integer, nullable: true, description: "Остаток на складе, шт." }
+        days_of_cover: { type: number, nullable: true, description: "На сколько дней продаж хватит запаса (остаток / средние продажи за 28д)" }
+        rating: { type: number, nullable: true, description: "Средняя оценка покупателей" }
+        reviews_count: { type: integer, nullable: true }
+        card_views_14d: { type: integer, nullable: true, description: "Просмотры карточки за 14д (СЕО-мост)" }
+        conv_to_cart_pct: { type: number, nullable: true }
+        conv_to_order_pct: { type: number, nullable: true }
+        margin_pct: { type: number, nullable: true }
     AIImpactEnvelope:
       type: object
       properties:

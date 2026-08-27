@@ -129,8 +129,8 @@ func addVersion(version int, payload string) string {
 //     ciphertext under v2.
 //  5. After the migration completes, drop ENCRYPTION_KEYS_V1 from env.
 type Keyring struct {
-	keys     map[int][]byte // version → key bytes (32B each)
-	latest   int
+	keys   map[int][]byte // version → key bytes (32B each)
+	latest int
 }
 
 // NewKeyring constructs a Keyring from version→key map. It validates that

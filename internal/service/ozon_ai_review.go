@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,6 +108,105 @@ func (s *OzonAIManagerService) CheckManualRunAllowed(ctx context.Context, worksp
 		return apperror.New(apperror.ErrConflict, "an ai run is already in progress for this cabinet")
 	}
 	return nil
+}
+
+// ProductInsights exposes the AI-context signals (склад, воронка, рейтинг,
+// маржа) per product of one campaign — the manager sees what the model sees.
+// Every enrichment source is best-effort: an unavailable bridge just leaves
+// its fields nil.
+func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID, campaignID uuid.UUID) ([]domain.OzonProductInsight, error) {
+	campaignRow, err := s.queries.GetOzonCampaignByID(ctx, uuidToPgtype(campaignID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.New(apperror.ErrNotFound, "ozon campaign not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load ozon campaign: %w", err)
+	}
+	cabinetID := uuidFromPgtype(campaignRow.SellerCabinetID)
+	if err := s.resolveAICabinet(ctx, workspaceID, cabinetID); err != nil {
+		return nil, err
+	}
+	productRows, err := s.queries.ListOzonCampaignProducts(ctx, campaignRow.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list campaign products: %w", err)
+	}
+
+	stocks := loadCabinetStocks(ctx, s.queries, s.logger, cabinetID)
+	unitsPerDay := map[int64]float64{}
+	if velocityRows, velErr := s.queries.OzonSalesVelocityByCabinet(ctx, sqlcgen.OzonSalesVelocityByCabinetParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Date:            pgtype.Date{Time: time.Now().UTC().AddDate(0, 0, -28), Valid: true},
+	}); velErr == nil {
+		for _, row := range velocityRows {
+			if row.Units > 0 {
+				unitsPerDay[row.Sku] = float64(row.Units) / 28
+			}
+		}
+	}
+	funnelBySKU, _ := s.loadCardFunnel(ctx, cabinetID)
+	_, ratingByName := s.loadReviewRatings(ctx, cabinetID)
+
+	// Маржа и offer_id — из зеркала цен (тот же расчёт, что в контексте ИИ).
+	skus := make([]int64, 0, len(productRows))
+	for _, row := range productRows {
+		skus = append(skus, row.Sku)
+	}
+	marginBySKU := map[int64]*float64{}
+	offerBySKU := map[int64]string{}
+	if len(skus) > 0 {
+		if priceRows, priceErr := s.queries.ListOzonProductPricesBySkus(ctx, sqlcgen.ListOzonProductPricesBySkusParams{
+			SellerCabinetID: uuidToPgtype(cabinetID), Skus: skus,
+		}); priceErr == nil {
+			for _, row := range priceRows {
+				offerBySKU[row.Sku] = pgTextValue(row.OfferID)
+				price := pgNumericToFloatPtr(row.PriceRub)
+				cost := pgNumericToFloatPtr(row.NetPriceRub)
+				if price != nil && cost != nil {
+					commission := pgNumericToFloat(row.CommissionFboPct)
+					if fbs := pgNumericToFloat(row.CommissionFbsPct); fbs > commission {
+						commission = fbs
+					}
+					marginBySKU[row.Sku] = ozonSKUMarginPct(*price, *cost, commission, pgNumericToFloat(row.AcquiringPct))
+				}
+			}
+		}
+	}
+
+	insights := make([]domain.OzonProductInsight, 0, len(productRows))
+	for _, row := range productRows {
+		insight := domain.OzonProductInsight{SKU: row.Sku, MarginPct: marginBySKU[row.Sku]}
+		if stock, ok := stocks[row.Sku]; ok {
+			v := stock
+			insight.Stock = &v
+			if perDay := unitsPerDay[row.Sku]; perDay > 0 {
+				cover := roundRub(float64(stock) / perDay)
+				insight.DaysOfCover = &cover
+			}
+		}
+		funnel, hasFunnel := funnelBySKU[strconv.FormatInt(row.Sku, 10)]
+		if !hasFunnel {
+			if offer := offerBySKU[row.Sku]; offer != "" {
+				funnel, hasFunnel = funnelBySKU[offer]
+			}
+		}
+		if hasFunnel {
+			views := funnel.CardViews
+			insight.CardViews14d = &views
+			if views > 0 {
+				toCart := roundRub(float64(funnel.CartAdds) / float64(views) * 100)
+				insight.ConvToCartPct = &toCart
+				toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)
+				insight.ConvToOrderPct = &toOrder
+			}
+			if rating, ok := ratingByName[funnel.Name]; ok {
+				r, cnt := rating.Rating, rating.ReviewsCount
+				insight.Rating = &r
+				insight.ReviewsCount = &cnt
+			}
+		}
+		insights = append(insights, insight)
+	}
+	return insights, nil
 }
 
 // ExpireStaleProposals retires copilot proposals older than 72 hours (SQL-side

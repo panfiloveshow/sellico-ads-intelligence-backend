@@ -67,7 +67,7 @@ func readCgroupMemoryLimit() (int64, string, bool) {
 	const sentinelMax = int64(1) << 60
 
 	for _, p := range []string{
-		"/sys/fs/cgroup/memory.max",                 // cgroup v2 (unified)
+		"/sys/fs/cgroup/memory.max",                   // cgroup v2 (unified)
 		"/sys/fs/cgroup/memory/memory.limit_in_bytes", // cgroup v1
 	} {
 		raw, err := os.ReadFile(p)

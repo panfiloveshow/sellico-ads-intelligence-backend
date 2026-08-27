@@ -6,7 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-
 type UpsertProductSalesDailyParams struct {
 	WorkspaceID     pgtype.UUID
 	SellerCabinetID pgtype.UUID

@@ -545,6 +545,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.Get("/campaigns/{id}", deps.OzonHandler.GetCampaign)
 						oz.Get("/campaigns/{id}/stats", deps.OzonHandler.CampaignStats)
 						oz.Get("/campaigns/{id}/bids/competitive", deps.OzonHandler.CompetitiveBids)
+						oz.Get("/campaigns/{id}/insights", deps.OzonHandler.CampaignProductInsights)
 						oz.Get("/prices", deps.OzonHandler.ListPrices)
 						oz.Get("/bid-changes", deps.OzonHandler.ListBidChanges)
 						oz.Get("/cpo/overview", deps.OzonHandler.CPOOverview)

@@ -23,16 +23,16 @@ const (
 
 // ProductEvent represents a tracked change to a product card.
 type ProductEvent struct {
-	ID          uuid.UUID  `json:"id"`
-	WorkspaceID uuid.UUID  `json:"workspace_id"`
-	ProductID   uuid.UUID  `json:"product_id"`
-	EventType   string     `json:"event_type"`
-	FieldName   string     `json:"field_name,omitempty"`
-	OldValue    string     `json:"old_value,omitempty"`
-	NewValue    string     `json:"new_value,omitempty"`
+	ID          uuid.UUID      `json:"id"`
+	WorkspaceID uuid.UUID      `json:"workspace_id"`
+	ProductID   uuid.UUID      `json:"product_id"`
+	EventType   string         `json:"event_type"`
+	FieldName   string         `json:"field_name,omitempty"`
+	OldValue    string         `json:"old_value,omitempty"`
+	NewValue    string         `json:"new_value,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
-	DetectedAt  time.Time  `json:"detected_at"`
-	Source      string     `json:"source"`
+	DetectedAt  time.Time      `json:"detected_at"`
+	Source      string         `json:"source"`
 }
 
 // ProductSnapshot represents a point-in-time capture of product state for diffing.

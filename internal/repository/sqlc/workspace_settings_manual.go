@@ -35,8 +35,6 @@ func (q *Queries) BeginWorkspaceSettingsUpdateTx(ctx context.Context, workspaceI
 	return q.WithTx(tx), tx, nil
 }
 
-
-
 type WorkspaceWithSettings struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`
@@ -46,6 +44,3 @@ type WorkspaceWithSettings struct {
 	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
 	Settings  []byte             `json:"settings"`
 }
-
-
-

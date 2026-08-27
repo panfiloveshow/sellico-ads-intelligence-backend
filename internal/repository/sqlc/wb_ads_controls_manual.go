@@ -442,7 +442,6 @@ ON CONFLICT (seller_cabinet_id, captured_at) DO UPDATE SET
 	return err
 }
 
-
 func (q *Queries) GetLatestSellerAdBalance(ctx context.Context, sellerCabinetID pgtype.UUID) (SellerAdBalance, error) {
 	row := q.db.QueryRow(ctx, `
 SELECT id, seller_cabinet_id, balance, net, bonus, captured_at, created_at
@@ -462,7 +461,6 @@ LIMIT 1`, sellerCabinetID)
 	)
 	return item, err
 }
-
 
 func (q *Queries) GetCampaignDailyLimit(ctx context.Context, campaignID pgtype.UUID) (CampaignDailyLimit, error) {
 	row := q.db.QueryRow(ctx, `SELECT id, workspace_id, seller_cabinet_id, campaign_id, daily_limit,
@@ -607,7 +605,6 @@ ON CONFLICT (seller_cabinet_id, wb_product_id, date_from, date_to) DO UPDATE SET
 		arg.DateFrom, arg.DateTo, arg.OpenCount, arg.CartCount, arg.OrderCount, arg.CapturedAt)
 	return err
 }
-
 
 func (q *Queries) ListProductSalesFunnelPeriodsByWorkspaceDateRange(ctx context.Context, workspaceID pgtype.UUID, dateFrom, dateTo pgtype.Date, limit, offset int32) ([]ProductSalesFunnelPeriod, error) {
 	rows, err := q.db.Query(ctx, `

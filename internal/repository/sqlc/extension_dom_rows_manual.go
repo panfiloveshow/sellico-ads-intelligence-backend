@@ -6,7 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-
 const createExtensionDOMRowSnapshot = `
 INSERT INTO extension_dom_row_snapshots (
     session_id, workspace_id, user_id, seller_cabinet_id, campaign_id, phrase_id, product_id,

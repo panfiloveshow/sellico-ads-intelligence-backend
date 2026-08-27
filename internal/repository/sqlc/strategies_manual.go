@@ -8,15 +8,7 @@ import (
 
 // Strategy represents a row from the strategies table.
 
-
-
-
-
-
 // --- Strategy CRUD ---
-
-
-
 
 type GetStrategyByIDAndWorkspaceParams struct {
 	ID          pgtype.UUID
@@ -30,10 +22,6 @@ func (q *Queries) GetStrategyByIDAndWorkspace(ctx context.Context, arg GetStrate
 	return i, err
 }
 
-
-
-
-
 type UpdateStrategyInWorkspaceParams struct {
 	ID          pgtype.UUID
 	WorkspaceID pgtype.UUID
@@ -43,7 +31,6 @@ type UpdateStrategyInWorkspaceParams struct {
 	IsActive    bool
 }
 
-
 func (q *Queries) UpdateStrategyInWorkspace(ctx context.Context, arg UpdateStrategyInWorkspaceParams) (Strategy, error) {
 	row := q.db.QueryRow(ctx,
 		`UPDATE strategies SET name=$3, type=$4, params=$5, is_active=$6, updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING id, workspace_id, seller_cabinet_id, name, type, params, is_active, created_at, updated_at`,
@@ -52,7 +39,6 @@ func (q *Queries) UpdateStrategyInWorkspace(ctx context.Context, arg UpdateStrat
 	err := row.Scan(&i.ID, &i.WorkspaceID, &i.SellerCabinetID, &i.Name, &i.Type, &i.Params, &i.IsActive, &i.CreatedAt, &i.UpdatedAt)
 	return i, err
 }
-
 
 type DeleteStrategyInWorkspaceParams struct {
 	ID          pgtype.UUID
@@ -66,14 +52,12 @@ func (q *Queries) DeleteStrategyInWorkspace(ctx context.Context, arg DeleteStrat
 
 // --- Bindings ---
 
-
 type CreateStrategyBindingInWorkspaceParams struct {
 	WorkspaceID pgtype.UUID
 	StrategyID  pgtype.UUID
 	CampaignID  pgtype.UUID
 	ProductID   pgtype.UUID
 }
-
 
 func (q *Queries) CreateStrategyBindingInWorkspace(ctx context.Context, arg CreateStrategyBindingInWorkspaceParams) (StrategyBinding, error) {
 	row := q.db.QueryRow(ctx, `
@@ -154,7 +138,6 @@ func (q *Queries) UpsertDaypartingState(ctx context.Context, arg UpsertDaypartin
 	return err
 }
 
-
 func (q *Queries) ListActiveStrategyBindingsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]StrategyBinding, error) {
 	rows, err := q.db.Query(ctx, `SELECT b.id, b.strategy_id, b.campaign_id, b.product_id, b.ozon_campaign_id, b.created_at FROM strategy_bindings b JOIN strategies s ON s.id = b.strategy_id WHERE s.workspace_id = $1 AND s.is_active = true`, workspaceID)
 	if err != nil {
@@ -172,7 +155,6 @@ func (q *Queries) ListActiveStrategyBindingsByWorkspace(ctx context.Context, wor
 	return items, rows.Err()
 }
 
-
 type DeleteStrategyBindingInWorkspaceParams struct {
 	ID          pgtype.UUID
 	WorkspaceID pgtype.UUID
@@ -184,12 +166,6 @@ func (q *Queries) DeleteStrategyBindingInWorkspace(ctx context.Context, arg Dele
 }
 
 // --- Bid Changes ---
-
-
-
-
-
-
 
 type ListBidChangesByWorkspaceSinceParams struct {
 	WorkspaceID pgtype.UUID
@@ -228,9 +204,3 @@ func (q *Queries) GetBidChangeByIDAndWorkspace(ctx context.Context, arg GetBidCh
 }
 
 // --- Phrases ---
-
-
-
-
-
-

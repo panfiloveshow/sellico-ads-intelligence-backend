@@ -56,6 +56,21 @@ const (
 	AIOutcomeNotEvaluable = "not_evaluable"
 )
 
+// OzonProductInsight is the «глазами ИИ» enrichment of one campaign product:
+// the same stock/funnel/rating signals the AI context carries, exposed to the
+// manager UI. Nil fields mean «не измерено», never zero.
+type OzonProductInsight struct {
+	SKU            int64    `json:"sku"`
+	Stock          *int64   `json:"stock,omitempty"`
+	DaysOfCover    *float64 `json:"days_of_cover,omitempty"`
+	Rating         *float64 `json:"rating,omitempty"`
+	ReviewsCount   *int64   `json:"reviews_count,omitempty"`
+	CardViews14d   *int64   `json:"card_views_14d,omitempty"`
+	ConvToCartPct  *float64 `json:"conv_to_cart_pct,omitempty"`
+	ConvToOrderPct *float64 `json:"conv_to_order_pct,omitempty"`
+	MarginPct      *float64 `json:"margin_pct,omitempty"`
+}
+
 // AIRun is one AI manager execution over a cabinet.
 type AIRun struct {
 	ID               uuid.UUID  `json:"id"`

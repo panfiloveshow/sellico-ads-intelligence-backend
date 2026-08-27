@@ -265,6 +265,10 @@ func (f *fakeOzonAI) GetLatestWeeklyReport(ctx context.Context, workspaceID, cab
 	return f.weeklyReportFn(ctx, workspaceID, cabinetID)
 }
 
+func (f *fakeOzonAI) ProductInsights(ctx context.Context, workspaceID, campaignID uuid.UUID) ([]domain.OzonProductInsight, error) {
+	return []domain.OzonProductInsight{}, nil
+}
+
 func (f *fakeOzonAI) GetReadiness(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIReadiness, error) {
 	if f.readinessFn == nil {
 		return &domain.AIReadiness{}, nil

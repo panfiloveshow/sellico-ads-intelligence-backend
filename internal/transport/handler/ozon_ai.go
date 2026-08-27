@@ -27,6 +27,7 @@ type ozonAIServicer interface {
 	GetImpact(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIImpactSummary, error)
 	GetLatestWeeklyReport(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.OzonAIWeeklyReport, error)
 	GetReadiness(ctx context.Context, workspaceID, cabinetID uuid.UUID) (*domain.AIReadiness, error)
+	ProductInsights(ctx context.Context, workspaceID, campaignID uuid.UUID) ([]domain.OzonProductInsight, error)
 }
 
 // ozonAIRunEnqueuer enqueues an async ozon:ai_run task (trigger 'manual').
@@ -177,6 +178,31 @@ func (h *OzonHandler) AIImpact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.WriteJSON(w, http.StatusOK, summary)
+}
+
+// CampaignProductInsights handles GET /ozon/campaigns/{id}/insights: the
+// per-product AI-context signals (склад, воронка, рейтинг, маржа) for the
+// campaign detail page.
+func (h *OzonHandler) CampaignProductInsights(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAI(w) {
+		return
+	}
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	campaignID, err := parseNonNilUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid campaign id")
+		return
+	}
+	insights, err := h.ai.ProductInsights(r.Context(), workspaceID, campaignID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, insights)
 }
 
 // AIApproveDecision handles POST /ozon/ai/decisions/{id}/approve.

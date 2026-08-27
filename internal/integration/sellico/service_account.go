@@ -375,9 +375,9 @@ func parseIntegrationFull(value any) IntegrationFull {
 	}
 
 	return IntegrationFull{
-		ID:                      stringifyID(raw["id"]),
-		WorkspaceID:             stringifyID(raw["work_space_id"]),
-		Name:                    firstNonEmpty(stringify(raw["name"]), stringify(raw["title"])),
+		ID:          stringifyID(raw["id"]),
+		WorkspaceID: stringifyID(raw["work_space_id"]),
+		Name:        firstNonEmpty(stringify(raw["name"]), stringify(raw["title"])),
 		// /collector/integrations returns `marketplace`; /get-integration/{id} returns `type`.
 		// Same upstream — different shapes — accept both.
 		Type:                    normalizeIntegrationType(firstNonEmpty(stringify(raw["type"]), stringify(raw["marketplace"]))),

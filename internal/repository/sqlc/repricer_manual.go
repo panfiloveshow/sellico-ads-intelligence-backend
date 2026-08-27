@@ -14,7 +14,6 @@ import (
 // product_prices
 // ---------------------------------------------------------------------------
 
-
 type UpsertProductPriceParams struct {
 	WorkspaceID         pgtype.UUID
 	SellerCabinetID     pgtype.UUID
@@ -459,7 +458,6 @@ func (q *Queries) ListCabinetPricesScope(ctx context.Context, workspaceID pgtype
 // price_upload_tasks
 // ---------------------------------------------------------------------------
 
-
 type CreatePriceUploadTaskParams struct {
 	WorkspaceID     pgtype.UUID
 	SellerCabinetID pgtype.UUID
@@ -709,7 +707,6 @@ func scanPriceUploadTask(row rowScanner) (PriceUploadTask, error) {
 // ---------------------------------------------------------------------------
 // price_changes
 // ---------------------------------------------------------------------------
-
 
 type CreatePriceChangeParams struct {
 	WorkspaceID        pgtype.UUID
@@ -1220,7 +1217,6 @@ func scanPriceChange(row rowScanner) (PriceChange, error) {
 // price_quarantine_goods
 // ---------------------------------------------------------------------------
 
-
 type UpsertQuarantineGoodParams struct {
 	WorkspaceID     pgtype.UUID
 	SellerCabinetID pgtype.UUID
@@ -1315,7 +1311,6 @@ func (q *Queries) SetCabinetPricesScopeStatus(ctx context.Context, cabinetID pgt
 // ---------------------------------------------------------------------------
 // price_schedule_entries
 // ---------------------------------------------------------------------------
-
 
 type CreatePriceScheduleEntryParams struct {
 	WorkspaceID      pgtype.UUID

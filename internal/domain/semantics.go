@@ -57,18 +57,18 @@ type KeywordRelation struct {
 
 // SEOAnalysis represents an SEO audit result for a product.
 type SEOAnalysis struct {
-	ID                uuid.UUID        `json:"id"`
-	WorkspaceID       uuid.UUID        `json:"workspace_id"`
-	ProductID         uuid.UUID        `json:"product_id"`
-	TitleScore        int              `json:"title_score"`
-	DescriptionScore  int              `json:"description_score"`
-	KeywordsScore     int              `json:"keywords_score"`
-	OverallScore      int              `json:"overall_score"`
-	TitleIssues       []SEOIssue       `json:"title_issues"`
-	DescriptionIssues []SEOIssue       `json:"description_issues"`
-	KeywordCoverage   map[string]bool  `json:"keyword_coverage"`
+	ID                uuid.UUID           `json:"id"`
+	WorkspaceID       uuid.UUID           `json:"workspace_id"`
+	ProductID         uuid.UUID           `json:"product_id"`
+	TitleScore        int                 `json:"title_score"`
+	DescriptionScore  int                 `json:"description_score"`
+	KeywordsScore     int                 `json:"keywords_score"`
+	OverallScore      int                 `json:"overall_score"`
+	TitleIssues       []SEOIssue          `json:"title_issues"`
+	DescriptionIssues []SEOIssue          `json:"description_issues"`
+	KeywordCoverage   map[string]bool     `json:"keyword_coverage"`
 	Recommendations   []SEORecommendation `json:"recommendations"`
-	AnalyzedAt        time.Time        `json:"analyzed_at"`
+	AnalyzedAt        time.Time           `json:"analyzed_at"`
 }
 
 // SEOIssue represents a specific SEO problem found.
@@ -76,12 +76,12 @@ type SEOIssue struct {
 	Type     string `json:"type"`     // missing_keyword, too_short, too_long, duplicate, low_relevance
 	Severity string `json:"severity"` // high, medium, low
 	Message  string `json:"message"`
-	Field    string `json:"field"`    // title, description, characteristics
+	Field    string `json:"field"` // title, description, characteristics
 }
 
 // SEORecommendation represents an actionable SEO suggestion.
 type SEORecommendation struct {
-	Type       string `json:"type"`       // add_keyword, improve_title, add_description, optimize_characteristics
+	Type       string `json:"type"` // add_keyword, improve_title, add_description, optimize_characteristics
 	Priority   int    `json:"priority"`
 	Message    string `json:"message"`
 	Suggestion string `json:"suggestion"` // specific text suggestion

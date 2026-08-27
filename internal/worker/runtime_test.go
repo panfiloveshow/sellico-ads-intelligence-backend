@@ -11,10 +11,10 @@ import (
 
 func TestNewRuntime_BuildsWithoutStarting(t *testing.T) {
 	cfg := &config.Config{
-		RedisURL:               "redis://localhost:6379/0",
-		SyncInterval:           "@every 1h",
-		RecommendationInterval: "@every 2h",
-		BidAutomationInterval:  "@every 15m",
+		RedisURL:                 "redis://localhost:6379/0",
+		SyncInterval:             "@every 1h",
+		RecommendationInterval:   "@every 2h",
+		BidAutomationInterval:    "@every 15m",
 		RepricerInterval:         "@every 1h",
 		RepricerPollInterval:     "@every 5m",
 		RepricerScheduleInterval: "@every 15m",

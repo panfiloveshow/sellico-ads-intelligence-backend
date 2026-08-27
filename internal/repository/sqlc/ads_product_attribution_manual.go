@@ -47,7 +47,6 @@ type UpsertCampaignProductParams struct {
 	BidRecommendations pgtype.Int8
 }
 
-
 const upsertCampaignProduct = `
 INSERT INTO campaign_products (campaign_id, product_id, workspace_id, seller_cabinet_id, wb_campaign_id, wb_product_id, subject_name, bid_search, bid_recommendations)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -195,7 +194,6 @@ func (q *Queries) ListCampaignProductsByCampaign(ctx context.Context, campaignID
 	}
 	return items, rows.Err()
 }
-
 
 type UpsertProductStatParams struct {
 	ProductID   pgtype.UUID

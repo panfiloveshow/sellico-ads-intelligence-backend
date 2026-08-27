@@ -6,7 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-
 type BeginSellerCabinetSyncParams struct {
 	SellerCabinetID pgtype.UUID
 	WorkspaceID     pgtype.UUID
