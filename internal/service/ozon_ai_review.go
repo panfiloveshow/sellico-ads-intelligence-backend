@@ -167,9 +167,27 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 		}
 	}
 
+	// Продажи, атрибутированные ИМЕННО этой кампании (отчёт Performance API,
+	// ozon_campaign_sku_stats) — ключ рекламный SKU, как и в кампании.
+	campaignSales := map[int64]salesAgg{}
+	if attrRows, attrErr := s.queries.AggregateOzonCampaignSkuStats(ctx, sqlcgen.AggregateOzonCampaignSkuStatsParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		OzonCampaignID:  campaignRow.OzonCampaignID,
+		DateFrom:        pgtype.Date{Time: time.Now().UTC().AddDate(0, 0, -14), Valid: true},
+	}); attrErr == nil {
+		for _, row := range attrRows {
+			campaignSales[row.Sku] = salesAgg{units: row.Orders, revenue: pgNumericToFloat(row.RevenueRub)}
+		}
+	}
+
 	insights := make([]domain.OzonProductInsight, 0, len(productRows))
 	for _, row := range productRows {
 		insight := domain.OzonProductInsight{SKU: row.Sku}
+		if agg, ok := campaignSales[row.Sku]; ok {
+			u, r := agg.units, roundRub(agg.revenue)
+			insight.CampaignOrders14d = &u
+			insight.CampaignRevenue14dRub = &r
+		}
 		if price, ok := bridge.priceBySKU[row.Sku]; ok {
 			priceRub := pgNumericToFloatPtr(price.PriceRub)
 			cost := pgNumericToFloatPtr(price.NetPriceRub)
@@ -210,7 +228,9 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 		if hasFunnel {
 			views := funnel.CardViews
 			insight.CardViews14d = &views
-			if views > 0 {
+			// Без Ozon Premium корзина/заказы приходят нулями при живых
+			// просмотрах — это «не измерено», а не конверсия 0%.
+			if views > 0 && (funnel.CartAdds > 0 || funnel.Orders > 0) {
 				toCart := roundRub(float64(funnel.CartAdds) / float64(views) * 100)
 				insight.ConvToCartPct = &toCart
 				toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)

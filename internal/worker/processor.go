@@ -110,6 +110,7 @@ type ozonSyncRunner interface {
 	SyncPostingsAllCabinets(ctx context.Context) error
 	SyncPhrasesAllCabinets(ctx context.Context) error
 	SyncCPOOrdersAllCabinets(ctx context.Context) error
+	SyncCampaignSkuStatsAllCabinets(ctx context.Context) error
 }
 
 // ozonStrategyRunner executes deterministic ozon_* strategies for a workspace.
@@ -659,6 +660,22 @@ func (p *Processor) HandleOzonCPOOrdersSync(ctx context.Context, _ *asynq.Task) 
 		return err
 	}
 	p.logger.Info().Msg("ozon cpo orders sync completed")
+	return nil
+}
+
+// HandleOzonCampaignSkuSync pulls the async per-campaign per-SKU statistics
+// report for every Ozon cabinet sequentially (shared one-report-at-a-time
+// account budget); one failed cabinet never fails the rest.
+func (p *Processor) HandleOzonCampaignSkuSync(ctx context.Context, _ *asynq.Task) error {
+	if p.ozonSync == nil {
+		p.logger.Debug().Msg("ozon sync not configured, skipping campaign sku stats sync")
+		return nil
+	}
+	if err := p.ozonSync.SyncCampaignSkuStatsAllCabinets(ctx); err != nil {
+		p.logger.Error().Err(err).Msg("ozon campaign sku stats sync finished with errors")
+		return err
+	}
+	p.logger.Info().Msg("ozon campaign sku stats sync completed")
 	return nil
 }
 

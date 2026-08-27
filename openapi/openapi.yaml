@@ -6181,6 +6181,8 @@ components:
         margin_pct: { type: number, nullable: true }
         orders_14d: { type: integer, nullable: true, description: "ВСЕ заказы SKU за 14д (не только с этой кампании)" }
         revenue_14d_rub: { type: number, nullable: true }
+        campaign_orders_14d: { type: integer, format: int64, nullable: true }
+        campaign_revenue_14d_rub: { type: number, nullable: true }
     AIImpactEnvelope:
       type: object
       properties:

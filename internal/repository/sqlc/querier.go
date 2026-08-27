@@ -23,6 +23,9 @@ type Querier interface {
 	// lookback window. last_date is the newest day that actually has data — the
 	// caller uses it to tell fresh numbers from a stalled ozon:sync_analytics.
 	AggregateOzonCabinetTotalSalesSince(ctx context.Context, arg AggregateOzonCabinetTotalSalesSinceParams) (AggregateOzonCabinetTotalSalesSinceRow, error)
+	// AggregateOzonCampaignSkuStats sums one campaign's per-SKU counters over a
+	// date window — «сколько заказов принесла именно эта кампания этому SKU».
+	AggregateOzonCampaignSkuStats(ctx context.Context, arg AggregateOzonCampaignSkuStatsParams) ([]AggregateOzonCampaignSkuStatsRow, error)
 	AggregateOzonCampaignStatsByCabinet(ctx context.Context, arg AggregateOzonCampaignStatsByCabinetParams) ([]AggregateOzonCampaignStatsByCabinetRow, error)
 	AggregateOzonCampaignStatsSince(ctx context.Context, arg AggregateOzonCampaignStatsSinceParams) (AggregateOzonCampaignStatsSinceRow, error)
 	// Window aggregate for the CPO overview, sourced from the promoted-orders
@@ -433,6 +436,9 @@ type Querier interface {
 	// Ozon module phase 1 queries (campaigns, products, stats, prices, sync state).
 	UpsertOzonCampaign(ctx context.Context, arg UpsertOzonCampaignParams) (OzonCampaign, error)
 	UpsertOzonCampaignProduct(ctx context.Context, arg UpsertOzonCampaignProductParams) error
+	// UpsertOzonCampaignSkuStat writes one day of one campaign's SKU counters
+	// from the Performance API campaign report (idempotent re-sync).
+	UpsertOzonCampaignSkuStat(ctx context.Context, arg UpsertOzonCampaignSkuStatParams) error
 	UpsertOzonCampaignStat(ctx context.Context, arg UpsertOzonCampaignStatParams) error
 	// CPO («Оплата за заказ») promoted orders mirrored from the async
 	// all_sku_promo orders report (migration 000059).

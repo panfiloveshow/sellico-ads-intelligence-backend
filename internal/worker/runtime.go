@@ -149,6 +149,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		mux.HandleFunc(TaskOzonPostingsSync, processor.HandleOzonPostingsSync)
 		mux.HandleFunc(TaskOzonPhrasesSync, processor.HandleOzonPhrasesSync)
 		mux.HandleFunc(TaskOzonCPOOrdersSync, processor.HandleOzonCPOOrdersSync)
+		mux.HandleFunc(TaskOzonCampaignSkuSync, processor.HandleOzonCampaignSkuSync)
 	}
 	if options.ozonStrategy != nil && options.ozonSync != nil {
 		processor = processor.WithOzonStrategy(options.ozonStrategy)
@@ -321,6 +322,13 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 			taskType string
 			queue    string
 		}{cpoOrdersInterval, TaskOzonCPOOrdersSync, QueueOzonSync})
+		// Per-campaign per-SKU statistics: same async report budget —
+		// sequential, low frequency (12h keeps the 14d window fresh enough).
+		sweepEntries = append(sweepEntries, struct {
+			cron     string
+			taskType string
+			queue    string
+		}{"@every 12h", TaskOzonCampaignSkuSync, QueueOzonSync})
 		if options.ozonStrategy != nil {
 			strategyInterval := cfg.OzonStrategyInterval
 			if strategyInterval == "" {
@@ -520,6 +528,12 @@ func (r *Runtime) Start() error {
 		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonCPOOrdersSync),
 			asynq.Queue(QueueOzonSync), asynq.ProcessIn(3*time.Minute), asynq.Unique(30*time.Minute)); err != nil {
 			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon cpo orders sync")
+		}
+		// Per-campaign SKU stats — same async-report family; the queue is
+		// sequential, so this waits its turn behind the reports above.
+		if _, err := r.client.Enqueue(NewSweepTask(TaskOzonCampaignSkuSync),
+			asynq.Queue(QueueOzonSync), asynq.ProcessIn(5*time.Minute), asynq.Unique(30*time.Minute)); err != nil {
+			r.logger.Warn().Err(err).Msg("failed to enqueue startup ozon campaign sku stats sync")
 		}
 	}
 	return nil

@@ -683,7 +683,9 @@ func applyCardFunnel(entry *aiPackEconomics, funnel seo.CardMetric) {
 	entry.CardImpressions = &impressions
 	entry.CardViews = &views
 	entry.CardCartAdds = &cart
-	if views > 0 {
+	// Без Ozon Premium корзина/заказы приходят нулями при живых просмотрах —
+	// «не измерено», а не конверсия 0%.
+	if views > 0 && (cart > 0 || funnel.Orders > 0) {
 		toCart := roundRub(float64(cart) / float64(views) * 100)
 		entry.ConvToCartPct = &toCart
 		toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)

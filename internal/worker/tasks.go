@@ -103,6 +103,11 @@ const (
 	// their own low-frequency schedule (OZON_CPO_ORDERS_INTERVAL).
 	TaskOzonCPOOrdersSync = "ozon:sync_cpo_orders"
 
+	// Ozon module: per-campaign per-SKU statistics (the generic campaign
+	// report). Same async statistics flow and one-report-at-a-time account
+	// budget — sequential across cabinets, low frequency.
+	TaskOzonCampaignSkuSync = "ozon:sync_campaign_sku_stats"
+
 	QueueWBSync          = "wb-sync"
 	QueueWBCampaigns     = "wb-import-campaigns"
 	QueueWBCampaignStats = "wb-import-campaign-stats"

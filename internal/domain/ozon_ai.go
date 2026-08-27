@@ -73,6 +73,10 @@ type OzonProductInsight struct {
 	// только пришедшие с конкретной кампании.
 	Orders14d     *int64   `json:"orders_14d,omitempty"`
 	Revenue14dRub *float64 `json:"revenue_14d_rub,omitempty"`
+	// Заказы/выручка, атрибутированные ИМЕННО этой кампании (отчёт
+	// Performance API → ozon_campaign_sku_stats), окно 14 дней.
+	CampaignOrders14d     *int64   `json:"campaign_orders_14d,omitempty"`
+	CampaignRevenue14dRub *float64 `json:"campaign_revenue_14d_rub,omitempty"`
 }
 
 // AIRun is one AI manager execution over a cabinet.

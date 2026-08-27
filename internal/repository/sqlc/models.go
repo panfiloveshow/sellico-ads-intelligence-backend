@@ -554,6 +554,19 @@ type OzonCampaignProduct struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type OzonCampaignSkuStat struct {
+	ID              pgtype.UUID    `json:"id"`
+	SellerCabinetID pgtype.UUID    `json:"seller_cabinet_id"`
+	OzonCampaignID  int64          `json:"ozon_campaign_id"`
+	Sku             int64          `json:"sku"`
+	Date            pgtype.Date    `json:"date"`
+	Views           int64          `json:"views"`
+	Clicks          int64          `json:"clicks"`
+	SpendRub        pgtype.Numeric `json:"spend_rub"`
+	Orders          int64          `json:"orders"`
+	RevenueRub      pgtype.Numeric `json:"revenue_rub"`
+}
+
 type OzonCampaignStat struct {
 	ID         pgtype.UUID    `json:"id"`
 	CampaignID pgtype.UUID    `json:"campaign_id"`
