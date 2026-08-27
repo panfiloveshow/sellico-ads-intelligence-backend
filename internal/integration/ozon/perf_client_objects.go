@@ -37,16 +37,14 @@ type CampaignObjectStatRow struct {
 }
 
 // GetCampaignObjectsReport fetches per-SKU campaign statistics over [from, to]
-// sequentially in chunks of at most 10 campaigns (the documented cap; one
-// report generation per account at a time).
+// ONE campaign per report, sequentially. Multi-campaign requests return a ZIP
+// whose entry names don't reliably carry the campaign id (rows parsed to
+// campaign 0 on prod) — a single-campaign report is a plain CSV and the id is
+// known from the request itself.
 func (c *PerfClient) GetCampaignObjectsReport(ctx context.Context, creds Credentials, campaignIDs []int64, from, to time.Time) ([]CampaignObjectStatRow, error) {
 	var out []CampaignObjectStatRow
-	for start := 0; start < len(campaignIDs); start += phrasesCampaignChunk {
-		end := start + phrasesCampaignChunk
-		if end > len(campaignIDs) {
-			end = len(campaignIDs)
-		}
-		rows, err := c.campaignObjectsChunk(ctx, creds, campaignIDs[start:end], from, to)
+	for _, id := range campaignIDs {
+		rows, err := c.campaignObjectsChunk(ctx, creds, []int64{id}, from, to)
 		if err != nil {
 			return out, err
 		}
@@ -103,6 +101,11 @@ func (c *PerfClient) campaignObjectsChunk(ctx context.Context, creds Credentials
 	if err != nil {
 		return nil, err
 	}
+	if len(rows) == 0 {
+		c.logger.Warn().Int64("campaign_id", fallbackCampaign).
+			Str("raw_prefix", rawSnippet(report)).
+			Msg("ozon campaign objects report parsed to 0 rows")
+	}
 	return rows, nil
 }
 
@@ -128,7 +131,11 @@ func parseCampaignObjectsReport(body []byte, fallbackCampaign int64, fallbackDat
 			if readErr != nil {
 				return out, fmt.Errorf("ozon perf: read zip entry %s: %w", file.Name, readErr)
 			}
-			rows, parseErr := parseCampaignObjectsCSV(bytes.TrimSpace(content), campaignIDFromFilename(file.Name), fallbackDate)
+			entryCampaign := campaignIDFromFilename(file.Name)
+			if entryCampaign == 0 && len(reader.File) == 1 {
+				entryCampaign = fallbackCampaign
+			}
+			rows, parseErr := parseCampaignObjectsCSV(bytes.TrimSpace(content), entryCampaign, fallbackDate)
 			if parseErr != nil {
 				return out, fmt.Errorf("ozon perf: parse zip entry %s: %w", file.Name, parseErr)
 			}
@@ -139,15 +146,29 @@ func parseCampaignObjectsReport(body []byte, fallbackCampaign int64, fallbackDat
 	return parseCampaignObjectsCSV(trimmed, fallbackCampaign, fallbackDate)
 }
 
-// campaignIDFromFilename extracts the campaign id from a ZIP entry name of
-// the form "12345678.csv" (the format the statistics report uses).
+// campaignIDFromFilename extracts the campaign id from a ZIP entry name —
+// the longest digit run in the basename ("12345678.csv", "report_12345678.csv").
 func campaignIDFromFilename(name string) int64 {
 	base := name
 	if idx := strings.LastIndex(base, "/"); idx >= 0 {
 		base = base[idx+1:]
 	}
-	base = strings.TrimSuffix(base, ".csv")
-	id, _ := strconv.ParseInt(strings.TrimSpace(base), 10, 64)
+	best := ""
+	current := ""
+	for _, r := range base {
+		if r >= '0' && r <= '9' {
+			current += string(r)
+			continue
+		}
+		if len(current) > len(best) {
+			best = current
+		}
+		current = ""
+	}
+	if len(current) > len(best) {
+		best = current
+	}
+	id, _ := strconv.ParseInt(best, 10, 64)
 	return id
 }
 

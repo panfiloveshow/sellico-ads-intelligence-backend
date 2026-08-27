@@ -332,6 +332,10 @@ type Querier interface {
 	// top-N cut happens in Go (sqlc's analyzer cannot resolve ROW_NUMBER()
 	// filters); the LIMIT is a defensive bound only.
 	ListOzonSearchQueriesBySkus(ctx context.Context, arg ListOzonSearchQueriesBySkusParams) ([]ListOzonSearchQueriesBySkusRow, error)
+	// ListOzonSkuCampaignRefs picks the campaigns for the objects report: running
+	// SKU (трафареты) campaigns only — Ozon returns 400 «generation of this type
+	// of report is forbidden» when SEARCH_PROMO ids are in the list.
+	ListOzonSkuCampaignRefs(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonSkuCampaignRefsRow, error)
 	ListPhraseStatsByWorkspace(ctx context.Context, arg ListPhraseStatsByWorkspaceParams) ([]PhraseStat, error)
 	ListPhrasesByCampaign(ctx context.Context, arg ListPhrasesByCampaignParams) ([]Phrase, error)
 	ListPhrasesByWorkspace(ctx context.Context, arg ListPhrasesByWorkspaceParams) ([]Phrase, error)

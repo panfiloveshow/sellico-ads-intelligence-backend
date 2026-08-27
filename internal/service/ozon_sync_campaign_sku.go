@@ -30,7 +30,7 @@ func (s *OzonSyncService) SyncCampaignSkuStats(ctx context.Context, cabinet doma
 		return fmt.Errorf("performance credentials missing: campaign sku stats sync disabled")
 	}
 
-	refs, err := s.queries.ListOzonPhraseCampaignRefs(ctx, uuidToPgtype(cabinet.ID))
+	refs, err := s.queries.ListOzonSkuCampaignRefs(ctx, uuidToPgtype(cabinet.ID))
 	if err != nil {
 		return fmt.Errorf("list sku campaigns: %w", err)
 	}

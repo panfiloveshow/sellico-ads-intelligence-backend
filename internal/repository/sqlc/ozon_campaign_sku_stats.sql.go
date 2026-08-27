@@ -70,6 +70,42 @@ func (q *Queries) AggregateOzonCampaignSkuStats(ctx context.Context, arg Aggrega
 	return items, nil
 }
 
+const listOzonSkuCampaignRefs = `-- name: ListOzonSkuCampaignRefs :many
+SELECT id, ozon_campaign_id FROM ozon_campaigns
+WHERE seller_cabinet_id = $1
+  AND state = 'CAMPAIGN_STATE_RUNNING'
+  AND adv_object_type = 'SKU'
+ORDER BY ozon_campaign_id
+`
+
+type ListOzonSkuCampaignRefsRow struct {
+	ID             pgtype.UUID `json:"id"`
+	OzonCampaignID int64       `json:"ozon_campaign_id"`
+}
+
+// ListOzonSkuCampaignRefs picks the campaigns for the objects report: running
+// SKU (трафареты) campaigns only — Ozon returns 400 «generation of this type
+// of report is forbidden» when SEARCH_PROMO ids are in the list.
+func (q *Queries) ListOzonSkuCampaignRefs(ctx context.Context, sellerCabinetID pgtype.UUID) ([]ListOzonSkuCampaignRefsRow, error) {
+	rows, err := q.db.Query(ctx, listOzonSkuCampaignRefs, sellerCabinetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOzonSkuCampaignRefsRow{}
+	for rows.Next() {
+		var i ListOzonSkuCampaignRefsRow
+		if err := rows.Scan(&i.ID, &i.OzonCampaignID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertOzonCampaignSkuStat = `-- name: UpsertOzonCampaignSkuStat :exec
 INSERT INTO ozon_campaign_sku_stats (
     seller_cabinet_id, ozon_campaign_id, sku, date,

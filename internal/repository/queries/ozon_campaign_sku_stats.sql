@@ -1,3 +1,13 @@
+-- ListOzonSkuCampaignRefs picks the campaigns for the objects report: running
+-- SKU (трафареты) campaigns only — Ozon returns 400 «generation of this type
+-- of report is forbidden» when SEARCH_PROMO ids are in the list.
+-- name: ListOzonSkuCampaignRefs :many
+SELECT id, ozon_campaign_id FROM ozon_campaigns
+WHERE seller_cabinet_id = $1
+  AND state = 'CAMPAIGN_STATE_RUNNING'
+  AND adv_object_type = 'SKU'
+ORDER BY ozon_campaign_id;
+
 -- UpsertOzonCampaignSkuStat writes one day of one campaign's SKU counters
 -- from the Performance API campaign report (idempotent re-sync).
 -- name: UpsertOzonCampaignSkuStat :exec
