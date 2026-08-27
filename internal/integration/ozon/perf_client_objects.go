@@ -117,6 +117,22 @@ func (c *PerfClient) campaignObjectsChunk(ctx context.Context, creds Credentials
 			Str("raw_prefix", rawSnippet(report)).
 			Msg("ozon campaign objects report parsed to 0 rows")
 	}
+	// Диагностика колонок: клики есть, заказы по всем строкам нулевые —
+	// либо факт, либо колонка называется иначе; заголовок решает спор.
+	var clicks, orders int64
+	for _, row := range rows {
+		clicks += row.Clicks
+		orders += row.Orders
+	}
+	if clicks > 100 && orders == 0 {
+		head := report
+		if len(head) > 1200 {
+			head = head[:1200] // кириллический заголовок не влезает в rawSnippet(300)
+		}
+		c.logger.Warn().Int64("campaign_id", fallbackCampaign).
+			Str("report_head", string(head)).
+			Msg("ozon campaign objects report: clicks without orders — check column mapping")
+	}
 	return rows, nil
 }
 
