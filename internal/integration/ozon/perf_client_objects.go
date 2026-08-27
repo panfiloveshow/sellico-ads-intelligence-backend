@@ -260,8 +260,11 @@ func parseCampaignObjectsCSV(body []byte, campaignID int64, fallbackDate time.Ti
 	viewsIdx := pickIdx([]string{"показы", "views"}, []string{"показы"})
 	clicksIdx := pickIdx([]string{"клики", "clicks"}, []string{"клики"})
 	spendIdx := pickIdx(nil, []string{"расход"})
-	ordersIdx := pickIdx([]string{"заказы", "orders"}, []string{"заказы"})
-	revenueIdx := pickIdx(nil, []string{"выручка"})
+	// Трафареты называют колонки «Продано товаров» / «Продажи в продвижении, ₽»
+	// (не «Заказы»/«Выручка»); exact-ключи первыми, чтобы не зацепить
+	// «... модели» через contains.
+	ordersIdx := pickIdx([]string{"продано товаров", "заказы", "orders"}, []string{"заказы"})
+	revenueIdx := pickIdx([]string{"продажи в продвижении, ₽", "выручка, ₽"}, []string{"выручка"})
 
 	cell := func(row []string, idx int) string {
 		if idx < 0 || idx >= len(row) {
