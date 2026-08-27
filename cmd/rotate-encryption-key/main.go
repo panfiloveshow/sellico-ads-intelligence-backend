@@ -6,19 +6,19 @@
 // Workflow:
 //
 //  1. Generate a new 32-byte key (hex):
-//       openssl rand -hex 32
+//     openssl rand -hex 32
 //
 //  2. Add to the api/worker .env so the new key is available for reads:
-//       ENCRYPTION_KEY=<original 32-byte key>      # legacy single-key var
-//       ENCRYPTION_KEYS_V1=<original key, hex>     # required: keyring version 1
-//       ENCRYPTION_KEYS_V2=<new key, hex>          # required: keyring version 2
+//     ENCRYPTION_KEY=<original 32-byte key>      # legacy single-key var
+//     ENCRYPTION_KEYS_V1=<original key, hex>     # required: keyring version 1
+//     ENCRYPTION_KEYS_V2=<new key, hex>          # required: keyring version 2
 //
 //     Restart api and worker. They now decrypt either, encrypt with v2.
 //
 //  3. Run this command (one-shot, idempotent):
-//       DATABASE_URL=... \
-//       ENCRYPTION_KEYS_V1=... ENCRYPTION_KEYS_V2=... \
-//       go run ./cmd/rotate-encryption-key --apply
+//     DATABASE_URL=... \
+//     ENCRYPTION_KEYS_V1=... ENCRYPTION_KEYS_V2=... \
+//     go run ./cmd/rotate-encryption-key --apply
 //
 //     Default is dry-run; --apply commits writes. --batch-size controls
 //     transaction granularity (default 50).
@@ -100,10 +100,10 @@ func rotateSellerCabinets(ctx context.Context, pool *pgxpool.Pool, kr *crypto.Ke
 	}
 
 	type pending struct {
-		id       string
-		oldCT    string
-		newCT    string
-		hadVer   int
+		id     string
+		oldCT  string
+		newCT  string
+		hadVer int
 	}
 	var batch []pending
 	flush := func() error {

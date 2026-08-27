@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/collector"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/seo"
@@ -38,6 +39,19 @@ type aiChatClient interface {
 type aiSEOFunnelClient interface {
 	Enabled() bool
 	GetOzonCardMetrics(ctx context.Context, clientID string, days int) ([]seo.CardMetric, error)
+}
+
+// aiReviewsClient is the collector-exports surface (shop + per-product
+// review aggregates). *collector.Client satisfies it in production.
+type aiReviewsClient interface {
+	Enabled() bool
+	GetReviewSummary(ctx context.Context, integrationID string) (*collector.ReviewSummary, error)
+}
+
+// WithReviews attaches the collector review-aggregate client (both mains).
+func (s *OzonAIManagerService) WithReviews(client aiReviewsClient) *OzonAIManagerService {
+	s.reviews = client
+	return s
 }
 
 // WithSEOFunnel attaches the SEO card-funnel client (both mains).
@@ -73,6 +87,9 @@ type OzonAIManagerService struct {
 	// (показы поиска → просмотры карточки → корзина → заказы) the SEO side
 	// already syncs from /v1/analytics/data. Nil/disabled = section absent.
 	seoFunnel aiSEOFunnelClient
+	// reviews is the optional collector exports client: shop rating +
+	// per-product review aggregates. Nil/disabled = section absent.
+	reviews aiReviewsClient
 	// contentModel, when set, serves text-only generations (weekly recaps)
 	// instead of the primary reasoning model — the task is simpler and the
 	// primary's free-pool quota is better spent on decisions.
@@ -926,6 +943,7 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 - Поле max_total_drr_source говорит, откуда взят потолок: "explicit" — задан вручную, "unit_economics" — рассчитан из маржи кабинета с поправкой на выкуп, "none" — потолка нет. Если в rules задан max_total_drr_pct и total_drr_pct уже достиг его, любое повышение ставки или бюджета будет отклонено. В этом случае предлагай только снижения, паузы и CPO. Когда total_drr_status не равен "ok", показатель не измерен — ориентируйся на ДРР кампаний.
 - Цель по ДРР %.1f%% остаётся главной, но учитывай маржу SKU (поле margin_pct в экономике, источник себестоимости — cost_source): у товаров с высокой маржой допустим более высокий ДРР, у низкомаржинальных — жёстче. Не масштабируй SKU с отрицательной или неизвестной маржой (margin_pct отсутствует).
 - CPO («Продвижение в поиске») списывает деньги только за заказ — безрисково по ДРР: включай смело для SKU с положительной маржой.
+- Отзывы: в rules есть shop_rating и shop_reviews_count (рейтинг магазина), в экономике у части SKU — rating и reviews_count. Товар с рейтингом ниже ~4.3 конвертирует заметно хуже: не масштабируй его рекламу, пока рейтинг не починен, — предложи снижение/паузу и упомяни рейтинг в summary. Отсутствие полей — «не измерено».
 - Воронка карточки: в экономике могут быть card_impressions_14d (показы в поиске), card_views_14d (просмотры карточки), conv_to_cart_pct и conv_to_order_pct. Различай две болезни: высокий ДРР при здоровой конверсии карточки — проблема ставок, чини ставками; высокий ДРР при слабой конверсии (например, conv_to_cart_pct заметно ниже других SKU кабинета) — проблема карточки или цены, ставками НЕ лечится: не поднимай ставку, предложи снижение/паузу и напиши в summary, что нужно чинить карточку. Отсутствие полей — «не измерено».
 - Склад: в экономике у SKU есть stock (остаток, шт.) и days_of_cover (на сколько дней продаж хватит запаса). Не масштабируй SKU с остатком ниже min_stock_for_increase (автоматика отклонит) и не разгоняй товары с days_of_cover меньше ~14 — товар кончится раньше, чем окупится разгон; при низком покрытии предложи снижение или паузу и упомяни риск в summary. Отсутствие stock — «не измерено», а не ноль.
 - Кампании с ДРР сильно выше цели — снижай ставки или ставь на паузу; с ДРР ниже цели и хорошей маржой — масштабируй.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/collector"
 	emailclient "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/email"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
@@ -142,7 +143,8 @@ func main() {
 		ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonActionsService, llmClient, []byte(cfg.EncryptionKey), deps.Logger).
 			WithNotifier(service.NewOzonAINotifier(deps.Queries, sellicoClient, sellicoTokenManager, deps.Logger)).
 			WithContentModel(cfg.LLMContentModel).
-			WithSEOFunnel(seo.NewClient(cfg.SEOAPIBaseURL, cfg.SEOAPIToken, 0))
+			WithSEOFunnel(seo.NewClient(cfg.SEOAPIBaseURL, cfg.SEOAPIToken, 0)).
+			WithReviews(collector.NewClient(cfg.CollectorAPIBaseURL, cfg.CollectorAPIToken, 0))
 		ozonRuntimeOpts = append(ozonRuntimeOpts, worker.WithOzonAIManager(ozonAIManager))
 		deps.Logger.Info().Str("model", cfg.LLMModel).Msg("ozon ai autopilot enabled")
 	} else {

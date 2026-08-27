@@ -15,6 +15,7 @@ import (
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/app"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/collector"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/llm"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/sellico"
@@ -167,7 +168,8 @@ func main() {
 		MaxTokens:      cfg.LLMMaxTokens,
 	}, deps.Logger), []byte(cfg.EncryptionKey), deps.Logger).
 		WithContentModel(cfg.LLMContentModel).
-		WithSEOFunnel(seo.NewClient(cfg.SEOAPIBaseURL, cfg.SEOAPIToken, 0))
+		WithSEOFunnel(seo.NewClient(cfg.SEOAPIBaseURL, cfg.SEOAPIToken, 0)).
+		WithReviews(collector.NewClient(cfg.CollectorAPIBaseURL, cfg.CollectorAPIToken, 0))
 	eventBroker := service.NewEventBroker()
 	workspaceSettingsService := service.NewWorkspaceSettingsService(deps.Queries)
 	extensionService := service.NewExtensionService(deps.Queries, cfg.AppVersion)

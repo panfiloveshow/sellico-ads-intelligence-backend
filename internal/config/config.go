@@ -115,6 +115,10 @@ type Config struct {
 	SEOAPIBaseURL string // env: SEO_API_BASE_URL, default: "https://seo.sellico.ru/api"
 	SEOAPIToken   string // env: SEO_API_TOKEN (= ACCOUNT_SYNC_TOKEN СЕО-сервиса)
 
+	// Collector internal exports (review aggregates for the AI context).
+	CollectorAPIBaseURL string // env: COLLECTOR_API_BASE_URL, default: "https://sellico.ru/collector-api"
+	CollectorAPIToken   string // env: COLLECTOR_API_TOKEN (= COLLECTOR_SERVICE_TOKEN коллектора)
+
 	// CORS
 	CORSAllowOrigins []string // env: CORS_ALLOW_ORIGINS, comma-separated
 
@@ -197,6 +201,8 @@ func Load() *Config {
 		SellicoServicePassword:             getEnvOrDefault("SELLICO_PASSWORD", ""),
 		SEOAPIBaseURL:                      getEnvOrDefault("SEO_API_BASE_URL", "https://seo.sellico.ru/api"),
 		SEOAPIToken:                        getEnvOrDefault("SEO_API_TOKEN", ""),
+		CollectorAPIBaseURL:                getEnvOrDefault("COLLECTOR_API_BASE_URL", "https://sellico.ru/collector-api"),
+		CollectorAPIToken:                  getEnvOrDefault("COLLECTOR_API_TOKEN", ""),
 		SyncInterval:                       getEnvOrDefault("SYNC_INTERVAL", "@every 1h"),
 		RecommendationInterval:             getEnvOrDefault("RECOMMENDATION_INTERVAL", "@every 2h"),
 		BidAutomationInterval:              getEnvOrDefault("BID_AUTOMATION_INTERVAL", "@every 15m"),

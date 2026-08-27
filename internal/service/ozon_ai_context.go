@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/collector"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/seo"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
@@ -124,6 +125,12 @@ type aiPackEconomics struct {
 	ConvToCartPct *float64 `json:"conv_to_cart_pct,omitempty"`
 	// ConvToOrderPct = заказы карточки / просмотры карточки × 100.
 	ConvToOrderPct *float64 `json:"conv_to_order_pct,omitempty"`
+
+	// Rating/ReviewsCount — средняя оценка покупателей и число оценок из
+	// коллектора отзывов, сматченные по названию карточки (жёсткого ключа к
+	// SKU у отзывов нет). Отсутствие полей — «не измерено».
+	Rating       *float64 `json:"rating,omitempty"`
+	ReviewsCount *int64   `json:"reviews_count,omitempty"`
 }
 
 // aiPackDecisionOutcome is one past applied decision + its measured result, fed
@@ -173,6 +180,11 @@ type aiPackRules struct {
 	// turnover, or buy orders the shop already had. Advisory — no guardrail
 	// enforces it, but it is the strongest evidence in the pack.
 	Incremental incrementalDRR `json:"incremental_drr"`
+
+	// ShopRating/ShopReviewsCount — средняя оценка магазина по всем отзывам
+	// коллектора. Отсутствие — «не измерено».
+	ShopRating       *float64 `json:"shop_rating,omitempty"`
+	ShopReviewsCount *int64   `json:"shop_reviews_count,omitempty"`
 }
 
 // aiPackSearchQuery is one aggregated search query row of the context pack
@@ -320,6 +332,9 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	// Воронка карточек из СЕО-сервиса (best-effort, ключи — sku и offer_id).
 	funnelBySKU, funnelByOffer := s.loadCardFunnel(ctx, cabinetID)
 
+	// Отзывы из коллектора: рейтинг магазина + рейтинги товаров по названию.
+	shopRating, ratingByName := s.loadReviewRatings(ctx, cabinetID)
+
 	// Скорость продаж за 28 дней — знаменатель для days_of_cover.
 	unitsPerDay := map[int64]float64{}
 	if velocityRows, velErr := s.queries.OzonSalesVelocityByCabinet(ctx, sqlcgen.OzonSalesVelocityByCabinetParams{
@@ -376,6 +391,9 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			CooldownMinutes:     params.CooldownMinutes,
 			MaxChangesPerDay:    params.MaxChangesPerDay,
 			MinStockForIncrease: params.MinStockForIncrease,
+
+			ShopRating:       shopRatingValue(shopRating),
+			ShopReviewsCount: shopRatingCount(shopRating),
 
 			TotalDRRPct:       data.totalDRR.Value,
 			TotalDRRStatus:    data.totalDRR.Status,
@@ -552,6 +570,13 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			}
 			if hasFunnel {
 				applyCardFunnel(&entry, funnel)
+				// Рейтинг товара: у отзывов нет ключа SKU, матчим по названию
+				// карточки, которое пришло из СЕО-моста.
+				if rating, ok := ratingByName[funnel.Name]; ok {
+					r, cnt := rating.Rating, rating.ReviewsCount
+					entry.Rating = &r
+					entry.ReviewsCount = &cnt
+				}
 			}
 			// Per-SKU margin: the model reasons on BOTH margin and ДРР (system
 			// prompt). Uses the conservative max(FBO, FBS) commission and the
@@ -635,6 +660,47 @@ func applyCardFunnel(entry *aiPackEconomics, funnel seo.CardMetric) {
 		toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)
 		entry.ConvToOrderPct = &toOrder
 	}
+}
+
+// loadReviewRatings pulls the collector's review aggregate for the cabinet's
+// CRM integration. Best-effort: any failure returns (nil, empty map).
+func (s *OzonAIManagerService) loadReviewRatings(ctx context.Context, cabinetID uuid.UUID) (*collector.ShopRating, map[string]collector.ProductRating) {
+	empty := map[string]collector.ProductRating{}
+	if s.reviews == nil || !s.reviews.Enabled() {
+		return nil, empty
+	}
+	row, err := s.queries.GetSellerCabinetByID(ctx, uuidToPgtype(cabinetID))
+	if err != nil || !row.ExternalIntegrationID.Valid || row.ExternalIntegrationID.String == "" {
+		return nil, empty
+	}
+	summary, err := s.reviews.GetReviewSummary(ctx, row.ExternalIntegrationID.String)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to load review ratings from collector")
+		return nil, empty
+	}
+	byName := make(map[string]collector.ProductRating, len(summary.Products))
+	for _, product := range summary.Products {
+		if product.Name != "" {
+			byName[product.Name] = product
+		}
+	}
+	return summary.Shop, byName
+}
+
+func shopRatingValue(shop *collector.ShopRating) *float64 {
+	if shop == nil {
+		return nil
+	}
+	v := shop.Rating
+	return &v
+}
+
+func shopRatingCount(shop *collector.ShopRating) *int64 {
+	if shop == nil {
+		return nil
+	}
+	v := shop.ReviewsCount
+	return &v
 }
 
 // loadCabinetStocks mirrors ozon_product_stocks into a SKU→present map.
