@@ -567,11 +567,17 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			if hasStock {
 				v := stock
 				entry.Stock = &v
-				if salesSKU, ok := bridge.salesSKUBySKU[sku]; ok {
-					if perDay := unitsPerDay[salesSKU]; perDay > 0 {
-						cover := roundRub(float64(stock) / perDay)
-						entry.DaysOfCover = &cover
+				// Продажи (analytics/data) идут под РЕКЛАМНЫМ SKU — прямой
+				// ключ первым, продажный из моста — запасным.
+				perDay := unitsPerDay[sku]
+				if perDay == 0 {
+					if salesSKU, ok := bridge.salesSKUBySKU[sku]; ok {
+						perDay = unitsPerDay[salesSKU]
 					}
+				}
+				if perDay > 0 {
+					cover := roundRub(float64(stock) / perDay)
+					entry.DaysOfCover = &cover
 				}
 			}
 			// Воронка карточки: рекламный SKU → артикул → продажный SKU —
@@ -725,7 +731,6 @@ func shopRatingCount(shop *collector.ShopRating) *int64 {
 	v := shop.ReviewsCount
 	return &v
 }
-
 
 // marshalAIContextPack serializes the pack under maxBytes, degrading detail
 // step by step: daily rows go first, then campaign and product depth, then

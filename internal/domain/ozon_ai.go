@@ -69,6 +69,10 @@ type OzonProductInsight struct {
 	ConvToCartPct  *float64 `json:"conv_to_cart_pct,omitempty"`
 	ConvToOrderPct *float64 `json:"conv_to_order_pct,omitempty"`
 	MarginPct      *float64 `json:"margin_pct,omitempty"`
+	// Продажи товара за 14 дней — ВСЕ заказы SKU (ozon_sales_daily), не
+	// только пришедшие с конкретной кампании.
+	Orders14d     *int64   `json:"orders_14d,omitempty"`
+	Revenue14dRub *float64 `json:"revenue_14d_rub,omitempty"`
 }
 
 // AIRun is one AI manager execution over a cabinet.

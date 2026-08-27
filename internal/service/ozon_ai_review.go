@@ -152,6 +152,21 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 	funnelBySKU, _ := s.loadCardFunnel(ctx, cabinetID)
 	_, ratingByName := s.loadReviewRatings(ctx, cabinetID)
 
+	// Продажи за 14 дней (все заказы SKU — ключ прямой, рекламный).
+	type salesAgg struct {
+		units   int64
+		revenue float64
+	}
+	sales14 := map[int64]salesAgg{}
+	if salesRows, salesErr := s.queries.OzonSalesVelocityByCabinet(ctx, sqlcgen.OzonSalesVelocityByCabinetParams{
+		SellerCabinetID: uuidToPgtype(cabinetID),
+		Date:            pgtype.Date{Time: time.Now().UTC().AddDate(0, 0, -14), Valid: true},
+	}); salesErr == nil {
+		for _, row := range salesRows {
+			sales14[row.Sku] = salesAgg{units: row.Units, revenue: pgNumericToFloat(row.RevenueRub)}
+		}
+	}
+
 	insights := make([]domain.OzonProductInsight, 0, len(productRows))
 	for _, row := range productRows {
 		insight := domain.OzonProductInsight{SKU: row.Sku}
@@ -169,11 +184,16 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 		if stock, ok := bridge.stockBySKU[row.Sku]; ok {
 			v := stock
 			insight.Stock = &v
-			if salesSKU, has := bridge.salesSKUBySKU[row.Sku]; has {
-				if perDay := unitsPerDay[salesSKU]; perDay > 0 {
-					cover := roundRub(float64(stock) / perDay)
-					insight.DaysOfCover = &cover
+			// Продажи идут под рекламным SKU — прямой ключ первым.
+			perDay := unitsPerDay[row.Sku]
+			if perDay == 0 {
+				if salesSKU, has := bridge.salesSKUBySKU[row.Sku]; has {
+					perDay = unitsPerDay[salesSKU]
 				}
+			}
+			if perDay > 0 {
+				cover := roundRub(float64(stock) / perDay)
+				insight.DaysOfCover = &cover
 			}
 		}
 		funnel, hasFunnel := funnelBySKU[strconv.FormatInt(row.Sku, 10)]
@@ -195,6 +215,18 @@ func (s *OzonAIManagerService) ProductInsights(ctx context.Context, workspaceID,
 				insight.ConvToCartPct = &toCart
 				toOrder := roundRub(float64(funnel.Orders) / float64(views) * 100)
 				insight.ConvToOrderPct = &toOrder
+			}
+		}
+		// Продажи: прямой ключ, затем продажный SKU из моста.
+		if agg, ok := sales14[row.Sku]; ok {
+			u, r := agg.units, roundRub(agg.revenue)
+			insight.Orders14d = &u
+			insight.Revenue14dRub = &r
+		} else if salesSKU, has := bridge.salesSKUBySKU[row.Sku]; has {
+			if agg, ok := sales14[salesSKU]; ok {
+				u, r := agg.units, roundRub(agg.revenue)
+				insight.Orders14d = &u
+				insight.Revenue14dRub = &r
 			}
 		}
 		ratingName := bridge.nameBySKU[row.Sku]

@@ -6179,6 +6179,8 @@ components:
         conv_to_cart_pct: { type: number, nullable: true }
         conv_to_order_pct: { type: number, nullable: true }
         margin_pct: { type: number, nullable: true }
+        orders_14d: { type: integer, nullable: true, description: "ВСЕ заказы SKU за 14д (не только с этой кампании)" }
+        revenue_14d_rub: { type: number, nullable: true }
     AIImpactEnvelope:
       type: object
       properties:
