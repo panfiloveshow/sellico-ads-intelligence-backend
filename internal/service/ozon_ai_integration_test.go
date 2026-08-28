@@ -809,6 +809,41 @@ func TestOzonAI_ContextFeedbackAndMargin(t *testing.T) {
 	assert.InDelta(t, 43.0, *econ.MarginPct, 0.1)
 }
 
+func TestOzonAI_ContextBoundCampaignScopeExcludesOtherCampaignsAndCabinetCPO(t *testing.T) {
+	fx, cleanup := newOzonFixture(t, "ozon-ai-campaign-scope")
+	defer cleanup()
+	ctx := context.Background()
+	mgr := newAIManager(fx.db, &fakeLLM{})
+
+	selected := seedOzonCampaign(t, fx.db, fx.cabinetID, 9401, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	other := seedOzonCampaign(t, fx.db, fx.cabinetID, 9402, "CAMPAIGN_STATE_RUNNING", nil, nil)
+	seedOzonCampaignProduct(t, fx.db, selected.ID, 501, 20)
+	seedOzonCampaignProduct(t, fx.db, other.ID, 502, 20)
+	_, err := fx.db.Pool.Exec(ctx, `
+		INSERT INTO ozon_cpo_products (seller_cabinet_id, sku, enabled, bid)
+		VALUES ($1, 777, true, 5)`, fx.cabinetID)
+	require.NoError(t, err)
+
+	strategyID := seedAIStrategy(t, fx, 1)
+	_, err = fx.db.Pool.Exec(ctx, `
+		INSERT INTO strategy_bindings (strategy_id, ozon_campaign_id)
+		VALUES ($1, $2)`, strategyID, uuidFromPgtype(selected.ID))
+	require.NoError(t, err)
+	strategyRow, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
+	require.NoError(t, err)
+	strategy := strategyFromSqlc(strategyRow)
+
+	pack, data, err := mgr.buildAIContext(ctx, fx.workspaceID, fx.cabinetID, strategy, strategy.Params.Merged())
+	require.NoError(t, err)
+	require.True(t, pack.BoundCampaigns)
+	require.Len(t, pack.Campaigns, 1)
+	assert.EqualValues(t, 9401, pack.Campaigns[0].OzonCampaignID)
+	assert.Empty(t, pack.CPO, "cabinet-wide CPO must not leak into a campaign-scoped run")
+	assert.Empty(t, data.cpoBySKU)
+	assert.Contains(t, data.campaignsByOzonID, int64(9401))
+	assert.NotContains(t, data.campaignsByOzonID, int64(9402))
+}
+
 // TestOzonAI_ContextMarginSellicoFallback verifies the cost fallback path:
 // no Ozon net_price, cost pulled from the Sellico unit-economics mirror.
 func TestOzonAI_ContextMarginSellicoFallback(t *testing.T) {

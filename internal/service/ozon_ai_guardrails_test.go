@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -76,6 +78,24 @@ func TestOzonAICPOBidGuard(t *testing.T) {
 	assert.Empty(t, ozonAICPOBidGuardReason(60, 50))
 	// Unknown minimum (0) does not block — CPO is riskless by design.
 	assert.Empty(t, ozonAICPOBidGuardReason(60, 0))
+}
+
+func TestOzonAICPOProposalRequiresProductInCurrentScope(t *testing.T) {
+	manager := &OzonAIManagerService{}
+	value := 25.0
+	reason := manager.evaluateProposal(
+		context.Background(),
+		uuid.New(),
+		aiTestParams(),
+		aiProposal{
+			ActionType: domain.AIActionCPOBid,
+			Target:     domain.AIDecisionTarget{SKU: 777},
+			NewValue:   &value,
+		},
+		&aiCabinetData{cpoBySKU: map[int64]domain.OzonCPOProduct{}},
+	)
+
+	assert.Contains(t, reason, "current scope")
 }
 
 func TestOzonAICampaignStateGuard(t *testing.T) {

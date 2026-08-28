@@ -485,18 +485,22 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		pack.Campaigns = append(pack.Campaigns, entry)
 	}
 
-	// CPO (search promo) state: riskless spend, the model may scale it freely.
-	cpoRows, err := s.queries.ListOzonCpoProducts(ctx, sqlcgen.ListOzonCpoProductsParams{
-		SellerCabinetID: uuidToPgtype(cabinetID), Limit: aiPackCPOLimit, Offset: 0,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("list cpo products: %w", err)
-	}
-	for _, row := range cpoRows {
-		bid := pgNumericToFloatPtr(row.Bid)
-		pack.CPO = append(pack.CPO, aiPackCPO{SKU: row.Sku, Enabled: row.Enabled, BidRub: bid})
-		data.cpoBySKU[row.Sku] = domain.OzonCPOProduct{SKU: row.Sku, Enabled: row.Enabled, Bid: bid}
-		skuSet[row.Sku] = struct{}{}
+	// CPO («Оплата за заказ») живёт на уровне всего кабинета, а не отдельной
+	// CPC-кампании. В campaign-scoped режиме его нельзя даже показывать модели:
+	// иначе выбранные кампании стали бы лишь декоративным фильтром.
+	if !bound {
+		cpoRows, cpoErr := s.queries.ListOzonCpoProducts(ctx, sqlcgen.ListOzonCpoProductsParams{
+			SellerCabinetID: uuidToPgtype(cabinetID), Limit: aiPackCPOLimit, Offset: 0,
+		})
+		if cpoErr != nil {
+			return nil, nil, fmt.Errorf("list cpo products: %w", cpoErr)
+		}
+		for _, row := range cpoRows {
+			bid := pgNumericToFloatPtr(row.Bid)
+			pack.CPO = append(pack.CPO, aiPackCPO{SKU: row.Sku, Enabled: row.Enabled, BidRub: bid})
+			data.cpoBySKU[row.Sku] = domain.OzonCPOProduct{SKU: row.Sku, Enabled: row.Enabled, Bid: bid}
+			skuSet[row.Sku] = struct{}{}
+		}
 	}
 
 	// Unit economics straight from ozon_product_prices (margin = price −

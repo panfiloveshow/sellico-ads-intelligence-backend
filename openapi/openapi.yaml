@@ -2731,6 +2731,7 @@ paths:
                   type: string
                   format: uuid
                   nullable: true
+                  description: For Ozon strategies this is the local UUID from ozon_campaigns.id.
                 product_id:
                   type: string
                   format: uuid
@@ -6798,6 +6799,7 @@ components:
         strategy_id: { type: string, format: uuid }
         campaign_id: { type: string, format: uuid, nullable: true }
         product_id: { type: string, format: uuid, nullable: true }
+        ozon_campaign_id: { type: string, format: uuid, nullable: true, description: Local UUID from ozon_campaigns.id for Ozon strategy bindings. }
         created_at: { type: string, format: date-time }
 
     BidDecisionObservation:

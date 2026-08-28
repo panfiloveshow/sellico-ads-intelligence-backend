@@ -640,6 +640,9 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		if proposal.Target.SKU <= 0 {
 			return "cpo_bid requires target.sku"
 		}
+		if _, ok := data.cpoBySKU[proposal.Target.SKU]; !ok {
+			return fmt.Sprintf("cpo sku %d not found in current scope", proposal.Target.SKU)
+		}
 		if proposal.NewValue == nil {
 			return "cpo_bid requires new_value"
 		}
@@ -650,6 +653,9 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 	case domain.AIActionCPOEnable, domain.AIActionCPODisable:
 		if proposal.Target.SKU <= 0 {
 			return proposal.ActionType + " requires target.sku"
+		}
+		if _, ok := data.cpoBySKU[proposal.Target.SKU]; !ok {
+			return fmt.Sprintf("cpo sku %d not found in current scope", proposal.Target.SKU)
 		}
 		// Включать «Оплату за заказ» товару без остатка бессмысленно: заказов
 		// не будет, а карточка получит показы без покупок. Выключение — всегда.
