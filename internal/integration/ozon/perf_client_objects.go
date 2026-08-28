@@ -154,9 +154,12 @@ func parseCampaignObjectsReport(body []byte, fallbackCampaign int64, fallbackDat
 				return out, fmt.Errorf("ozon perf: open zip entry %s: %w", file.Name, openErr)
 			}
 			content, readErr := io.ReadAll(fh)
-			fh.Close()
+			closeErr := fh.Close()
 			if readErr != nil {
 				return out, fmt.Errorf("ozon perf: read zip entry %s: %w", file.Name, readErr)
+			}
+			if closeErr != nil {
+				return out, fmt.Errorf("ozon perf: close zip entry %s: %w", file.Name, closeErr)
 			}
 			entryCampaign := campaignIDFromFilename(file.Name)
 			if entryCampaign == 0 && len(reader.File) == 1 {
