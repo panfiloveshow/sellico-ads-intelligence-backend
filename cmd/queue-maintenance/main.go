@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -49,7 +50,12 @@ var recurringTaskTypes = map[string]struct{}{
 
 func main() {
 	apply := flag.Bool("apply", false, "delete matching tasks; without this flag the command is read-only")
+	olderThan := flag.Duration("older-than", time.Hour, "only match retries whose last failure is older than this duration")
 	flag.Parse()
+	if *olderThan <= 0 {
+		fatalf("--older-than must be positive")
+	}
+	failedBefore := time.Now().Add(-*olderThan)
 
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
@@ -77,7 +83,7 @@ func main() {
 		}
 		byType := make(map[string]int)
 		for _, task := range tasks {
-			if !isLegacyRecurringRetry(task) {
+			if !isLegacyRecurringRetry(task, failedBefore) {
 				continue
 			}
 			totalMatched++
@@ -96,11 +102,14 @@ func main() {
 	if *apply {
 		mode = "apply"
 	}
-	fmt.Printf("mode=%s matched=%d deleted=%d\n", mode, totalMatched, totalDeleted)
+	fmt.Printf("mode=%s older_than=%s matched=%d deleted=%d\n", mode, olderThan.String(), totalMatched, totalDeleted)
 }
 
-func isLegacyRecurringRetry(task *asynq.TaskInfo) bool {
+func isLegacyRecurringRetry(task *asynq.TaskInfo, failedBefore time.Time) bool {
 	if task == nil || len(task.Payload) != 0 || task.MaxRetry <= 0 || task.Retried <= 0 || task.LastFailedAt.IsZero() {
+		return false
+	}
+	if !task.LastFailedAt.Before(failedBefore) {
 		return false
 	}
 	_, ok := recurringTaskTypes[task.Type]
