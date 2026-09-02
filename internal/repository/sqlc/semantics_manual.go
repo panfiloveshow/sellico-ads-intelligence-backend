@@ -142,7 +142,28 @@ func (q *Queries) ListPhrasesForKeywordCollection(ctx context.Context, sellerCab
 }
 
 func (q *Queries) CreateFrequencyHistory(ctx context.Context, keywordID pgtype.UUID, frequency int32) error {
-	_, err := q.db.Exec(ctx, `INSERT INTO keyword_frequency_history (keyword_id, frequency) VALUES ($1, $2)`, keywordID, frequency)
+	_, err := q.db.Exec(ctx, `
+		WITH locked AS MATERIALIZED (
+			SELECT pg_advisory_xact_lock(
+				hashtextextended(($1::uuid)::text || ':keyword-frequency-history', 0)
+			)
+		), latest AS (
+			SELECT h.frequency, h.checked_at
+			FROM keyword_frequency_history h
+			CROSS JOIN locked
+			WHERE h.keyword_id = $1
+			ORDER BY h.checked_at DESC
+			LIMIT 1
+		)
+		INSERT INTO keyword_frequency_history (keyword_id, frequency)
+		SELECT $1, $2
+		FROM locked
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM latest
+			WHERE latest.frequency = $2
+			  AND latest.checked_at >= now() - interval '1 hour'
+		)`, keywordID, frequency)
 	return err
 }
 
@@ -266,9 +287,45 @@ type CreateSEOAnalysisParams struct {
 
 func (q *Queries) CreateSEOAnalysis(ctx context.Context, arg CreateSEOAnalysisParams) (SEOAnalysisRow, error) {
 	row := q.db.QueryRow(ctx,
-		`INSERT INTO seo_analyses (workspace_id, product_id, title_score, description_score, keywords_score, overall_score, title_issues, description_issues, keyword_coverage, recommendations)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING id, workspace_id, product_id, title_score, description_score, keywords_score, overall_score, title_issues, description_issues, keyword_coverage, recommendations, analyzed_at`,
+		`WITH locked AS MATERIALIZED (
+			SELECT pg_advisory_xact_lock(
+				hashtextextended(($2::uuid)::text || ':seo-analysis', 0)
+			)
+		), latest AS MATERIALIZED (
+			SELECT s.id, s.workspace_id, s.product_id, s.title_score, s.description_score,
+				s.keywords_score, s.overall_score, s.title_issues, s.description_issues,
+				s.keyword_coverage, s.recommendations, s.analyzed_at
+			FROM seo_analyses s
+			CROSS JOIN locked
+			WHERE s.product_id = $2
+			ORDER BY s.analyzed_at DESC
+			LIMIT 1
+		), inserted AS (
+			INSERT INTO seo_analyses (
+				workspace_id, product_id, title_score, description_score, keywords_score,
+				overall_score, title_issues, description_issues, keyword_coverage, recommendations
+			)
+			SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10
+			FROM locked
+			WHERE NOT EXISTS (
+				SELECT 1 FROM latest
+				WHERE title_score = $3
+				  AND description_score = $4
+				  AND keywords_score = $5
+				  AND overall_score = $6
+				  AND title_issues = $7::jsonb
+				  AND description_issues = $8::jsonb
+				  AND keyword_coverage = $9::jsonb
+				  AND recommendations = $10::jsonb
+			)
+			RETURNING id, workspace_id, product_id, title_score, description_score,
+				keywords_score, overall_score, title_issues, description_issues,
+				keyword_coverage, recommendations, analyzed_at
+		)
+		SELECT * FROM inserted
+		UNION ALL
+		SELECT * FROM latest WHERE NOT EXISTS (SELECT 1 FROM inserted)
+		LIMIT 1`,
 		arg.WorkspaceID, arg.ProductID, arg.TitleScore, arg.DescriptionScore, arg.KeywordsScore, arg.OverallScore, arg.TitleIssues, arg.DescriptionIssues, arg.KeywordCoverage, arg.Recommendations)
 	var i SEOAnalysisRow
 	err := row.Scan(&i.ID, &i.WorkspaceID, &i.ProductID, &i.TitleScore, &i.DescriptionScore, &i.KeywordsScore, &i.OverallScore, &i.TitleIssues, &i.DescriptionIssues, &i.KeywordCoverage, &i.Recommendations, &i.AnalyzedAt)

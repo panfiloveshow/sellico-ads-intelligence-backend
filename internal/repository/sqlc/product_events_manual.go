@@ -137,15 +137,20 @@ type ProductStockEvidenceRow struct {
 func (q *Queries) ListLatestProductStockEvidenceByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]ProductStockEvidenceRow, error) {
 	rows, err := q.db.Query(ctx, `
 		WITH latest_snapshots AS (
-			SELECT DISTINCT ON (ps.product_id)
-				ps.product_id,
+			SELECT
+				p.id AS product_id,
 				ps.stock_total::int AS stock_total,
 				ps.captured_at
-			FROM product_snapshots ps
-			JOIN products p ON p.id = ps.product_id
+			FROM products p
+			JOIN LATERAL (
+				SELECT snapshot.stock_total, snapshot.captured_at
+				FROM product_snapshots snapshot
+				WHERE snapshot.product_id = p.id
+				  AND snapshot.stock_total IS NOT NULL
+				ORDER BY snapshot.captured_at DESC
+				LIMIT 1
+			) ps ON true
 			WHERE p.workspace_id = $1
-				AND ps.stock_total IS NOT NULL
-			ORDER BY ps.product_id, ps.captured_at DESC
 		),
 		latest_delivery AS (
 			SELECT DISTINCT ON (dd.product_id)

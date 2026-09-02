@@ -394,7 +394,7 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		}
 	}
 	for _, entry := range sweepEntries {
-		if _, err := scheduler.Register(entry.cron, NewSweepTask(entry.taskType), asynq.Queue(entry.queue)); err != nil {
+		if _, err := scheduler.Register(entry.cron, NewSweepTask(entry.taskType), scheduledSweepOptions(entry.queue)...); err != nil {
 			return nil, fmt.Errorf("register sweep %s: %w", entry.taskType, err)
 		}
 	}
@@ -423,6 +423,18 @@ func NewRuntime(cfg *config.Config, syncService *service.SyncService, queries *s
 		mux:            mux,
 		ozonAIEnabled:  options.ozonAI != nil,
 	}, nil
+}
+
+// scheduledSweepOptions deliberately disable Asynq retries for recurring
+// fan-out tasks. Every sweep has a future scheduler run that is the safe retry.
+// Retrying an old sweep after a transient Redis/PostgreSQL outage fans the same
+// workspaces out again and can turn a short outage into hours of duplicate API
+// calls, database writes, and marketplace rate limiting.
+func scheduledSweepOptions(queue string) []asynq.Option {
+	return []asynq.Option{
+		asynq.Queue(queue),
+		asynq.MaxRetry(0),
+	}
 }
 
 // aiRunStaleAfter is when a still-'running' AI run is treated as dead. The

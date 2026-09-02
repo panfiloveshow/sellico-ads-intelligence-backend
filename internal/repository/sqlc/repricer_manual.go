@@ -180,12 +180,22 @@ WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3`,
 // ---------------------------------------------------------------------------
 
 const setProductStock = `
-WITH updated AS (
-    UPDATE products
-    SET stock_total = $4, updated_at = now()
+WITH current AS MATERIALIZED (
+    SELECT id, stock_total AS previous_stock_total
+    FROM products
     WHERE workspace_id = $1 AND seller_cabinet_id = $2 AND wb_product_id = $3
-    RETURNING id, title, brand, category, price, rating, reviews_count,
-              stock_total, image_url, content_hash
+    FOR UPDATE
+), updated AS (
+    UPDATE products p
+    SET stock_total = $4,
+        updated_at = CASE
+            WHEN p.stock_total IS DISTINCT FROM $4 THEN now()
+            ELSE p.updated_at
+        END
+    FROM current c
+    WHERE p.id = c.id
+    RETURNING p.id, p.title, p.brand, p.category, p.price, p.rating, p.reviews_count,
+              p.stock_total, p.image_url, p.content_hash, c.previous_stock_total
 )
 INSERT INTO product_snapshots (
     product_id, title, brand, category, price, rating, reviews_count,
@@ -194,6 +204,10 @@ INSERT INTO product_snapshots (
 SELECT id, title, brand, category, price, rating, reviews_count,
        stock_total, image_url, content_hash
 FROM updated
+WHERE previous_stock_total IS DISTINCT FROM stock_total
+   OR NOT EXISTS (
+       SELECT 1 FROM product_snapshots ps WHERE ps.product_id = updated.id
+   )
 `
 
 func (q *Queries) SetProductStock(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID, wbProductID int64, stock int32) error {

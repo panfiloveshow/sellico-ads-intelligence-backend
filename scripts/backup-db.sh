@@ -99,6 +99,13 @@ EOF
     rm -f "$tmp_file"
     return 0
   fi
+  # The dump itself stays private (0600), but these values are intentionally
+  # exported to node-exporter. The systemd service runs with UMask=0077, so set
+  # the readable metric mode explicitly instead of silently firing BackupAbsent.
+  if ! chmod 0644 "$metric_file"; then
+    log "WARN: failed to make backup metrics readable: ${metric_file}; backup itself succeeded"
+    return 0
+  fi
   log "Backup metrics written: ${metric_file}"
 }
 

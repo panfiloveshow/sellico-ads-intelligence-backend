@@ -73,6 +73,12 @@ BACKUP_GPG_PASSPHRASE_FILE="$TEST_DIR/pass" \
 "$ROOT_DIR/scripts/backup-db.sh" "$TEST_DIR/backups" > "$TEST_DIR/offsite-failure.log"
 grep -q '^sellico_backup_offsite_configured 1$' "$TEST_DIR/metrics/sellico_backup.prom"
 grep -q '^sellico_backup_offsite_success 0$' "$TEST_DIR/metrics/sellico_backup.prom"
+if stat -c '%a' "$TEST_DIR/metrics/sellico_backup.prom" > /dev/null 2>&1; then
+  metric_mode="$(stat -c '%a' "$TEST_DIR/metrics/sellico_backup.prom")"
+else
+  metric_mode="$(stat -f '%Lp' "$TEST_DIR/metrics/sellico_backup.prom")"
+fi
+[[ "$metric_mode" == "644" ]]
 [[ "$(find "$TEST_DIR/backups" -type f -name '*.dump' | wc -l | tr -d ' ')" == "1" ]]
 [[ "$(find "$TEST_DIR/backups" -type f -name '*.gpg' | wc -l | tr -d ' ')" == "0" ]]
 
