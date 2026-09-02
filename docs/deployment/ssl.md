@@ -28,7 +28,7 @@ sudo DOMAIN=api.sellico.ru EMAIL=ops@sellico.ru /opt/sellico/scripts/setup-ssl.s
 Проверка:
 
 ```bash
-curl -I https://api.sellico.ru/health/ready
+curl -I https://ads.sellico.ru/health/ready
 # Ожидается: HTTP/2 200, header Strict-Transport-Security: max-age=31536000...
 ```
 

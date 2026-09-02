@@ -107,6 +107,16 @@ jobs:
             install -m 0644 "$srcdir/docker-compose.prod.yml" docker-compose.prod.yml
             install -m 0755 "$srcdir/scripts/backup-db.sh" scripts/backup-db.sh
             install -m 0755 "$srcdir/scripts/restore-check.sh" scripts/restore-check.sh
+            install -m 0755 "$srcdir/scripts/deploy.sh" scripts/deploy.sh
+            install -m 0644 "$srcdir/scripts/sellico.service" scripts/sellico.service
+            install -m 0644 "$srcdir/scripts/sellico-backup.service" scripts/sellico-backup.service
+            install -m 0644 "$srcdir/scripts/sellico-backup.timer" scripts/sellico-backup.timer
+            install -m 0644 "$srcdir/scripts/sellico-restore-check.service" scripts/sellico-restore-check.service
+            install -m 0644 "$srcdir/scripts/sellico-restore-check.timer" scripts/sellico-restore-check.timer
+            # Migrations are append-only. Persist them for systemd/manual starts;
+            # the deploy job also mounts the same immutable source below.
+            cp -a "$srcdir/migrations/." migrations/
+            printf '%s\n' "$GITHUB_SHA" > .deployed-revision
             cat > "$tmpdir/deploy.override.yml" <<EOF
             services:
               api:
