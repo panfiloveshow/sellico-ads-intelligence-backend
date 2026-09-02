@@ -15,5 +15,7 @@ func TestSetProductStockPersistsRealSnapshotAtomically(t *testing.T) {
 	assert.Contains(t, normalized, "insert into product_snapshots")
 	assert.Contains(t, normalized, "stock_total")
 	assert.Contains(t, normalized, "previous_stock_total is distinct from stock_total")
+	assert.Contains(t, normalized, "set captured_at = now()")
+	assert.Contains(t, normalized, "previous_stock_total is not distinct from")
 	assert.Contains(t, normalized, "not exists")
 }

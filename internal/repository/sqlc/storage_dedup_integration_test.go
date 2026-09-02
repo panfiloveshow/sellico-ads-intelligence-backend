@@ -5,6 +5,7 @@ package sqlcgen_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -79,7 +80,13 @@ func TestStableSyncResultsAreStoredOnceAndLatestStockRemainsQueryable(t *testing
 	require.Equal(t, 1, analysisRows)
 
 	require.NoError(t, db.Queries.SetProductStock(ctx, workspace.ID, cabinet.ID, 900001, 10))
+	firstSnapshot, err := db.Queries.GetLatestProductSnapshot(ctx, product.ID)
+	require.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
 	require.NoError(t, db.Queries.SetProductStock(ctx, workspace.ID, cabinet.ID, 900001, 10))
+	refreshedSnapshot, err := db.Queries.GetLatestProductSnapshot(ctx, product.ID)
+	require.NoError(t, err)
+	require.True(t, refreshedSnapshot.CapturedAt.Time.After(firstSnapshot.CapturedAt.Time))
 	var stockRows int
 	require.NoError(t, db.Pool.QueryRow(ctx,
 		`SELECT count(*) FROM product_snapshots WHERE product_id = $1`,

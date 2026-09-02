@@ -196,6 +196,19 @@ WITH current AS MATERIALIZED (
     WHERE p.id = c.id
     RETURNING p.id, p.title, p.brand, p.category, p.price, p.rating, p.reviews_count,
               p.stock_total, p.image_url, p.content_hash, c.previous_stock_total
+), refreshed AS (
+    UPDATE product_snapshots ps
+    SET captured_at = now()
+    FROM updated
+    WHERE updated.previous_stock_total IS NOT DISTINCT FROM updated.stock_total
+      AND ps.id = (
+          SELECT latest.id
+          FROM product_snapshots latest
+          WHERE latest.product_id = updated.id
+          ORDER BY latest.captured_at DESC
+          LIMIT 1
+      )
+    RETURNING ps.id
 )
 INSERT INTO product_snapshots (
     product_id, title, brand, category, price, rating, reviews_count,
