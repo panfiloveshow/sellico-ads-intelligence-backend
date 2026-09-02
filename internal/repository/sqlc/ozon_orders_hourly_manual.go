@@ -33,6 +33,12 @@ FROM unnest($2::bigint[], $3::smallint[], $4::smallint[], $5::int[], $6::int[])
     AS u(sku, dow, hour, orders, quantity)
 `
 
+const lockOzonOrdersHourlyCabinet = `
+SELECT pg_advisory_xact_lock(
+    hashtextextended(($1::uuid)::text || ':ozon-orders-hourly-replace', 0)
+)
+`
+
 // ReplaceOzonOrdersHourly fully rewrites one cabinet's heatmap in a single
 // transaction (delete + bulk insert): the postings sync recomputes the whole
 // 28-day window every run, so partial upserts would leave stale buckets from
@@ -47,6 +53,13 @@ func (q *Queries) ReplaceOzonOrdersHourly(ctx context.Context, sellerCabinetID p
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Startup recovery and scheduled sync may overlap for the same cabinet.
+	// Serialize the complete delete+insert rewrite per cabinet so two valid
+	// snapshots cannot race into the table's unique constraint.
+	if _, err := tx.Exec(ctx, lockOzonOrdersHourlyCabinet, sellerCabinetID); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM ozon_orders_hourly WHERE seller_cabinet_id = $1`, sellerCabinetID); err != nil {
 		return err

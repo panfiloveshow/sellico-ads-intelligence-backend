@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
+	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/testdb"
 )
 
@@ -424,6 +426,37 @@ func TestOzonSyncService_SyncPostings_RewritesHeatmap(t *testing.T) {
 	env.fake.setJSON("/v3/posting/fbs/list", map[string]any{"result": map[string]any{"postings": []map[string]any{}}})
 	require.NoError(t, env.syncSvc.SyncPostings(ctx, env.cabinet(t)))
 	assert.Equal(t, 0, countRows(t, env.pool,
+		`SELECT COUNT(*) FROM ozon_orders_hourly WHERE seller_cabinet_id = $1`, env.cabinetID))
+}
+
+func TestReplaceOzonOrdersHourly_ConcurrentCabinetRewrite(t *testing.T) {
+	t.Parallel()
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+	rows := []sqlcgen.OzonOrdersHourlyRow{
+		{Sku: 555, Dow: 1, Hour: 10, Orders: 2, Quantity: 3},
+	}
+
+	const writers = 12
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- env.queries.ReplaceOzonOrdersHourly(ctx, uuidToPgtype(env.cabinetID), rows)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, countRows(t, env.pool,
 		`SELECT COUNT(*) FROM ozon_orders_hourly WHERE seller_cabinet_id = $1`, env.cabinetID))
 }
 

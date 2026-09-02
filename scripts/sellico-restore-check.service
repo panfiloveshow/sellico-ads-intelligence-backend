@@ -1,0 +1,22 @@
+[Unit]
+Description=Sellico PostgreSQL restore verification
+Documentation=https://github.com/panfiloveshow/sellico-ads-intelligence-backend
+After=docker.service sellico-backup.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=admin_reprice
+Group=admin_reprice
+WorkingDirectory=/opt/sellico
+Environment=BACKUP_USE_DOCKER=1
+Environment=COMPOSE_FILE=docker-compose.prod.yml
+Environment=HOME=/tmp
+ExecStart=/opt/sellico/scripts/restore-check.sh
+UMask=0077
+TimeoutStartSec=2h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

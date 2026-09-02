@@ -66,6 +66,9 @@ jobs:
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.prod.yml config --quiet
 
+      - name: Verify atomic backup failure handling
+        run: bash scripts/backup-db_test.sh
+
       - name: Build API and worker
         run: |
           go build ./cmd/api

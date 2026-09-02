@@ -13,6 +13,28 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 
 log() { echo "[$(date -Iseconds)] $*"; }
 
+install_systemd_units() {
+  local unit
+  for unit in sellico.service sellico-backup.service sellico-backup.timer \
+              sellico-restore-check.service sellico-restore-check.timer; do
+    if [[ -f "$DEPLOY_DIR/scripts/$unit" ]]; then
+      install -m 0644 "$DEPLOY_DIR/scripts/$unit" "/etc/systemd/system/$unit"
+    fi
+  done
+
+  install -d -m 0750 -o admin_reprice -g admin_reprice "$DEPLOY_DIR/backups"
+  install -d -m 0755 -o admin_reprice -g admin_reprice /var/lib/node_exporter/textfile
+  systemctl daemon-reload
+  systemctl enable sellico
+  systemctl enable --now sellico-backup.timer sellico-restore-check.timer
+
+  # The timers replace legacy cron entries. Keeping both would permit two
+  # independent backup/restore jobs to overlap after an upgrade.
+  (crontab -l 2>/dev/null || true) \
+    | sed "/backup-db.sh\|restore-check.sh/d" \
+    | crontab -
+}
+
 case "${1:-update}" in
 
   setup)
@@ -43,22 +65,8 @@ case "${1:-update}" in
       exit 1
     fi
 
-    # Install systemd service
-    if [ -f "$DEPLOY_DIR/scripts/sellico.service" ]; then
-      cp "$DEPLOY_DIR/scripts/sellico.service" /etc/systemd/system/sellico.service
-      systemctl daemon-reload
-      systemctl enable sellico
-      log "Systemd service installed and enabled"
-    fi
-
-    # Install backup + restore-check crons
-    BACKUP_LINE="0 3 * * * cd $DEPLOY_DIR && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 BACKUP_TEXTFILE_DIR=/var/lib/node_exporter/textfile ./scripts/backup-db.sh >> /var/log/sellico-backup.log 2>&1"
-    RESTORE_LINE="30 4 * * * cd $DEPLOY_DIR && set -a && . ./.env && set +a && BACKUP_USE_DOCKER=1 ./scripts/restore-check.sh >> /var/log/sellico-restore-check.log 2>&1"
-    ( crontab -l 2>/dev/null | grep -v "backup-db.sh\|restore-check.sh"
-      echo "$BACKUP_LINE"
-      echo "$RESTORE_LINE"
-    ) | crontab -
-    log "Backup cron installed (daily 03:00) + restore-check cron (daily 04:30)"
+    install_systemd_units
+    log "Systemd service and verified backup/restore timers installed"
 
     # Start services
     cd "$DEPLOY_DIR"
@@ -69,6 +77,13 @@ case "${1:-update}" in
   update)
     log "=== Updating Sellico ==="
     cd "$DEPLOY_DIR"
+
+    if [[ "$(id -u)" == "0" ]]; then
+      install_systemd_units
+      log "Systemd units refreshed"
+    else
+      log "Systemd units were not refreshed (update is not running as root)"
+    fi
 
     docker compose -f "$COMPOSE_FILE" pull prometheus cadvisor node-exporter || true
 
@@ -100,9 +115,8 @@ case "${1:-update}" in
     docker compose -f "$COMPOSE_FILE" run --rm migrate
     log "Migrations applied"
 
-    # Bring up everything in the default profile (api, worker, postgres, redis,
-    # nginx, prometheus, grafana, cadvisor, node-exporter). Alertmanager stays
-    # off — it's behind the "alerts" profile and requires Telegram bot setup.
+    # Bring up the default production profile. Grafana and Alertmanager remain
+    # opt-in and cannot become externally reachable through this command.
     docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
     log "Services up"
 
@@ -125,7 +139,7 @@ case "${1:-update}" in
     fi
     docker compose -f "$COMPOSE_FILE" --profile monitoring up -d prometheus grafana cadvisor node-exporter
     log "Monitoring up. Access via SSH tunnel:"
-    log "  ssh -L 3000:grafana:3000 admin_reprice@$(hostname -I | awk '{print $1}')"
+    log "  ssh -L 3000:127.0.0.1:3000 admin_reprice@$(hostname -I | awk '{print $1}')"
     log "Then open http://localhost:3000 (admin / \$GRAFANA_ADMIN_PASSWORD)"
     ;;
 

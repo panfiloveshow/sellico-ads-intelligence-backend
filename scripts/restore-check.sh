@@ -45,7 +45,7 @@ psql_query() {
 }
 
 # Find newest local dump
-LATEST=$(find "$BACKUP_DIR" -name "${DB_NAME}_*.dump" -type f -printf '%T@ %p\n' \
+LATEST=$(find "$BACKUP_DIR" -name "${DB_NAME}_*.dump" -type f -size +0c -printf '%T@ %p\n' \
          | sort -nr | head -1 | cut -d' ' -f2-)
 
 if [[ -z "$LATEST" || ! -r "$LATEST" ]]; then

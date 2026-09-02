@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Sellico PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=sellico-backup.service
+
+[Install]
+WantedBy=timers.target

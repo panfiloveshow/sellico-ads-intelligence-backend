@@ -101,6 +101,12 @@ jobs:
             fi
             tar -xzf "$tmpdir/source.tar.gz" -C "$tmpdir"
             srcdir="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+            # The server checkout is intentionally not trusted as deployment
+            # source: earlier CD runs updated images but left compose/scripts
+            # stale. Publish the production control files from this exact SHA.
+            install -m 0644 "$srcdir/docker-compose.prod.yml" docker-compose.prod.yml
+            install -m 0755 "$srcdir/scripts/backup-db.sh" scripts/backup-db.sh
+            install -m 0755 "$srcdir/scripts/restore-check.sh" scripts/restore-check.sh
             cat > "$tmpdir/deploy.override.yml" <<EOF
             services:
               api:
@@ -120,8 +126,11 @@ jobs:
             docker compose version
             docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" config >/dev/null
             docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" pull api worker
+            # Apply infrastructure config (memory limits, preload libraries)
+            # before migrations. Compose recreates services only when needed.
+            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" up -d --wait postgres redis
             docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" run --rm migrate
-            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" up -d api worker
+            docker compose -f docker-compose.prod.yml -f "$tmpdir/deploy.override.yml" up -d api worker nginx prometheus cadvisor node-exporter
             docker logout ghcr.io
             docker image prune -f
         env:

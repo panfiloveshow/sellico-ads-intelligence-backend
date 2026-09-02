@@ -1,0 +1,11 @@
+[Unit]
+Description=Verify the latest Sellico PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=sellico-restore-check.service
+
+[Install]
+WantedBy=timers.target

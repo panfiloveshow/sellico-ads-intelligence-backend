@@ -27,6 +27,7 @@
 #     Writes Prometheus textfile metrics for BackupAbsent alerting.
 
 set -euo pipefail
+umask 077
 
 BACKUP_DIR="${1:-/opt/sellico/backups}"
 RETAIN_DAYS="${BACKUP_RETAIN_DAYS:-7}"
@@ -38,10 +39,22 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 mkdir -p "$BACKUP_DIR"
 
 BACKUP_FILE="${BACKUP_DIR}/${DB_NAME}_${TIMESTAMP}.dump"
+PARTIAL_FILE="$(mktemp "${BACKUP_DIR}/.${DB_NAME}_${TIMESTAMP}.partial.XXXXXX")"
+ENCRYPTED_FILE=""
 OFFSITE_CONFIGURED=0
 OFFSITE_SUCCESS=0
 
 log() { echo "[$(date -Iseconds)] $*"; }
+
+cleanup_temporary_files() {
+  rm -f "$PARTIAL_FILE"
+  if [[ -n "$ENCRYPTED_FILE" ]]; then
+    rm -f "$ENCRYPTED_FILE"
+  fi
+}
+trap cleanup_temporary_files EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 write_backup_metrics() {
   local textfile_dir="${BACKUP_TEXTFILE_DIR:-/var/lib/node_exporter/textfile}"
@@ -112,7 +125,7 @@ if [[ "$BACKUP_USE_DOCKER_RESOLVED" == "1" ]]; then
       --compress=6 \
       --no-owner \
       --no-privileges \
-    > "$BACKUP_FILE"
+    > "$PARTIAL_FILE"
 else
   pg_dump \
     --host="${PGHOST:-localhost}" \
@@ -123,11 +136,28 @@ else
     --compress=6 \
     --no-owner \
     --no-privileges \
-    --file="$BACKUP_FILE"
+    --file="$PARTIAL_FILE"
 fi
 
+if [[ ! -s "$PARTIAL_FILE" ]]; then
+  log "ERROR: pg_dump produced an empty archive"
+  exit 1
+fi
+
+log "Validating PostgreSQL archive before publishing it..."
+if [[ "$BACKUP_USE_DOCKER_RESOLVED" == "1" ]]; then
+  docker compose -f "$COMPOSE_FILE" exec -T postgres \
+    pg_restore --list < "$PARTIAL_FILE" > /dev/null
+else
+  pg_restore --list "$PARTIAL_FILE" > /dev/null
+fi
+
+# Publish only a complete, readable archive. A failed pg_dump/pg_restore must
+# never leave a zero-byte or truncated file that looks like a valid backup.
+mv "$PARTIAL_FILE" "$BACKUP_FILE"
+
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
-log "Backup complete: ${BACKUP_FILE} (${SIZE})"
+log "Backup complete and validated: ${BACKUP_FILE} (${SIZE})"
 
 # --- Optional: encrypt + upload to S3 (offsite DR) ----------------------------
 upload_offsite() {
@@ -152,28 +182,36 @@ upload_offsite() {
   fi
 
   local enc_file="${BACKUP_FILE}.gpg"
+  ENCRYPTED_FILE="$enc_file"
   log "Encrypting backup with GPG (symmetric, AES256)..."
-  gpg --batch --yes \
+  if ! gpg --batch --yes \
       --cipher-algo AES256 \
       --passphrase-file "$BACKUP_GPG_PASSPHRASE_FILE" \
       --symmetric \
       --output "$enc_file" \
-      "$BACKUP_FILE"
+      "$BACKUP_FILE"; then
+    log "ERROR: failed to encrypt backup"
+    return 1
+  fi
 
   local prefix="${S3_PREFIX:-postgres/}"
   local s3_uri="s3://${S3_BUCKET}/${prefix}${DB_NAME}_${TIMESTAMP}.dump.gpg"
-  local endpoint_arg=""
+  local -a endpoint_args=()
   if [[ -n "${S3_ENDPOINT:-}" ]]; then
-    endpoint_arg="--endpoint-url=${S3_ENDPOINT}"
+    endpoint_args+=("--endpoint-url=${S3_ENDPOINT}")
   fi
 
   log "Uploading to ${s3_uri}..."
-  aws ${endpoint_arg} s3 cp \
+  if ! aws "${endpoint_args[@]}" s3 cp \
       --only-show-errors \
       --storage-class STANDARD_IA \
-      "$enc_file" "$s3_uri"
+      "$enc_file" "$s3_uri"; then
+    log "ERROR: failed to upload encrypted backup"
+    return 1
+  fi
 
   rm -f "$enc_file"
+  ENCRYPTED_FILE=""
   OFFSITE_SUCCESS=1
   log "Offsite upload complete."
   log "NOTE: configure bucket lifecycle to delete objects older than ${S3_RETAIN_DAYS:-30} days."
