@@ -1,6 +1,7 @@
-// Command queue-maintenance removes stale recurring scheduler triggers after a
-// retry storm. It deliberately ignores tenant-scoped tasks and archived
-// history. The command is dry-run by default; pass --apply to delete matches.
+// Command queue-maintenance removes legacy recurring scheduler retries after a
+// retry storm. It deliberately ignores pending, scheduled, active,
+// tenant-scoped, and archived tasks. The command is dry-run by default; pass
+// --apply to delete matches.
 package main
 
 import (
@@ -46,8 +47,6 @@ var recurringTaskTypes = map[string]struct{}{
 	worker.TaskOzonExecuteSchedules:         {},
 }
 
-type taskLister func(queue string, opts ...asynq.ListOption) ([]*asynq.TaskInfo, error)
-
 func main() {
 	apply := flag.Bool("apply", false, "delete matching tasks; without this flag the command is read-only")
 	flag.Parse()
@@ -71,37 +70,26 @@ func main() {
 
 	totalMatched := 0
 	totalDeleted := 0
-	states := []struct {
-		name string
-		list taskLister
-	}{
-		{name: "pending", list: inspector.ListPendingTasks},
-		{name: "retry", list: inspector.ListRetryTasks},
-		{name: "scheduled", list: inspector.ListScheduledTasks},
-	}
-
 	for _, queue := range queues {
-		for _, state := range states {
-			tasks, listErr := state.list(queue, asynq.PageSize(10000))
-			if listErr != nil {
-				fatalf("list %s tasks in %s: %v", state.name, queue, listErr)
-			}
-			byType := make(map[string]int)
-			for _, task := range tasks {
-				if !isStaleRecurringSweep(task) {
-					continue
-				}
-				totalMatched++
-				byType[task.Type]++
-				if *apply {
-					if deleteErr := inspector.DeleteTask(queue, task.ID); deleteErr != nil {
-						fatalf("delete %s task %s from %s: %v", state.name, task.ID, queue, deleteErr)
-					}
-					totalDeleted++
-				}
-			}
-			printCounts(queue, state.name, byType)
+		tasks, listErr := inspector.ListRetryTasks(queue, asynq.PageSize(10000))
+		if listErr != nil {
+			fatalf("list retry tasks in %s: %v", queue, listErr)
 		}
+		byType := make(map[string]int)
+		for _, task := range tasks {
+			if !isLegacyRecurringRetry(task) {
+				continue
+			}
+			totalMatched++
+			byType[task.Type]++
+			if *apply {
+				if deleteErr := inspector.DeleteTask(queue, task.ID); deleteErr != nil {
+					fatalf("delete retry task %s from %s: %v", task.ID, queue, deleteErr)
+				}
+				totalDeleted++
+			}
+		}
+		printCounts(queue, "retry", byType)
 	}
 
 	mode := "dry-run"
@@ -111,8 +99,8 @@ func main() {
 	fmt.Printf("mode=%s matched=%d deleted=%d\n", mode, totalMatched, totalDeleted)
 }
 
-func isStaleRecurringSweep(task *asynq.TaskInfo) bool {
-	if task == nil || len(task.Payload) != 0 {
+func isLegacyRecurringRetry(task *asynq.TaskInfo) bool {
+	if task == nil || len(task.Payload) != 0 || task.MaxRetry <= 0 || task.Retried <= 0 || task.LastFailedAt.IsZero() {
 		return false
 	}
 	_, ok := recurringTaskTypes[task.Type]

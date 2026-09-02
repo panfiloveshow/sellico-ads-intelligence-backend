@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
@@ -9,13 +10,29 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/worker"
 )
 
-func TestIsStaleRecurringSweepOnlyMatchesPayloadlessSchedulerTriggers(t *testing.T) {
-	require.True(t, isStaleRecurringSweep(&asynq.TaskInfo{Type: worker.TaskSweepSyncWorkspace}))
-	require.True(t, isStaleRecurringSweep(&asynq.TaskInfo{Type: worker.TaskOzonCPOOrdersSync}))
-	require.False(t, isStaleRecurringSweep(&asynq.TaskInfo{
-		Type:    worker.TaskOzonCPOOrdersSync,
-		Payload: []byte(`{"cabinet_id":"test"}`),
+func TestIsLegacyRecurringRetryOnlyMatchesOldPayloadlessRetries(t *testing.T) {
+	failedAt := time.Now().Add(-time.Hour)
+	require.True(t, isLegacyRecurringRetry(&asynq.TaskInfo{
+		Type: worker.TaskSweepSyncWorkspace, MaxRetry: 25, Retried: 2, LastFailedAt: failedAt,
 	}))
-	require.False(t, isStaleRecurringSweep(&asynq.TaskInfo{Type: worker.TaskSyncWorkspace}))
-	require.False(t, isStaleRecurringSweep(nil))
+	require.True(t, isLegacyRecurringRetry(&asynq.TaskInfo{
+		Type: worker.TaskOzonCPOOrdersSync, MaxRetry: 25, Retried: 1, LastFailedAt: failedAt,
+	}))
+	require.False(t, isLegacyRecurringRetry(&asynq.TaskInfo{
+		Type:         worker.TaskOzonCPOOrdersSync,
+		Payload:      []byte(`{"cabinet_id":"test"}`),
+		MaxRetry:     25,
+		Retried:      1,
+		LastFailedAt: failedAt,
+	}))
+	require.False(t, isLegacyRecurringRetry(&asynq.TaskInfo{
+		Type: worker.TaskSweepSyncWorkspace, MaxRetry: 0, Retried: 1, LastFailedAt: failedAt,
+	}))
+	require.False(t, isLegacyRecurringRetry(&asynq.TaskInfo{
+		Type: worker.TaskSweepSyncWorkspace, MaxRetry: 25, Retried: 0, LastFailedAt: failedAt,
+	}))
+	require.False(t, isLegacyRecurringRetry(&asynq.TaskInfo{
+		Type: worker.TaskSyncWorkspace, MaxRetry: 25, Retried: 1, LastFailedAt: failedAt,
+	}))
+	require.False(t, isLegacyRecurringRetry(nil))
 }
