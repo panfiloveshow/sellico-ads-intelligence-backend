@@ -76,6 +76,7 @@ func main() {
 	)
 	integrationRefreshService := service.NewIntegrationRefreshService(deps.Queries, sellicoClient, sellerCabinetService, []byte(cfg.EncryptionKey), deps.Logger)
 	if sellicoTokenManager.IsConfigured() {
+		sellerCabinetService.WithServiceAccount(sellicoTokenManager)
 		integrationRefreshService = integrationRefreshService.WithServiceAccount(sellicoTokenManager)
 		deps.Logger.Info().Msg("sellico service-account discovery enabled")
 	} else {

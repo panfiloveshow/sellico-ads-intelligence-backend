@@ -30,6 +30,12 @@ type SellerCabinetService struct {
 	encryptionKey  []byte
 	tokenValidator WBTokenValidator
 	sellicoClient  *sellico.Client
+	// tokenManager enables the service-account path for reading integrations.
+	// Since Sellico hides raw credentials from user-token endpoints
+	// (browser-facing /workspaces/{ws}/integrations), only a service account
+	// can see api_key / performance_* — without it Ozon/WB cabinets cannot be
+	// created from Sellico. nil keeps the legacy user-token path only.
+	tokenManager *sellico.ServiceTokenManager
 }
 
 type SellerCabinetListFilter struct {
@@ -57,6 +63,13 @@ func NewSellerCabinetService(queries *sqlcgen.Queries, encryptionKey []byte, tok
 		tokenValidator: tokenValidator,
 		sellicoClient:  sellicoClient,
 	}
+}
+
+// WithServiceAccount enables reading Sellico integrations (with full
+// credentials) via the service account. Mutates and returns s for chaining.
+func (s *SellerCabinetService) WithServiceAccount(mgr *sellico.ServiceTokenManager) *SellerCabinetService {
+	s.tokenManager = mgr
+	return s
 }
 
 // Create encrypts the API token, validates it against WB API, and saves the seller cabinet.
@@ -507,11 +520,47 @@ func (s *SellerCabinetService) listWbIntegrations(ctx context.Context, token, wo
 		return nil, err
 	}
 
-	var lastErr error
+	return s.fetchIntegrations(ctx, token, workspaceRefs)
+}
+
+// fetchIntegrations reads supported integrations (with credentials) for the
+// first workspace ref that resolves. Service-account path first — user-token
+// endpoints no longer expose secrets; the user token is a fallback for
+// deployments without a service account.
+func (s *SellerCabinetService) fetchIntegrations(ctx context.Context, userToken string, workspaceRefs []string) ([]sellico.Integration, error) {
+	if serviceToken := s.serviceToken(ctx); serviceToken != "" {
+		for _, ref := range workspaceRefs {
+			full, listErr := s.sellicoClient.GetIntegrations(ctx, serviceToken, ref)
+			if listErr != nil {
+				continue
+			}
+			result := make([]sellico.Integration, 0, len(full))
+			for _, item := range full {
+				integration := item.AsIntegration()
+				if !supportedIntegrationType(integration.Type) {
+					continue
+				}
+				if integration.APIKey == "" {
+					if details, detailsErr := s.sellicoClient.GetIntegration(ctx, serviceToken, integration.ID); detailsErr == nil && details != nil {
+						integration = details.AsIntegration()
+					}
+				}
+				if strings.TrimSpace(integration.APIKey) == "" {
+					continue
+				}
+				result = append(result, integration)
+			}
+			return result, nil
+		}
+	}
+
+	if userToken == "" {
+		return nil, apperror.New(apperror.ErrInternal, "failed to load workspace integrations from Sellico")
+	}
+
 	for _, ref := range workspaceRefs {
-		integrations, listErr := s.sellicoClient.ListWorkspaceIntegrations(ctx, token, ref)
+		integrations, listErr := s.sellicoClient.ListWorkspaceIntegrations(ctx, userToken, ref)
 		if listErr != nil {
-			lastErr = listErr
 			continue
 		}
 
@@ -521,7 +570,7 @@ func (s *SellerCabinetService) listWbIntegrations(ctx context.Context, token, wo
 				continue
 			}
 			if integration.APIKey == "" {
-				details, detailsErr := s.sellicoClient.GetWorkspaceIntegration(ctx, token, ref, integration.ID)
+				details, detailsErr := s.sellicoClient.GetWorkspaceIntegration(ctx, userToken, ref, integration.ID)
 				if detailsErr == nil && details != nil {
 					integration = *details
 				}
@@ -535,7 +584,6 @@ func (s *SellerCabinetService) listWbIntegrations(ctx context.Context, token, wo
 		return result, nil
 	}
 
-	_ = lastErr
 	return nil, apperror.New(apperror.ErrInternal, "failed to load workspace integrations from Sellico")
 }
 
@@ -549,8 +597,27 @@ func (s *SellerCabinetService) getWbIntegration(ctx context.Context, token, work
 		return nil, err
 	}
 
+	return s.fetchIntegration(ctx, token, workspaceRefs, integrationID)
+}
+
+// fetchIntegration is the single-integration counterpart of fetchIntegrations.
+// The service-account endpoint is not workspace-scoped, so the returned
+// integration is checked against the caller's workspace refs.
+func (s *SellerCabinetService) fetchIntegration(ctx context.Context, userToken string, workspaceRefs []string, integrationID string) (*sellico.Integration, error) {
+	if serviceToken := s.serviceToken(ctx); serviceToken != "" {
+		if full, getErr := s.sellicoClient.GetIntegration(ctx, serviceToken, integrationID); getErr == nil && full != nil {
+			integration := full.AsIntegration()
+			if containsString(workspaceRefs, full.WorkspaceID) && supportedIntegrationType(integration.Type) && strings.TrimSpace(integration.APIKey) != "" {
+				return &integration, nil
+			}
+		}
+	}
+
 	for _, ref := range workspaceRefs {
-		integration, getErr := s.sellicoClient.GetWorkspaceIntegration(ctx, token, ref, integrationID)
+		if userToken == "" {
+			break
+		}
+		integration, getErr := s.sellicoClient.GetWorkspaceIntegration(ctx, userToken, ref, integrationID)
 		if getErr != nil {
 			continue
 		}
@@ -562,6 +629,19 @@ func (s *SellerCabinetService) getWbIntegration(ctx context.Context, token, work
 	}
 
 	return nil, apperror.New(apperror.ErrNotFound, "seller cabinet not found")
+}
+
+// serviceToken returns the service-account bearer or "" when not configured
+// or unobtainable (the caller then falls back to the user token).
+func (s *SellerCabinetService) serviceToken(ctx context.Context) string {
+	if s.tokenManager == nil || !s.tokenManager.IsConfigured() {
+		return ""
+	}
+	token, err := s.tokenManager.Get(ctx)
+	if err != nil {
+		return ""
+	}
+	return token
 }
 
 // supportedIntegrationType reports whether a Sellico integration type maps to

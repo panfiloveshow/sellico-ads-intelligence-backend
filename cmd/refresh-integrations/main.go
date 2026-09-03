@@ -35,6 +35,7 @@ func main() {
 	})
 	refreshService := service.NewIntegrationRefreshService(deps.Queries, sellicoClient, sellerCabinetService, []byte(cfg.EncryptionKey), deps.Logger)
 	if tokenManager.IsConfigured() {
+		sellerCabinetService.WithServiceAccount(tokenManager)
 		refreshService = refreshService.WithServiceAccount(tokenManager)
 	}
 

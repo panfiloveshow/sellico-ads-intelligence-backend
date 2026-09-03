@@ -83,6 +83,9 @@ func main() {
 	workspaceService := service.NewWorkspaceService(deps.Queries)
 	sellicoBridgeService := service.NewSellicoBridgeService(deps.Queries, sellicoClient, []byte(cfg.EncryptionKey))
 	sellerCabinetService := service.NewSellerCabinetService(deps.Queries, []byte(cfg.EncryptionKey), wbClient, sellicoClient)
+	if sellicoTokenManager.IsConfigured() {
+		sellerCabinetService = sellerCabinetService.WithServiceAccount(sellicoTokenManager)
+	}
 	adsReadService := service.NewAdsReadService(deps.Queries, wbClient, []byte(cfg.EncryptionKey), deps.Logger,
 		service.WithAdsReadLimits(cfg.AdsReadEntityLimit, cfg.AdsReadStatsLimit),
 		service.WithAdsReadBackendVersion(cfg.AppVersion),

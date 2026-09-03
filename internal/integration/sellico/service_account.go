@@ -50,6 +50,20 @@ type IntegrationFull struct {
 	UpdatedAt               string
 }
 
+// AsIntegration projects the service-account shape onto the user-token
+// Integration struct so existing cabinet-sync code can consume either source.
+func (f IntegrationFull) AsIntegration() Integration {
+	return Integration{
+		ID:                      f.ID,
+		Name:                    f.Name,
+		Type:                    f.Type,
+		APIKey:                  f.APIKey,
+		ClientID:                f.ClientID,
+		PerformanceAPIKey:       f.PerformanceAPIKey,
+		PerformanceClientSecret: f.PerformanceClientSecret,
+	}
+}
+
 // LoginResponse is the shape returned by POST /api/login. The user object is
 // kept as a generic map so callers can introspect arbitrary fields (e.g.
 // `is_service_account`) without a brittle struct contract.
