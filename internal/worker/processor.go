@@ -2013,6 +2013,9 @@ func syncSummaryMetadata(summary service.SyncSummary) map[string]any {
 	if len(reasons) > 0 {
 		result["partial_reasons"] = reasons
 	}
+	if warnings := partialReasons(summary.Warnings); len(warnings) > 0 {
+		result["warnings"] = warnings
+	}
 	return result
 }
 

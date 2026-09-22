@@ -91,6 +91,9 @@ type SyncSummary struct {
 	DateFrom          string      `json:"date_from,omitempty"`
 	DateTo            string      `json:"date_to,omitempty"`
 	Issues            []SyncIssue `json:"issues,omitempty"`
+	// Warnings — неполадки, которые не делают синк частичным и не отключают
+	// автоставки (например, токен без «Контента»: карточки ставкам не нужны).
+	Warnings []SyncIssue `json:"warnings,omitempty"`
 }
 
 type SyncIssue struct {
@@ -161,6 +164,7 @@ func (s *SyncSummary) merge(other SyncSummary) {
 		s.DateTo = other.DateTo
 	}
 	s.Issues = append(s.Issues, other.Issues...)
+	s.Warnings = append(s.Warnings, other.Warnings...)
 }
 
 func (s *SyncSummary) mergeRateLimitFields(other SyncSummary) {
@@ -2221,9 +2225,12 @@ func (s *SyncService) syncProductsForCabinet(ctx context.Context, workspaceID, c
 	products, err := s.wbClient.ListProducts(ctx, token)
 	if errors.Is(err, wb.ErrNoContentAccess) {
 		// Токен без «Контента»: карточки недоступны, остальной синк идёт своим чередом.
+		// Предупреждение, а не issue: иначе синк становится partial, и защита
+		// автоставок (wbAPIAutomationGuardrailReason) отключает ставки кабинета,
+		// хотя ставкам карточки не нужны.
 		s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("WB product cards skipped: no content access")
-		summary.addIssue("products.content_access", cabinetID.String(), "%v", err)
-		return summary, summary.Error()
+		summary.Warnings = append(summary.Warnings, SyncIssue{Stage: "products.content_access", EntityID: cabinetID.String(), Message: err.Error()})
+		return summary, nil
 	}
 	if err != nil {
 		return SyncSummary{}, err
