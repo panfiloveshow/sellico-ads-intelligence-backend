@@ -117,7 +117,7 @@ func (s *OzonAIManagerService) executeAISubmission(ctx context.Context, run sqlc
 	}
 	executionErr := err
 	// Reload the actual persisted reasons, including failures from Ozon.
-	rows, err := s.queries.ListAIDecisions(ctx, sqlcgen.ListAIDecisionsParams{WorkspaceID: uuidToPgtype(workspaceID), SellerCabinetID: uuidToPgtype(cabinetID), RunID: run.ID, Limit: int32(len(results) + 1)})
+	rows, err := s.queries.ListAIDecisions(ctx, sqlcgen.ListAIDecisionsParams{WorkspaceID: uuidToPgtype(workspaceID), SellerCabinetID: uuidToPgtype(cabinetID), RunID: run.ID, Limit: clampInt32(int64(len(results)) + 1)})
 	if err != nil {
 		executionErr = errors.Join(executionErr, fmt.Errorf("load execution outcomes: %w", err))
 	}
