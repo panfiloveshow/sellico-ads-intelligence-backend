@@ -96,6 +96,33 @@ func TestOzonCampaignActions_SetProductBids_APIFailureMarksFailed(t *testing.T) 
 	assert.InDelta(t, 10.0, mirrorBid, 0.001)
 }
 
+// Лимит Ozon на ставки (с 14.09.2026): 429 не повторяется, пользователю —
+// 429 с временем сброса, аудит — failed с той же причиной; следующий вызов
+// до сброса в Ozon не уходит.
+func TestOzonCampaignActions_SetProductBids_OzonQuotaExhausted(t *testing.T) {
+	t.Parallel()
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+
+	campaignID := testdb.OzonCampaign(t, env.pool, env.cabinetID, 509, "Кампания", "CAMPAIGN_STATE_RUNNING")
+	testdb.OzonCampaignProduct(t, env.pool, campaignID, 555, 10)
+	env.fake.fail("/api/client/campaign/509/products", 429)
+
+	_, err := env.actionsSvc.SetProductBids(ctx, env.workspaceID, campaignID, []OzonBidInput{{SKU: 555, BidRub: 20}})
+	require.Error(t, err)
+	assert.True(t, apperror.Is(err, apperror.ErrRateLimited))
+	assert.Contains(t, err.Error(), "исчерпан лимит Ozon Performance API на изменение ставок")
+	var status, errText string
+	require.NoError(t, env.pool.QueryRow(ctx,
+		`SELECT status, error FROM ozon_bid_changes WHERE campaign_id = $1 AND sku = 555`, campaignID).Scan(&status, &errText))
+	assert.Equal(t, domain.OzonBidStatusFailed, status)
+	assert.Contains(t, errText, "исчерпан лимит Ozon")
+
+	_, err = env.actionsSvc.SetProductBids(ctx, env.workspaceID, campaignID, []OzonBidInput{{SKU: 555, BidRub: 21}})
+	assert.True(t, apperror.Is(err, apperror.ErrRateLimited))
+	assert.Equal(t, 1, env.fake.callCount("/api/client/campaign/509/products"))
+}
+
 func TestOzonCampaignActions_SetProductBids_Validation(t *testing.T) {
 	t.Parallel()
 	env := newOzonTestEnv(t, testdb.OzonCredentials())
@@ -245,13 +272,23 @@ func TestOzonCampaignActions_CampaignLifecycleAndBudget(t *testing.T) {
 		`SELECT state FROM ozon_campaigns WHERE id = $1`, campaignID).Scan(&state))
 	assert.Equal(t, "CAMPAIGN_STATE_INACTIVE", state)
 
+	// dailyBudget устарел 22.05.2026: дневная сумма уходит weeklyBudget ×7.
 	daily := int64(3000)
 	require.NoError(t, env.actionsSvc.UpdateBudget(ctx, env.workspaceID, campaignID, &daily, nil))
-	assert.Contains(t, env.fake.lastBody("/api/client/campaign/506"), `"dailyBudget":"3000000000"`)
-	var dailyMirror int64
+	body := env.fake.lastBody("/api/client/campaign/506")
+	assert.Contains(t, body, `"weeklyBudget":"21000000000"`)
+	assert.NotContains(t, body, "dailyBudget")
+	var weeklyMirror int64
 	require.NoError(t, env.pool.QueryRow(ctx,
-		`SELECT daily_budget_rub FROM ozon_campaigns WHERE id = $1`, campaignID).Scan(&dailyMirror))
-	assert.Equal(t, int64(3000), dailyMirror)
+		`SELECT weekly_budget_rub FROM ozon_campaigns WHERE id = $1`, campaignID).Scan(&weeklyMirror))
+	assert.Equal(t, int64(21000), weeklyMirror)
+
+	// Кампания, созданная с дневным бюджетом, тип сменить не может — ей dailyBudget.
+	legacyID := testdb.OzonCampaign(t, env.pool, env.cabinetID, 507, "Дневная", "CAMPAIGN_STATE_RUNNING")
+	_, execErr := env.pool.Exec(ctx, `UPDATE ozon_campaigns SET daily_budget_rub = 500 WHERE id = $1`, legacyID)
+	require.NoError(t, execErr)
+	require.NoError(t, env.actionsSvc.UpdateBudget(ctx, env.workspaceID, legacyID, &daily, nil))
+	assert.Contains(t, env.fake.lastBody("/api/client/campaign/507"), `"dailyBudget":"3000000000"`)
 
 	// Validation: empty patch and negative budgets never reach the API.
 	err := env.actionsSvc.UpdateBudget(ctx, env.workspaceID, campaignID, nil, nil)

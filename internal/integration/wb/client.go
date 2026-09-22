@@ -113,7 +113,10 @@ type Client struct {
 	// access). It is separate from the general advertising API limiter because
 	// the endpoint has a stricter bucket than most campaign operations.
 	campaignProductLimiters *boundedLRU[*rate.Limiter]
-	breakers                *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
+	// budgetLimiters paces POST /api/advert/v2/budget batches: 20 requests per
+	// minute (3 s interval) for Personal/Service access.
+	budgetLimiters *boundedLRU[*rate.Limiter]
+	breakers       *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
 }
 
 // NewClient creates a new WB API client from the application config.
@@ -159,6 +162,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		limiters:                 newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		priceLimiters:            newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		campaignProductLimiters:  newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
+		budgetLimiters:           newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		breakers:                 newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
 }
@@ -239,9 +243,23 @@ func (c *Client) doFeedbacksRequest(ctx context.Context, method, path, token str
 // 5–6 categories — a few hundred bytes, no rate-limit pressure, and the
 // only failure modes are 401 (bad token) / 403 (no advert scope), which
 // is exactly what we want to surface as "validation failed".
+//
+// Категорию «Контент» проверяет GET content-api /ping (спека 01-general:
+// ping сверяет категорию токена с сервисом): без неё с 03.08.2026 не
+// синхронизируются карточки товаров. Сбой самой проверки (сеть, 5xx, 429)
+// токен не отклоняет.
 func (c *Client) ValidateToken(ctx context.Context, token string) error {
-	_, _, err := c.doRequest(ctx, "GET", "/adv/v1/promotion/count", token, nil)
-	return err
+	if _, _, err := c.doRequest(ctx, "GET", "/adv/v1/promotion/count", token, nil); err != nil {
+		return err
+	}
+	resp, _, err := c.doContentRequest(ctx, http.MethodGet, "/ping", token, nil)
+	if contentAccessDenied(resp) {
+		return fmt.Errorf("%w (%d on content-api /ping)", ErrNoContentAccess, resp.StatusCode)
+	}
+	if err != nil {
+		c.logger.Warn().Err(err).Msg("WB content-api ping failed; content access not verified")
+	}
+	return nil
 }
 
 // limiterForToken returns a per-token rate limiter, creating one if it doesn't exist.
@@ -274,6 +292,15 @@ func (c *Client) campaignProductLimiterForToken(token string) *rate.Limiter {
 	}
 	lim := rate.NewLimiter(rate.Every(time.Second), 1)
 	c.campaignProductLimiters.Set(token, lim)
+	return lim
+}
+
+func (c *Client) budgetLimiterForToken(token string) *rate.Limiter {
+	if lim, ok := c.budgetLimiters.Get(token); ok {
+		return lim
+	}
+	lim := rate.NewLimiter(rate.Every(3*time.Second), 1)
+	c.budgetLimiters.Set(token, lim)
 	return lim
 }
 

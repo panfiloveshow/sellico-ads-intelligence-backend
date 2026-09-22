@@ -793,7 +793,8 @@ func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, c
 			[]OzonBidInput{{SKU: proposal.Target.SKU, BidRub: roundRub(*proposal.NewValue)}},
 			domain.BidSourceAI, reason)
 		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryBidWrite, 1)
-		return "", err
+		// Исчерпанный лимит Ozon — отложенное действие, а не провал.
+		return ozonQuotaVerdict(err)
 	case domain.AIActionBudgetChange:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
 		value := int64(*proposal.NewValue)
@@ -803,9 +804,9 @@ func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, c
 		}
 		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryBudgetWrite, 1)
 		if weekly {
-			return "", s.actions.UpdateBudget(ctx, workspaceID, uuidFromPgtype(campaign.ID), nil, &value)
+			return ozonQuotaVerdict(s.actions.UpdateBudget(ctx, workspaceID, uuidFromPgtype(campaign.ID), nil, &value))
 		}
-		return "", s.actions.UpdateBudget(ctx, workspaceID, uuidFromPgtype(campaign.ID), &value, nil)
+		return ozonQuotaVerdict(s.actions.UpdateBudget(ctx, workspaceID, uuidFromPgtype(campaign.ID), &value, nil))
 	case domain.AIActionCampaignPause:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
 		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryCampaignWrite, 1)

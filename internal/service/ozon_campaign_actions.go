@@ -204,7 +204,8 @@ func (s *OzonCampaignActionsService) SetCampaignStateWithSource(ctx context.Cont
 }
 
 // UpdateBudget patches daily/weekly budgets (whole rubles) on Ozon and
-// mirrors them locally.
+// mirrors them locally. Дневная сумма у кампаний с недельным бюджетом уходит
+// в Ozon недельной ×7 (см. ozonBudgetPatch).
 func (s *OzonCampaignActionsService) UpdateBudget(ctx context.Context, workspaceID, campaignID uuid.UUID, dailyRub, weeklyRub *int64) error {
 	if dailyRub == nil && weeklyRub == nil {
 		return apperror.New(apperror.ErrValidation, "at least one of daily_budget_rub or weekly_budget_rub is required")
@@ -216,20 +217,36 @@ func (s *OzonCampaignActionsService) UpdateBudget(ctx context.Context, workspace
 	if err != nil {
 		return err
 	}
-	if err := s.perfClient.UpdateCampaign(ctx, creds, campaign.OzonCampaignID, ozon.CampaignPatch{
-		DailyBudgetRub:  dailyRub,
-		WeeklyBudgetRub: weeklyRub,
-	}); err != nil {
+	patch := ozonBudgetPatch(campaign, dailyRub, weeklyRub)
+	if err := s.perfClient.UpdateCampaign(ctx, creds, campaign.OzonCampaignID, patch); err != nil {
 		return fmt.Errorf("ozon campaign budget update: %w", err)
 	}
 	if mirrorErr := s.queries.UpdateOzonCampaignBudgets(ctx, sqlcgen.UpdateOzonCampaignBudgetsParams{
 		ID:              campaign.ID,
-		DailyBudgetRub:  int64PtrToPgInt8(dailyRub),
-		WeeklyBudgetRub: int64PtrToPgInt8(weeklyRub),
+		DailyBudgetRub:  int64PtrToPgInt8(patch.DailyBudgetRub),
+		WeeklyBudgetRub: int64PtrToPgInt8(patch.WeeklyBudgetRub),
 	}); mirrorErr != nil {
 		s.logger.Warn().Err(mirrorErr).Str("campaign_id", campaignID.String()).Msg("failed to mirror ozon campaign budgets")
 	}
 	return nil
+}
+
+// ozonBudgetPatch переводит запись бюджета на weeklyBudget: dailyBudget в
+// PATCH /api/client/campaign/{id} устарел 22.05.2026. Недельная сумма из запроса
+// главнее, дневная без недельной пересчитывается ×7. Исключение — кампания,
+// созданная с дневным бюджетом (в зеркале дневной есть, недельного нет): тип
+// бюджета после создания сменить нельзя, запрос уходит как есть.
+func ozonBudgetPatch(campaign sqlcgen.OzonCampaign, dailyRub, weeklyRub *int64) ozon.CampaignPatch {
+	legacyDaily := campaign.DailyBudgetRub.Valid && campaign.DailyBudgetRub.Int64 > 0 &&
+		!(campaign.WeeklyBudgetRub.Valid && campaign.WeeklyBudgetRub.Int64 > 0)
+	if legacyDaily {
+		return ozon.CampaignPatch{DailyBudgetRub: dailyRub, WeeklyBudgetRub: weeklyRub}
+	}
+	if weeklyRub != nil {
+		return ozon.CampaignPatch{WeeklyBudgetRub: weeklyRub}
+	}
+	weekly := *dailyRub * 7
+	return ozon.CampaignPatch{WeeklyBudgetRub: &weekly}
 }
 
 // --- manual per-SKU bids ---

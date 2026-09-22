@@ -393,6 +393,40 @@ func TestGetAnalyticsSalesDaily_OffsetPaginationAndSkips(t *testing.T) {
 	assert.Equal(t, int64(2000), out[analyticsPageSize].SKU)
 }
 
+// С 16.09.2026: без Premium — только revenue/ordered_units и sku/day, limit
+// максимум 1000; 429 (1 в минуту / 50 в сутки) не повторяется, 5xx — да.
+func TestGetAnalyticsSalesDaily_FreeTierContractAndNo429Retry(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Metrics   []string `json:"metrics"`
+			Dimension []string `json:"dimension"`
+			Limit     int      `json:"limit"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.Equal(t, []string{"ordered_units", "revenue"}, req.Metrics)
+		assert.Equal(t, []string{"sku", "day"}, req.Dimension)
+		assert.Equal(t, 1000, req.Limit)
+		switch atomic.AddInt32(&calls, 1) {
+		case 1:
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestSellerClient(srv.URL)
+	from := time.Now().UTC().AddDate(0, 0, -14)
+	_, err := c.GetAnalyticsSalesDaily(context.Background(), testCreds, from, from.AddDate(0, 0, 14))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "отложена до следующего окна синка")
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+	assert.EqualValues(t, 2, atomic.LoadInt32(&calls), "5xx повторяется один раз, 429 — нет")
+}
+
 // --- ListPostings ---
 
 func TestListPostings_MergesFBOAndFBS(t *testing.T) {

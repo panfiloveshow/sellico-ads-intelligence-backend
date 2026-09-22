@@ -34,6 +34,9 @@ const (
 	searchPromoPageSize = 100
 	// searchPromoMaxPages bounds pagination defensively (100 * 500 = 50k SKUs).
 	searchPromoMaxPages = 500
+	// productBidsMax — максимум товаров в одном изменении ставок (раздел «Лимиты
+	// на запросы»); всё, что можно, пишется одним запросом — лимит считает запросы.
+	productBidsMax = 10000
 )
 
 // ActivateCampaign starts a campaign: POST /api/client/campaign/{id}/activate.
@@ -49,7 +52,10 @@ func (c *PerfClient) DeactivateCampaign(ctx context.Context, creds Credentials, 
 }
 
 // UpdateCampaign patches campaign budgets/dates: PATCH /api/client/campaign/{id}.
-// Only non-nil patch fields are sent.
+// Only non-nil patch fields are sent. dailyBudget устарел 22.05.2026 — его
+// передаёт только кампания, созданная с дневным бюджетом (тип бюджета после
+// создания не меняется), остальные — weeklyBudget.
+// Лимит Ozon: изменение бюджета — 100 в час и 500 в сутки на аккаунт.
 func (c *PerfClient) UpdateCampaign(ctx context.Context, creds Credentials, campaignID int64, patch CampaignPatch) error {
 	body := map[string]any{}
 	if patch.DailyBudgetRub != nil {
@@ -67,6 +73,12 @@ func (c *PerfClient) UpdateCampaign(ctx context.Context, creds Credentials, camp
 	if len(body) == 0 {
 		return fmt.Errorf("ozon perf: empty campaign patch")
 	}
+	if patch.DailyBudgetRub != nil || patch.WeeklyBudgetRub != nil {
+		if err := c.quota.reserve(creds.PerfClientID, QuotaBudgetWrite, time.Now()); err != nil {
+			return err
+		}
+		ctx = withPerfQuota(ctx, QuotaBudgetWrite)
+	}
 	_, err := c.doJSON(ctx, creds, http.MethodPatch, fmt.Sprintf("/api/client/campaign/%d", campaignID), nil, body)
 	return err
 }
@@ -74,9 +86,14 @@ func (c *PerfClient) UpdateCampaign(ctx context.Context, creds Credentials, camp
 // SetCampaignProductBids writes per-SKU bids: PUT /api/client/campaign/{id}/products.
 // Field casing mirrors the phase-1 GET .../v2/products read shape (sku + bid,
 // bid as a micro-ruble string); Ozon's uint64 SKUs are sent as strings.
+// Лимит Ozon: 500 изменений в час и 6000 в сутки на аккаунт, до 10 000 товаров
+// в одном запросе — все ставки кампании уходят одним запросом.
 func (c *PerfClient) SetCampaignProductBids(ctx context.Context, creds Credentials, campaignID int64, bids []ProductBid) error {
 	if len(bids) == 0 {
 		return fmt.Errorf("ozon perf: no bids to set")
+	}
+	if len(bids) > productBidsMax {
+		return fmt.Errorf("ozon perf: at most %d bids per request, got %d", productBidsMax, len(bids))
 	}
 	type wireBid struct {
 		SKU       string `json:"sku"`
@@ -96,7 +113,10 @@ func (c *PerfClient) SetCampaignProductBids(ctx context.Context, creds Credentia
 		}
 		payload.Bids = append(payload.Bids, wb)
 	}
-	_, err := c.doJSON(ctx, creds, http.MethodPut, fmt.Sprintf("/api/client/campaign/%d/products", campaignID), nil, payload)
+	if err := c.quota.reserve(creds.PerfClientID, QuotaBidWrite, time.Now()); err != nil {
+		return err
+	}
+	_, err := c.doJSON(withPerfQuota(ctx, QuotaBidWrite), creds, http.MethodPut, fmt.Sprintf("/api/client/campaign/%d/products", campaignID), nil, payload)
 	return err
 }
 
@@ -326,6 +346,10 @@ func (c *PerfClient) setSearchPromoEnabled(ctx context.Context, creds Credential
 
 // SetSearchPromoBids writes fixed CPO bids (rubles):
 // POST /api/client/campaign/search_promo/v2/bids/set.
+// Метод устарел 26.02.2025, дата отключения не названа. Замены для ставки в
+// рублях по SKU в спеке нет: Ozon перешёл на фиксированные ставки
+// (get_cpo_min_bids + product/enable) и ставку на весь кабинет
+// (all_sku_promo/set_bid) — они уже поддержаны.
 func (c *PerfClient) SetSearchPromoBids(ctx context.Context, creds Credentials, bids []CPOBid) error {
 	if len(bids) == 0 {
 		return fmt.Errorf("ozon perf: no cpo bids to set")
@@ -526,6 +550,16 @@ func (c *PerfClient) doJSON(ctx context.Context, creds Credentials, method, path
 				RetryAfter: retryAfter,
 				URL:        fullURL,
 				Message:    fmt.Sprintf("ozon perf: rate limited (429) on %s %s", method, path),
+			}
+			// Запись с часовым/суточным лимитом: Ozon отвечает ошибкой до сброса
+			// счётчика, повтор только тратит время. Без Retry-After ждём начала
+			// следующего часа — часовой лимит исчерпывается первым.
+			if category := perfQuotaCategory(ctx); category != "" {
+				until := time.Now().Truncate(time.Hour).Add(time.Hour)
+				if resp.Header.Get("Retry-After") != "" {
+					until = time.Now().Add(retryAfter)
+				}
+				return nil, c.quota.block(creds.PerfClientID, category, until)
 			}
 			if attempt < maxRetries {
 				if serr := sleepWithContext(ctx, retryAfter); serr != nil {

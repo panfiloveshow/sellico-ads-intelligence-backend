@@ -490,6 +490,13 @@ func (s *OzonStrategyService) runCampaign(
 		}
 	}
 	if writeErr != nil {
+		// Исчерпанный лимит Ozon — запись откладывается до следующего прогона,
+		// это не провал стратегии (строки выше уже помечены с причиной).
+		var quotaErr *ozon.QuotaError
+		if errors.As(writeErr, &quotaErr) {
+			logger.Warn().Str("reason", quotaErr.Error()).Msg("ozon strategy bid write deferred: ozon api quota")
+			return 0, nil
+		}
 		return 0, fmt.Errorf("set campaign product bids: %w", writeErr)
 	}
 

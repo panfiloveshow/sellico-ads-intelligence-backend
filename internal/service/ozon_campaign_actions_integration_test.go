@@ -75,6 +75,13 @@ func TestOzonActions_UpdateBudget(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 7000, fresh.WeeklyBudgetRub.Int64)
 	})
+	t.Run("daily sent as weekly x7", func(t *testing.T) {
+		daily := int64(2000)
+		require.NoError(t, svc.UpdateBudget(ctx, fx.workspaceID, campaignID, &daily, nil))
+		fresh, err := fx.db.Queries.GetOzonCampaignByID(ctx, uuidToPgtype(campaignID))
+		require.NoError(t, err)
+		assert.EqualValues(t, 14000, fresh.WeeklyBudgetRub.Int64)
+	})
 }
 
 func TestOzonActions_SetProductBids(t *testing.T) {

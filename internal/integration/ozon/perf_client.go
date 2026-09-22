@@ -44,6 +44,8 @@ type PerfClient struct {
 	httpClient *http.Client
 	logger     zerolog.Logger
 	limiters   *limiterPool
+	// quota — часовые/суточные лимиты Ozon на запись ставок и бюджетов.
+	quota perfQuotaTracker
 
 	tokenMu     sync.Mutex
 	tokens      map[string]cachedToken

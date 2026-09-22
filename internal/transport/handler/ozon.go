@@ -321,7 +321,8 @@ func (h *OzonHandler) DeactivateCampaign(w http.ResponseWriter, r *http.Request)
 	dto.WriteJSON(w, http.StatusOK, map[string]string{"status": "deactivated"})
 }
 
-// UpdateBudget handles PATCH /ozon/campaigns/{id}/budget.
+// UpdateBudget handles PATCH /ozon/campaigns/{id}/budget. daily_budget_rub
+// устарел: у кампаний с недельным бюджетом он уходит в Ozon weeklyBudget ×7.
 func (h *OzonHandler) UpdateBudget(w http.ResponseWriter, r *http.Request) {
 	if !h.requireActions(w) {
 		return

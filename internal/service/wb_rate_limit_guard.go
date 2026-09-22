@@ -21,6 +21,7 @@ const (
 	wbEndpointFullstats        = "adv_fullstats"
 	wbEndpointNormQueryStats   = "adv_normquery_stats"
 	wbEndpointBudget           = "adv_budget"
+	wbEndpointBudgetRead       = "adv_budget_read"
 	wbEndpointAdFinance        = "adv_finance"
 	wbEndpointAnalyticsFunnel  = "analytics_sales_funnel"
 	wbEndpointTariffs          = "wb_tariffs"
@@ -32,6 +33,11 @@ const (
 	wbEndpointPricesQuarantine = "prices_quarantine"
 	wbEndpointPricesShared     = "prices_shared"
 )
+
+// wbBudgetReadBaseInterval — интервал POST /api/advert/v2/budget для Базового
+// токена (4 запроса в час). Отдельный ключ от пополнения бюджета, чтобы пауза
+// чтения остатков не блокировала ручное пополнение.
+const wbBudgetReadBaseInterval = 15 * time.Minute
 
 func wbRateLimitStorageKey(endpoint string) string {
 	switch endpoint {
@@ -48,6 +54,8 @@ func wbEndpointFallbackDelay(endpoint string) time.Duration {
 		return 20 * time.Second
 	case wbEndpointNormQueryStats:
 		return 7 * time.Second
+	case wbEndpointBudgetRead:
+		return wbBudgetReadBaseInterval
 	case wbEndpointCampaignProducts:
 		// PATCH /adv/v0/auction/nms: Personal/Service limit is one request
 		// per second. Base access is much stricter and will be captured from
@@ -127,7 +135,11 @@ func wbRateLimitWindowFromError(endpoint string, err error) (time.Time, int) {
 	delay := wbEndpointFallbackDelay(endpoint)
 	var apiErr *wb.APIError
 	if errors.As(err, &apiErr) && apiErr.StatusCode == 429 && apiErr.RetryAfter > 0 {
-		delay = apiErr.RetryAfter
+		// Остатки бюджетов: у Базового токена 1 запрос в 15 минут, а Retry-After
+		// без заголовка — 60 с. Он может удлинить паузу, но не сократить её.
+		if endpoint != wbEndpointBudgetRead || apiErr.RetryAfter > delay {
+			delay = apiErr.RetryAfter
+		}
 	}
 	next := time.Now().UTC().Add(delay)
 	return next, int(math.Ceil(delay.Seconds()))

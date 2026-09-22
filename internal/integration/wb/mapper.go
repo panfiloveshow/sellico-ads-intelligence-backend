@@ -251,30 +251,6 @@ func nonZeroFloat64Ptr(value float64) *float64 {
 	return &value
 }
 
-// MapSalesFunnelDTO converts a WBSalesFunnelDTO to a domain CampaignStat,
-// populating the Orders and Revenue fields. Other stat fields (Impressions,
-// Clicks, Spend) are left at zero — they come from the campaign stats import.
-func MapSalesFunnelDTO(dto WBSalesFunnelDTO, campaignID uuid.UUID) (domain.CampaignStat, error) {
-	date, err := parseWBDate(dto.Date)
-	if err != nil {
-		return domain.CampaignStat{}, fmt.Errorf("parse sales funnel date %q: %w", dto.Date, err)
-	}
-
-	now := time.Now()
-	orders := dto.Orders
-	revenue := roundRubles(dto.OrdersSum)
-
-	return domain.CampaignStat{
-		ID:         uuid.New(),
-		CampaignID: campaignID,
-		Date:       date,
-		Orders:     &orders,
-		Revenue:    &revenue,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}, nil
-}
-
 func parseWBDate(value string) (time.Time, error) {
 	if value == "" {
 		return time.Time{}, fmt.Errorf("empty date")

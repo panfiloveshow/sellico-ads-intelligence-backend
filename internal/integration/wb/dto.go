@@ -141,24 +141,6 @@ type WBProductDTO struct {
 	Price      *int64 `json:"price,omitempty"`
 }
 
-// WBSalesFunnelDTO represents Sales Funnel data from the WB Analytics API.
-type WBSalesFunnelDTO struct {
-	NmID      int64   `json:"nmId"`
-	Date      string  `json:"date"`
-	Views     int64   `json:"views"`
-	AddToCart int64   `json:"addToCart"`
-	Orders    int64   `json:"orders"`
-	OrdersSum float64 `json:"ordersSum"`
-}
-
-// WBSellerAnalyticsDTO represents a row from the Seller Analytics CSV report.
-type WBSellerAnalyticsDTO struct {
-	Query          string  `json:"query"`
-	MedianPosition float64 `json:"medianPosition"`
-	Frequency      int64   `json:"frequency"`
-	Date           string  `json:"date"`
-}
-
 // SalesFunnelParams holds parameters for a Sales Funnel API request.
 type SalesFunnelParams struct {
 	DateFrom string  `json:"dateFrom"`

@@ -840,32 +840,17 @@ func TestListProducts_Success(t *testing.T) {
 	assert.Equal(t, int64(129900), *result[0].Price)
 }
 
-func TestGetSalesFunnel_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/adv/v2/analytics/sales-funnel", r.URL.Path)
-		assert.Equal(t, http.MethodPost, r.Method)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"nmId":1,"date":"2025-01-01","views":50,"addToCart":10,"orders":5,"ordersSum":1000.0}]`))
-	}))
-	defer server.Close()
-
-	client := newTestClient(server.URL)
-	result, err := client.GetSalesFunnel(context.Background(), "token", SalesFunnelParams{
-		DateFrom: "2025-01-01",
-		DateTo:   "2025-01-31",
-		NmIDs:    []int64{1},
-	})
-
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, int64(5), result[0].Orders)
-	assert.Equal(t, 1000.0, result[0].OrdersSum)
-}
-
 func TestGetSalesFunnelProductsV3_MapsOpenCartAndOrderCounts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/analytics/v3/sales-funnel/products", r.URL.Path)
 		assert.Equal(t, http.MethodPost, r.Method)
+		// Контракт ItemsRequest: selectedPeriod.{start,end} и nmIds (не begin/nmIDs).
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, map[string]any{"start": "2026-05-21", "end": "2026-05-28"}, body["selectedPeriod"])
+		assert.Equal(t, []any{float64(268913787)}, body["nmIds"])
+		assert.Equal(t, float64(1000), body["limit"])
+		assert.NotContains(t, body, "nmIDs")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"data":{"products":[{"product":{"nmId":268913787},"statistic":{"selected":{"openCount":45,"cartCount":34,"orderCount":19}}}]}}`))
 	}))
@@ -884,54 +869,4 @@ func TestGetSalesFunnelProductsV3_MapsOpenCartAndOrderCounts(t *testing.T) {
 	assert.Equal(t, int64(45), result[0].OpenCount)
 	assert.Equal(t, int64(34), result[0].CartCount)
 	assert.Equal(t, int64(19), result[0].OrderCount)
-}
-
-func TestGetSellerAnalytics_Success(t *testing.T) {
-	csvData := "query,medianPosition,frequency,date\nshoes,3.5,1200,2025-01-01\nboots,7.2,800,2025-01-01\n"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Contains(t, r.URL.Path, "/adv/v2/analytics/seller")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(csvData))
-	}))
-	defer server.Close()
-
-	client := newTestClient(server.URL)
-	result, err := client.GetSellerAnalytics(context.Background(), "token", "2025-01-01", "2025-01-31")
-
-	require.NoError(t, err)
-	require.Len(t, result, 2)
-	assert.Equal(t, "shoes", result[0].Query)
-	assert.Equal(t, 3.5, result[0].MedianPosition)
-	assert.Equal(t, int64(1200), result[0].Frequency)
-	assert.Equal(t, "boots", result[1].Query)
-}
-
-func TestGetSellerAnalytics_MissingColumn(t *testing.T) {
-	csvData := "query,frequency,date\nshoes,1200,2025-01-01\n"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(csvData))
-	}))
-	defer server.Close()
-
-	client := newTestClient(server.URL)
-	_, err := client.GetSellerAnalytics(context.Background(), "token", "2025-01-01", "2025-01-31")
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing CSV column: medianPosition")
-}
-
-func TestGetSellerAnalytics_EmptyCSV(t *testing.T) {
-	csvData := "query,medianPosition,frequency,date\n"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(csvData))
-	}))
-	defer server.Close()
-
-	client := newTestClient(server.URL)
-	result, err := client.GetSellerAnalytics(context.Background(), "token", "2025-01-01", "2025-01-31")
-
-	require.NoError(t, err)
-	assert.Empty(t, result)
 }

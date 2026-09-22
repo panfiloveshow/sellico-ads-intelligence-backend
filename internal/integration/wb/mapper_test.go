@@ -339,53 +339,6 @@ func TestMapProductDTO_EmptyFields(t *testing.T) {
 	assert.Equal(t, "", *p.Brand)
 }
 
-// ---------------------------------------------------------------------------
-// MapSalesFunnelDTO
-// ---------------------------------------------------------------------------
-
-func TestMapSalesFunnelDTO_Success(t *testing.T) {
-	campID := uuid.New()
-	dto := WBSalesFunnelDTO{
-		NmID:      100,
-		Date:      "2026-03-18",
-		Views:     2000,
-		AddToCart: 150,
-		Orders:    25,
-		OrdersSum: 75000.50,
-	}
-
-	stat, err := MapSalesFunnelDTO(dto, campID)
-	require.NoError(t, err)
-
-	assert.NotEqual(t, uuid.Nil, stat.ID)
-	assert.Equal(t, campID, stat.CampaignID)
-	assert.Equal(t, "2026-03-18", stat.Date.Format("2006-01-02"))
-	// Impressions/Clicks/Spend should be zero — they come from campaign stats import
-	assert.Equal(t, int64(0), stat.Impressions)
-	assert.Equal(t, int64(0), stat.Clicks)
-	assert.Equal(t, int64(0), stat.Spend)
-	require.NotNil(t, stat.Orders)
-	assert.Equal(t, int64(25), *stat.Orders)
-	require.NotNil(t, stat.Revenue)
-	assert.Equal(t, int64(75001), *stat.Revenue)
-}
-
-func TestMapSalesFunnelDTO_InvalidDate(t *testing.T) {
-	_, err := MapSalesFunnelDTO(WBSalesFunnelDTO{Date: "2026/03/18"}, uuid.New())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse sales funnel date")
-}
-
-func TestMapSalesFunnelDTO_ZeroOrders(t *testing.T) {
-	dto := WBSalesFunnelDTO{Date: "2026-01-01", Orders: 0, OrdersSum: 0}
-	stat, err := MapSalesFunnelDTO(dto, uuid.New())
-	require.NoError(t, err)
-	require.NotNil(t, stat.Orders)
-	assert.Equal(t, int64(0), *stat.Orders)
-	require.NotNil(t, stat.Revenue)
-	assert.Equal(t, int64(0), *stat.Revenue)
-}
-
 func int64Ptr(value int64) *int64 {
 	return &value
 }

@@ -2,6 +2,7 @@ package wb
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +10,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Токен только с «Продвижением»: реклама отвечает, content-api — 401/403.
+// Подключение отклоняется понятной ошибкой, синк карточек даёт ErrNoContentAccess.
+func TestContentAccess_PromotionOnlyToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/adv/v1/promotion/count":
+			w.Write([]byte(`{"adverts":[],"all":0}`))
+		case "/ping":
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/content/v2/get/cards/list":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := newTestClient(server.URL)
+
+	err := client.ValidateToken(context.Background(), "tok")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoContentAccess))
+	assert.Contains(t, err.Error(), "«Контент»")
+
+	_, err = client.ListProducts(context.Background(), "tok")
+	assert.True(t, errors.Is(err, ErrNoContentAccess))
+}
+
+func TestValidateToken_ChecksContentPing(t *testing.T) {
+	var pinged bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ping" {
+			pinged = true
+			w.Write([]byte(`{"TS":"2026-09-22T10:00:00+03:00","Status":"OK"}`))
+			return
+		}
+		assert.Equal(t, "/adv/v1/promotion/count", r.URL.Path)
+		w.Write([]byte(`{"adverts":[],"all":0}`))
+	}))
+	defer server.Close()
+
+	require.NoError(t, newTestClient(server.URL).ValidateToken(context.Background(), "tok"))
+	assert.True(t, pinged)
+}
 
 // WB content API returns product photos under "photos" ([{big,c246x328,...}]),
 // not "mediaFiles". This pins that ImageURL is populated from photos.

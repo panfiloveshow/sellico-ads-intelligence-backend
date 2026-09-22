@@ -4,11 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 )
+
+// ErrNoContentAccess — у токена нет категории «Контент». С 03.08.2026 (RN-543)
+// карточки товаров content/v2/get/cards/list не отдаются токену только с
+// категорией «Продвижение».
+var ErrNoContentAccess = errors.New("у токена WB нет доступа к категории «Контент»: с 03.08.2026 карточки товаров не отдаются токену только с «Продвижением» — выпустите токен с категориями «Продвижение» и «Контент»")
+
+func contentAccessDenied(resp *http.Response) bool {
+	return resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden)
+}
 
 type wbContentCardsListRequest struct {
 	Settings wbContentSettings `json:"settings"`
@@ -89,6 +99,9 @@ func (c *Client) ListProducts(ctx context.Context, token string) ([]WBProductDTO
 		}
 
 		resp, body, err := c.doContentRequest(ctx, http.MethodPost, contentPath, token, bytes.NewReader(requestBody))
+		if contentAccessDenied(resp) {
+			return allProducts, fmt.Errorf("%w (%d on %s)", ErrNoContentAccess, resp.StatusCode, contentPath)
+		}
 		if err != nil {
 			return allProducts, err
 		}

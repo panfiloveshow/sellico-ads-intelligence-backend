@@ -15,11 +15,15 @@ type WBBalanceDTO struct {
 	Bonus   float64 `json:"bonus"`   // Бонусы
 }
 
-// WBBudgetDTO represents a campaign's budget.
-type WBBudgetDTO struct {
-	Cash    float64 `json:"cash"`    // Денежные средства (руб)
-	Netting float64 `json:"netting"` // Взаимозачёт
-	Total   float64 `json:"total"`   // Итого
+// CampaignBudgetsBatch — максимум advertIds в одном POST /api/advert/v2/budget
+// (V2BudgetRequest.advertIds maxItems).
+const CampaignBudgetsBatch = 50
+
+// WBCampaignBudgetDTO — остаток бюджета кампании (V1BudgetAdvert).
+type WBCampaignBudgetDTO struct {
+	AdvertID int64  `json:"advertId"`
+	Currency string `json:"currency"` // ISO 4217, валюта аккаунта продавца
+	Total    int64  `json:"total"`    // в базовых единицах валюты (рубли)
 }
 
 type WBFinanceDocumentDTO struct {
@@ -46,20 +50,38 @@ func (c *Client) GetBalance(ctx context.Context, token string) (*WBBalanceDTO, e
 	return &result, nil
 }
 
-// GetCampaignBudget fetches the budget for a specific campaign.
-// WB API: GET /adv/v1/budget?id={campaignID}
-func (c *Client) GetCampaignBudget(ctx context.Context, token string, wbCampaignID int64) (*WBBudgetDTO, error) {
-	path := fmt.Sprintf("/adv/v1/budget?id=%d", wbCampaignID)
-	_, body, err := c.doRequest(ctx, http.MethodGet, path, token, nil)
-	if err != nil {
-		return nil, err
+// GetCampaignBudgets fetches remaining budgets of campaigns (statuses 4/9/11),
+// пачками по CampaignBudgetsBatch.
+// WB API: POST /api/advert/v2/budget — замена GET /adv/v1/budget (отключается 16.11.2026).
+//
+// Лимит метода: Базовый токен — 4 запроса в час (1 в 15 мин), Персональный и
+// Сервисный — 20 в минуту (интервал 3 с). Пачки идут не чаще 1 в 3 с, 429 не
+// повторяется: ждать 15 минут внутри синка бессмысленно, паузу ставит
+// вызывающий. При ошибке возвращается уже полученное и ошибка.
+func (c *Client) GetCampaignBudgets(ctx context.Context, token string, wbCampaignIDs []int64) ([]WBCampaignBudgetDTO, error) {
+	var out []WBCampaignBudgetDTO
+	for start := 0; start < len(wbCampaignIDs); start += CampaignBudgetsBatch {
+		end := min(start+CampaignBudgetsBatch, len(wbCampaignIDs))
+		if err := c.budgetLimiterForToken(token).Wait(ctx); err != nil {
+			return out, fmt.Errorf("budget rate limiter wait: %w", err)
+		}
+		payload, err := json.Marshal(map[string][]int64{"advertIds": wbCampaignIDs[start:end]})
+		if err != nil {
+			return out, fmt.Errorf("marshal budget request: %w", err)
+		}
+		_, body, err := c.doRequest(withoutRateLimitRetry(ctx), http.MethodPost, "/api/advert/v2/budget", token, bytes.NewReader(payload))
+		if err != nil {
+			return out, err
+		}
+		var resp struct {
+			Adverts []WBCampaignBudgetDTO `json:"adverts"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return out, fmt.Errorf("unmarshal budget: %w", err)
+		}
+		out = append(out, resp.Adverts...)
 	}
-
-	var result WBBudgetDTO
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal budget: %w", err)
-	}
-	return &result, nil
+	return out, nil
 }
 
 // DepositCampaignBudget adds funds to a campaign's budget.

@@ -207,8 +207,9 @@ type CampaignProduct struct {
 // CampaignPatch carries the mutable campaign fields for
 // PATCH /api/client/campaign/{campaignId}. Nil fields are omitted. Budgets
 // are whole rubles and converted to micro-ruble strings at the wire boundary.
-// Note: dailyBudget is deprecated by Ozon (2026-05-22) in favor of
-// weeklyBudget but is still accepted.
+// dailyBudget устарел 22.05.2026 (weeklyBudget вместо него), а сменить тип
+// бюджета после создания кампании нельзя: DailyBudgetRub — только для
+// кампаний, созданных с дневным бюджетом.
 type CampaignPatch struct {
 	DailyBudgetRub  *int64
 	WeeklyBudgetRub *int64

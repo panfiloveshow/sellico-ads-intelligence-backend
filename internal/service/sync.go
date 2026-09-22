@@ -26,7 +26,6 @@ const (
 	campaignBudgetFetchTimeout = 10 * time.Second
 	businessReportFetchTimeout = 25 * time.Second
 	wbAdvertStatsRequestDelay  = 20 * time.Second
-	maxCampaignBudgetFailures  = 3
 	// Budgets are a best-effort secondary signal. Cap the whole budget phase so a
 	// slow WB budget endpoint on large accounts (hundreds of campaigns) can't eat
 	// the entire 60-minute sync window and starve the primary data (stats/phrases/
@@ -52,7 +51,7 @@ type WBSyncClient interface {
 	ListCampaigns(ctx context.Context, token string) ([]wb.WBCampaignDTO, error)
 	GetCampaignStats(ctx context.Context, token string, campaignIDs []int, dateFrom, dateTo string) ([]wb.WBCampaignStatDTO, error)
 	GetBalance(ctx context.Context, token string) (*wb.WBBalanceDTO, error)
-	GetCampaignBudget(ctx context.Context, token string, wbCampaignID int64) (*wb.WBBudgetDTO, error)
+	GetCampaignBudgets(ctx context.Context, token string, wbCampaignIDs []int64) ([]wb.WBCampaignBudgetDTO, error)
 	GetUPDDocuments(ctx context.Context, token string) ([]wb.WBFinanceDocumentDTO, error)
 	GetPayments(ctx context.Context, token string) ([]wb.WBFinanceDocumentDTO, error)
 	GetSupplierOrders(ctx context.Context, token, dateFrom string, flag int) ([]wb.WBOrderReportDTO, error)
@@ -763,6 +762,7 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 
 		// Collect active WB IDs for stale cleanup
 		activeWBIDs := make([]int64, 0, len(campaigns))
+		budgetRows := make([]sqlcgen.Campaign, 0, len(campaigns))
 		for _, campaignDTO := range campaigns {
 			campaign := wb.MapCampaignDTO(campaignDTO, workspaceID, cabinet.cabinet.ID)
 			if campaignDTO.PartialError != "" {
@@ -796,15 +796,14 @@ func (s *SyncService) SyncCampaigns(ctx context.Context, workspaceID uuid.UUID) 
 			} else if linked > 0 {
 				s.logger.Debug().Int("links", linked).Int64("campaign_id", campaign.WBCampaignID).Msg("campaign products linked")
 			}
-			if campaign.Status == "active" || campaign.Status == "paused" || campaign.Status == "ready" {
-				if budgetErr := s.syncCampaignBudget(ctx, cabinet.token, row); budgetErr != nil {
-					summary.addIssue("campaign_budgets.fetch", fmt.Sprintf("%d", campaign.WBCampaignID), "budget: %v", budgetErr)
-				} else {
-					summary.CampaignBudgets++
-				}
-			}
+			budgetRows = append(budgetRows, row)
 			summary.Campaigns++
 		}
+
+		// Остатки бюджетов — одним пакетным запросом после списка, а не по кампании.
+		budgetSummary, _ := s.syncCampaignBudgetsForCabinet(ctx, cabinet.cabinet.ID, cabinet.token, budgetRows)
+		budgetSummary.Cabinets = 0
+		summary.merge(budgetSummary)
 
 		// Stale data cleanup: mark campaigns not returned by WB as deleted (audit fix: HIGH #8)
 		staleCount, staleErr := s.queries.MarkStaleCampaigns(ctx, uuidToPgtype(cabinet.cabinet.ID), activeWBIDs)
@@ -1067,49 +1066,76 @@ func (s *SyncService) syncCampaignBudgetsForCabinet(ctx context.Context, cabinet
 	}
 
 	summary := SyncSummary{Cabinets: 1}
-	if s.guardWBEndpoint(ctx, &summary, cabinetID, wbEndpointBudget, "campaign_budgets.rate_limit") {
+	if s.guardWBEndpoint(ctx, &summary, cabinetID, wbEndpointBudgetRead, "campaign_budgets.rate_limit") {
 		return summary, summary.Error()
 	}
 
-	phaseDeadline := time.Now().Add(campaignBudgetPhaseTimeout)
-	consecutiveTransient := 0
+	// POST /api/advert/v2/budget отдаёт остатки только кампаний в статусах
+	// 4/9/11 — готова, активна, на паузе.
+	byWBID := make(map[int64]sqlcgen.Campaign, len(campaigns))
+	ids := make([]int64, 0, len(campaigns))
 	for _, campaign := range campaigns {
 		if campaign.Status != "active" && campaign.Status != "paused" && campaign.Status != "ready" {
 			continue
 		}
-		// Best-effort time cap: stop cleanly (no issue → sync stays "ok", not
-		// "partial") once the budget phase has used its share of the window.
-		if time.Now().After(phaseDeadline) {
-			break
-		}
-
-		err := s.syncCampaignBudget(ctx, token, campaign)
-		if err == nil {
-			consecutiveTransient = 0
-			summary.CampaignBudgets++
+		if _, dup := byWBID[campaign.WbCampaignID]; dup {
 			continue
 		}
+		byWBID[campaign.WbCampaignID] = campaign
+		ids = append(ids, campaign.WbCampaignID)
+	}
+	if len(ids) == 0 {
+		return summary, nil
+	}
 
-		s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointBudget, err)
-		s.markSummaryRateLimitFromError(&summary, wbEndpointBudget, err)
-
-		// Access/rate-limit problems are real and actionable — surface them and stop
-		// the whole phase (retrying every campaign would only deepen the rate limit).
-		if campaignBudgetAccessFailure(err) {
-			summary.addIssue("campaign_budgets.fetch", fmt.Sprintf("%d", campaign.WbCampaignID), "budget: %v", err)
-			summary.addIssue("campaign_budgets.skipped", cabinetID.String(), "stopped budget sync after WB access/limit error")
-			break
+	// Best-effort time cap: budgets must not eat the sync window.
+	budgetCtx, cancel := context.WithTimeout(ctx, campaignBudgetPhaseTimeout)
+	defer cancel()
+	budgets, err := s.wbClient.GetCampaignBudgets(budgetCtx, token, rotateCampaignBudgetIDs(ids, time.Now()))
+	capturedAt := pgtype.Timestamptz{Time: time.Now().UTC().Truncate(time.Minute), Valid: true}
+	for _, budget := range budgets {
+		campaign, ok := byWBID[budget.AdvertID]
+		if !ok {
+			continue
 		}
-
-		// Transient per-campaign failures (slow endpoint timeout, one-off 4xx) are
-		// budget noise: skip silently so they don't flip the whole sync to "partial".
-		// If they pile up consecutively the budget endpoint is degraded — stop early.
-		consecutiveTransient++
-		if consecutiveTransient >= maxCampaignBudgetFailures {
-			break
+		// cash/netting у старого GET /adv/v1/budget всегда были 0 — в v2 их нет.
+		if _, upsertErr := s.queries.UpsertCampaignBudget(ctx, sqlcgen.UpsertCampaignBudgetParams{
+			CampaignID: campaign.ID,
+			Total:      rubToKopecks(float64(budget.Total)),
+			CapturedAt: capturedAt,
+		}); upsertErr != nil {
+			summary.addIssue("campaign_budgets.upsert", fmt.Sprintf("%d", budget.AdvertID), "%v", upsertErr)
+			continue
 		}
+		summary.CampaignBudgets++
+	}
+	if err == nil {
+		return summary, summary.Error()
+	}
+
+	s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointBudgetRead, err)
+	s.markSummaryRateLimitFromError(&summary, wbEndpointBudgetRead, err)
+	// Access/rate-limit problems are real and actionable — surface them. Transient
+	// failures (timeout, one-off 4xx/5xx) are budget noise: the snapshot stays from
+	// the previous run and must not flip the whole sync to "partial".
+	if campaignBudgetAccessFailure(err) {
+		summary.addIssue("campaign_budgets.fetch", cabinetID.String(), "budget: %v", err)
+	} else {
+		s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Int("fetched", len(budgets)).Int("requested", len(ids)).Msg("WB campaign budgets fetch incomplete")
 	}
 	return summary, summary.Error()
+}
+
+// rotateCampaignBudgetIDs сдвигает старт по пачкам на каждые 15 минут: Базовому
+// токену WB отдаёт остатки бюджетов 1 раз в 15 минут, и без сдвига кабинет с
+// больше чем 50 кампаниями обновлял бы всегда только первую пачку.
+func rotateCampaignBudgetIDs(ids []int64, now time.Time) []int64 {
+	batches := (len(ids) + wb.CampaignBudgetsBatch - 1) / wb.CampaignBudgetsBatch
+	if batches <= 1 {
+		return ids
+	}
+	start := int(now.Unix()/int64(wbBudgetReadBaseInterval/time.Second)) % batches * wb.CampaignBudgetsBatch
+	return append(append(make([]int64, 0, len(ids)), ids[start:]...), ids[:start]...)
 }
 
 // campaignBudgetAccessFailure reports whether a budget fetch error is an
@@ -1126,24 +1152,6 @@ func campaignBudgetAccessFailure(err error) bool {
 		strings.Contains(lower, "unauthorized") ||
 		strings.Contains(lower, "forbidden") ||
 		strings.Contains(lower, "circuit breaker")
-}
-
-func (s *SyncService) syncCampaignBudget(ctx context.Context, token string, campaign sqlcgen.Campaign) error {
-	budgetCtx, cancel := context.WithTimeout(ctx, campaignBudgetFetchTimeout)
-	defer cancel()
-
-	budget, err := s.wbClient.GetCampaignBudget(budgetCtx, token, campaign.WbCampaignID)
-	if err != nil {
-		return err
-	}
-	_, err = s.queries.UpsertCampaignBudget(ctx, sqlcgen.UpsertCampaignBudgetParams{
-		CampaignID: uuidToPgtype(uuidFromPgtype(campaign.ID)),
-		Cash:       rubToKopecks(budget.Cash),
-		Netting:    rubToKopecks(budget.Netting),
-		Total:      rubToKopecks(budget.Total),
-		CapturedAt: pgtype.Timestamptz{Time: time.Now().UTC().Truncate(time.Minute), Valid: true},
-	})
-	return err
 }
 
 func (s *SyncService) syncAdFinanceForCabinet(ctx context.Context, cabinetID uuid.UUID, token string) (SyncSummary, error) {
@@ -1282,7 +1290,8 @@ func (s *SyncService) syncSalesFunnelProductsForCabinet(ctx context.Context, wor
 	if s.guardWBEndpoint(ctx, &summary, cabinetID, wbEndpointAnalyticsFunnel, "sales_funnel_products.rate_limit") {
 		return summary, summary.Error()
 	}
-	const funnelChunkSize = 100
+	// Максимум nmIds на запрос по спеке: у Базового токена всего 2 запроса в час.
+	const funnelChunkSize = wb.SalesFunnelProductsMaxNmIDs
 	for start := 0; start < len(nmIDs); start += funnelChunkSize {
 		end := start + funnelChunkSize
 		if end > len(nmIDs) {
@@ -1297,6 +1306,9 @@ func (s *SyncService) syncSalesFunnelProductsForCabinet(ctx context.Context, wor
 			s.recordWBRateLimitFromError(ctx, cabinetID, wbEndpointAnalyticsFunnel, err)
 			s.markSummaryRateLimitFromError(&summary, wbEndpointAnalyticsFunnel, err)
 			summary.addIssue("sales_funnel_products.fetch", cabinetID.String(), "%v", err)
+			if isRateLimitIssue(err.Error()) {
+				break
+			}
 			continue
 		}
 		for _, row := range rows {
@@ -2205,12 +2217,18 @@ func (s *SyncService) syncPhrasesForCabinet(ctx context.Context, workspaceID, ca
 
 // syncProductsForCabinet syncs products only for a specific cabinet.
 func (s *SyncService) syncProductsForCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string) (SyncSummary, error) {
+	summary := SyncSummary{Cabinets: 1}
 	products, err := s.wbClient.ListProducts(ctx, token)
+	if errors.Is(err, wb.ErrNoContentAccess) {
+		// Токен без «Контента»: карточки недоступны, остальной синк идёт своим чередом.
+		s.logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("WB product cards skipped: no content access")
+		summary.addIssue("products.content_access", cabinetID.String(), "%v", err)
+		return summary, summary.Error()
+	}
 	if err != nil {
 		return SyncSummary{}, err
 	}
 
-	summary := SyncSummary{Cabinets: 1}
 	for _, productDTO := range products {
 		product := wb.MapProductDTO(productDTO, workspaceID, cabinetID)
 		if _, upsertErr := s.queries.UpsertProduct(ctx, sqlcgen.UpsertProductParams{

@@ -403,7 +403,8 @@ func (s *OzonAIManagerService) transitionReviewedDecision(ctx context.Context, r
 func (s *OzonAIManagerService) rejectReviewedDecision(ctx context.Context, row sqlcgen.AiDecision, userID uuid.UUID, from, verdict string) error {
 	// Cooldowns and quotas are temporary: keep the human proposal available
 	// instead of permanently rejecting it for trying before the next window.
-	transient := strings.HasPrefix(verdict, "cooldown active:") || strings.HasPrefix(verdict, "daily change limit reached") || strings.Contains(verdict, "дневной лимит")
+	transient := strings.HasPrefix(verdict, "cooldown active:") || strings.HasPrefix(verdict, "daily change limit reached") ||
+		strings.Contains(verdict, "дневной лимит") || isOzonQuotaVerdict(verdict)
 	status := domain.AIDecisionStatusRejectedByGuardrail
 	if transient {
 		status = domain.AIDecisionStatusProposed

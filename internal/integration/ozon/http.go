@@ -78,6 +78,20 @@ func backoffDuration(attempt int) time.Duration {
 	return d
 }
 
+type noRetryKey struct{}
+
+// withoutRetry — один запрос без повторов внутри клиента: у методов с жёсткой
+// квотой повтор только тратит лимит (analytics/data — 1 раз в минуту и 50 в
+// сутки без Premium). Повтор решает вызывающий.
+func withoutRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRetryKey{}, true)
+}
+
+func retryAllowed(ctx context.Context) bool {
+	noRetry, _ := ctx.Value(noRetryKey{}).(bool)
+	return !noRetry
+}
+
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	select {
 	case <-ctx.Done():

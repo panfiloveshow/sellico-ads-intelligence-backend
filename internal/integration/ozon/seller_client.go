@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,10 +33,14 @@ type SellerClient struct {
 	logger     zerolog.Logger
 	limiters   *limiterPool
 	// analyticsLimiters is a dedicated 1-request-per-minute budget per
-	// cabinet for POST /v1/analytics/data — Ozon's documented limit for the
+	// Client-Id for POST /v1/analytics/data — Ozon's documented limit for the
 	// method is far below the general Seller API budget.
 	analyticsLimiters *limiterPool
 }
+
+// analyticsInterval — пауза между запросами /v1/analytics/data на Client-Id:
+// «не больше 1 раза в минуту» для всех продавцов, с секундой запаса.
+const analyticsInterval = 61 * time.Second
 
 // NewSellerClient creates a Seller API client from the application config.
 func NewSellerClient(cfg *config.Config, logger zerolog.Logger) *SellerClient {
@@ -44,7 +49,7 @@ func NewSellerClient(cfg *config.Config, logger zerolog.Logger) *SellerClient {
 		httpClient:        &http.Client{Timeout: 30 * time.Second},
 		logger:            logger.With().Str("component", "ozon_seller_client").Logger(),
 		limiters:          newLimiterPool(rate.Limit(sellerRPS), sellerRPS),
-		analyticsLimiters: newLimiterPool(rate.Every(time.Minute), 1),
+		analyticsLimiters: newLimiterPool(rate.Every(analyticsInterval), 1),
 	}
 }
 
@@ -472,13 +477,23 @@ func (c *SellerClient) GetProductStocks(ctx context.Context, creds Credentials) 
 // analyticsPageSize is the Ozon limit for one /v1/analytics/data request.
 const analyticsPageSize = 1000
 
+// analyticsTransientAttempts — сколько раз запрашивать страницу при сбое сети
+// или 5xx; каждая попытка ждёт тот же лимитер 1 раз в минуту.
+const analyticsTransientAttempts = 3
+
 // GetAnalyticsSalesDaily pulls per-SKU daily ordered_units/revenue via
 // POST /v1/analytics/data (dimension ["sku","day"], offset pagination).
 //
-// RATE LIMIT: Ozon allows 1 request per minute on this method — every page
-// waits on the dedicated per-cabinet 1/min limiter before going out, so a
-// multi-page pull takes minutes by design. Callers must run it on a
-// low-frequency schedule, never inside the hourly sync.
+// Ограничения с 16.09.2026: метрики revenue/ordered_units и группировка
+// sku/day доступны без Premium Plus/Pro; без подписки — данные только за
+// последние 3 месяца (окно синка 14 дней) и 50 запросов в сутки на Client-Id.
+//
+// RATE LIMIT: не больше 1 запроса в минуту на Client-Id — каждая страница
+// ждёт выделенный лимитер (analyticsInterval), многостраничная выгрузка идёт
+// минутами. 429 не повторяется: лимит (минутный или суточный) исчерпан, и
+// повтор внутри синка только тратит его — выгрузка переносится на следующее
+// окно синка. Callers must run it on a low-frequency schedule, never inside
+// the hourly sync.
 func (c *SellerClient) GetAnalyticsSalesDaily(ctx context.Context, creds Credentials, dateFrom, dateTo time.Time) ([]SalesDaily, error) {
 	type request struct {
 		DateFrom  string   `json:"date_from"`
@@ -505,18 +520,14 @@ func (c *SellerClient) GetAnalyticsSalesDaily(ctx context.Context, creds Credent
 	analyticsLim := c.analyticsLimiters.get(creds.ClientID)
 	var out []SalesDaily
 	for offset := 0; ; offset += analyticsPageSize {
-		if err := analyticsLim.Wait(ctx); err != nil {
-			return nil, fmt.Errorf("ozon seller: analytics rate limiter wait: %w", err)
-		}
-		req := request{
+		body, err := c.analyticsPage(ctx, analyticsLim, creds, request{
 			DateFrom:  dateFrom.Format("2006-01-02"),
 			DateTo:    dateTo.Format("2006-01-02"),
 			Metrics:   []string{"ordered_units", "revenue"},
 			Dimension: []string{"sku", "day"},
 			Limit:     analyticsPageSize,
 			Offset:    offset,
-		}
-		body, err := c.do(ctx, creds, "/v1/analytics/data", req)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -545,6 +556,29 @@ func (c *SellerClient) GetAnalyticsSalesDaily(ctx context.Context, creds Credent
 		}
 		if len(resp.Result.Data) < analyticsPageSize {
 			return out, nil
+		}
+	}
+}
+
+// analyticsPage запрашивает одну страницу /v1/analytics/data: каждая попытка
+// ждёт лимитер Client-Id, сбой сети и 5xx повторяются до
+// analyticsTransientAttempts раз, 429 — никогда.
+func (c *SellerClient) analyticsPage(ctx context.Context, lim *rate.Limiter, creds Credentials, req any) ([]byte, error) {
+	for attempt := 1; ; attempt++ {
+		if err := lim.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("ozon seller: analytics rate limiter wait: %w", err)
+		}
+		body, err := c.do(withoutRetry(ctx), creds, "/v1/analytics/data", req)
+		if err == nil {
+			return body, nil
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+			return nil, fmt.Errorf("ozon seller: лимит /v1/analytics/data исчерпан (1 запрос в минуту, без Premium — 50 в сутки), выгрузка отложена до следующего окна синка: %w", err)
+		}
+		transient := !errors.As(err, &apiErr) || apiErr.StatusCode >= http.StatusInternalServerError
+		if !transient || attempt >= analyticsTransientAttempts || ctx.Err() != nil {
+			return nil, err
 		}
 	}
 }
@@ -742,6 +776,9 @@ func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, p
 		if err != nil {
 			lastErr = fmt.Errorf("ozon seller: %s: %w", path, err)
 			metrics.OzonAPIRequests.WithLabelValues("seller", path, "error").Inc()
+			if !retryAllowed(ctx) {
+				return nil, lastErr
+			}
 			if attempt < maxRetries {
 				if serr := sleepWithContext(ctx, backoffDuration(attempt)); serr != nil {
 					return nil, serr
@@ -766,6 +803,9 @@ func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, p
 				URL:        c.baseURL + path,
 				Message:    fmt.Sprintf("ozon seller: rate limited (429) on %s", path),
 			}
+			if !retryAllowed(ctx) {
+				return nil, lastErr
+			}
 			if attempt < maxRetries {
 				if serr := sleepWithContext(ctx, retryAfter); serr != nil {
 					return nil, fmt.Errorf("%w: retry wait interrupted: %v", lastErr, serr)
@@ -778,6 +818,9 @@ func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, p
 				StatusCode: resp.StatusCode,
 				URL:        c.baseURL + path,
 				Message:    fmt.Sprintf("ozon seller: server error (%d) on %s", resp.StatusCode, path),
+			}
+			if !retryAllowed(ctx) {
+				return nil, lastErr
 			}
 			if attempt < maxRetries {
 				if serr := sleepWithContext(ctx, backoffDuration(attempt)); serr != nil {
