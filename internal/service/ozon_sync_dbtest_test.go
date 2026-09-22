@@ -380,7 +380,7 @@ func TestOzonSyncService_SyncPostings_RewritesHeatmap(t *testing.T) {
 
 	orderedAt1 := time.Now().UTC().Add(-26 * time.Hour)
 	orderedAt2 := time.Now().UTC().Add(-3 * time.Hour)
-	env.fake.setJSON("/v2/posting/fbo/list", map[string]any{
+	env.fake.setJSON("/v3/posting/fbo/list", map[string]any{
 		"result": []map[string]any{
 			{
 				"in_process_at": orderedAt1.Format(time.RFC3339Nano),
@@ -388,7 +388,7 @@ func TestOzonSyncService_SyncPostings_RewritesHeatmap(t *testing.T) {
 			},
 		},
 	})
-	env.fake.setJSON("/v3/posting/fbs/list", map[string]any{
+	env.fake.setJSON("/v4/posting/fbs/list", map[string]any{
 		"result": map[string]any{
 			"postings": []map[string]any{
 				{
@@ -422,8 +422,8 @@ func TestOzonSyncService_SyncPostings_RewritesHeatmap(t *testing.T) {
 	assert.Equal(t, 3, quantity)
 
 	// An empty pull clears the matrix — the rewrite is total, never additive.
-	env.fake.setJSON("/v2/posting/fbo/list", map[string]any{"result": []map[string]any{}})
-	env.fake.setJSON("/v3/posting/fbs/list", map[string]any{"result": map[string]any{"postings": []map[string]any{}}})
+	env.fake.setJSON("/v3/posting/fbo/list", map[string]any{"result": []map[string]any{}})
+	env.fake.setJSON("/v4/posting/fbs/list", map[string]any{"result": map[string]any{"postings": []map[string]any{}}})
 	require.NoError(t, env.syncSvc.SyncPostings(ctx, env.cabinet(t)))
 	assert.Equal(t, 0, countRows(t, env.pool,
 		`SELECT COUNT(*) FROM ozon_orders_hourly WHERE seller_cabinet_id = $1`, env.cabinetID))
@@ -466,12 +466,12 @@ func TestOzonSyncService_AllCabinetSweeps(t *testing.T) {
 	ctx := context.Background()
 	day := time.Now().UTC().AddDate(0, 0, -1)
 
-	env.fake.setJSON("/v2/posting/fbo/list", map[string]any{
+	env.fake.setJSON("/v3/posting/fbo/list", map[string]any{
 		"result": []map[string]any{
 			{"created_at": day.Format(time.RFC3339), "products": []map[string]any{{"sku": 555, "quantity": 1}}},
 		},
 	})
-	env.fake.setJSON("/v3/posting/fbs/list", map[string]any{
+	env.fake.setJSON("/v4/posting/fbs/list", map[string]any{
 		"result": map[string]any{"postings": []map[string]any{}},
 	})
 	env.fake.setJSON("/v1/analytics/data", map[string]any{

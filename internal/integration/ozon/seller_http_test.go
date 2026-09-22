@@ -396,16 +396,32 @@ func TestGetAnalyticsSalesDaily_OffsetPaginationAndSkips(t *testing.T) {
 // --- ListPostings ---
 
 func TestListPostings_MergesFBOAndFBS(t *testing.T) {
+	var fbsCursors []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Limit  int    `json:"limit"`
+			Offset *int   `json:"offset"`
+			Cursor string `json:"cursor"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		assert.Equal(t, postingsPageSize, req.Limit)
+		assert.Nil(t, req.Offset, "v3 FBO / v4 FBS have no offset")
 		switch r.URL.Path {
-		case "/v2/posting/fbo/list":
-			_ = json.NewEncoder(w).Encode(map[string]any{"result": []map[string]any{
+		case "/v3/posting/fbo/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{"postings": []map[string]any{
 				{"created_at": "2026-08-01T10:00:00Z", "products": []map[string]any{{"sku": 111, "quantity": 2}}},
-			}})
-		case "/v3/posting/fbs/list":
-			_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"postings": []map[string]any{
-				{"in_process_at": "2026-08-01T11:00:00Z", "products": []map[string]any{{"sku": 222, "quantity": 1}}},
-			}}})
+			}, "cursor": "", "has_next": false})
+		case "/v4/posting/fbs/list":
+			fbsCursors = append(fbsCursors, req.Cursor)
+			if req.Cursor == "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"postings": []map[string]any{
+					{"in_process_at": "2026-08-01T11:00:00Z", "products": []map[string]any{{"sku": 222, "quantity": 1}}},
+				}, "cursor": "c1", "has_next": true})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"postings": []map[string]any{
+				{"in_process_at": "2026-08-01T12:00:00Z", "products": []map[string]any{{"sku": 333, "quantity": 1}}},
+			}, "cursor": "", "has_next": false})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -416,9 +432,11 @@ func TestListPostings_MergesFBOAndFBS(t *testing.T) {
 	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	out, err := c.ListPostings(context.Background(), testCreds, from, from.AddDate(0, 0, 1))
 	require.NoError(t, err)
-	require.Len(t, out, 2)
+	require.Len(t, out, 3)
 	assert.Equal(t, int64(111), out[0].SKU)
 	assert.Equal(t, int64(222), out[1].SKU)
+	assert.Equal(t, int64(333), out[2].SKU)
+	assert.Equal(t, []string{"", "c1"}, fbsCursors)
 }
 
 func TestListPostings_FBOErrorFailsWhole(t *testing.T) {

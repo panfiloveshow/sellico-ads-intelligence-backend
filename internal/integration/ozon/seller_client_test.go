@@ -154,6 +154,11 @@ func TestPostingsWireResponse_BothWrappers(t *testing.T) {
 			want:    1,
 		},
 		{
+			name:    "v3 fbo / v4 fbs: top-level postings",
+			payload: `{"postings": [{"in_process_at": "2026-08-03T09:00:00Z", "products": [{"sku": 111, "quantity": 2}]}], "cursor": "c", "has_next": true}`,
+			want:    1,
+		},
+		{
 			name:    "empty result",
 			payload: `{"result": []}`,
 			want:    0,

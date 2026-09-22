@@ -549,11 +549,12 @@ func (c *SellerClient) GetAnalyticsSalesDaily(ctx context.Context, creds Credent
 	}
 }
 
-// postingsPageSize is the Ozon limit for one posting/fbo|fbs/list request.
-const postingsPageSize = 1000
+// postingsPageSize is the Ozon limit for one posting list request
+// (/v3/posting/fbo/list and /v4/posting/fbs/list accept limit 1..100).
+const postingsPageSize = 100
 
-// postingWireItem is one posting from /v2/posting/fbo/list or
-// /v3/posting/fbs/list, parsed defensively: numbers may arrive as strings and
+// postingWireItem is one posting from /v3/posting/fbo/list or
+// /v4/posting/fbs/list, parsed defensively: numbers may arrive as strings and
 // only the fields the heatmap needs are read. in_process_at is when the order
 // actually entered processing (payment) — it is preferred over created_at.
 type postingWireItem struct {
@@ -585,16 +586,22 @@ func (w postingWireItem) orderedAt() (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// postingsWireResponse accepts both posting list shapes: FBO returns
-// {"result":[...]} while FBS returns {"result":{"postings":[...]}} — and the
-// docs have drifted between them, so both endpoints are parsed with both
-// wrappers.
+// postingsWireResponse is the v3 FBO / v4 FBS shape: postings, cursor and
+// has_next at the top level (no result wrapper). The legacy result-wrapped
+// shapes ({"result":[...]} / {"result":{"postings":[...]}}) are still parsed
+// defensively.
 type postingsWireResponse struct {
-	Result json.RawMessage `json:"result"`
+	Postings []postingWireItem `json:"postings"`
+	Cursor   string            `json:"cursor"`
+	HasNext  bool              `json:"has_next"`
+	Result   json.RawMessage   `json:"result"`
 }
 
-// items extracts the posting array from either wrapper shape.
+// items extracts the posting array from any of the known shapes.
 func (r postingsWireResponse) items() []postingWireItem {
+	if len(r.Postings) > 0 {
+		return r.Postings
+	}
 	if len(r.Result) == 0 {
 		return nil
 	}
@@ -640,7 +647,7 @@ func flattenPostings(items []postingWireItem) []PostingSale {
 	return out
 }
 
-// listPostingsPath pages one posting list endpoint (offset pagination) and
+// listPostingsPath pages one posting list endpoint (cursor pagination) and
 // returns the flattened records.
 func (c *SellerClient) listPostingsPath(ctx context.Context, creds Credentials, path string, since, to time.Time) ([]PostingSale, error) {
 	type filter struct {
@@ -648,23 +655,24 @@ func (c *SellerClient) listPostingsPath(ctx context.Context, creds Credentials, 
 		To    string `json:"to"`
 	}
 	type request struct {
-		Dir    string   `json:"dir"`
-		Filter filter   `json:"filter"`
-		Limit  int      `json:"limit"`
-		Offset int      `json:"offset"`
-		With   struct{} `json:"with"`
+		Filter  filter   `json:"filter"`
+		Limit   int      `json:"limit"`
+		SortDir string   `json:"sort_dir"`
+		Cursor  string   `json:"cursor,omitempty"`
+		With    struct{} `json:"with"`
 	}
 
 	var out []PostingSale
-	for offset := 0; ; offset += postingsPageSize {
+	cursor := ""
+	for {
 		req := request{
-			Dir: "ASC",
 			Filter: filter{
 				Since: since.UTC().Format(time.RFC3339),
 				To:    to.UTC().Format(time.RFC3339),
 			},
-			Limit:  postingsPageSize,
-			Offset: offset,
+			Limit:   postingsPageSize,
+			SortDir: "ASC",
+			Cursor:  cursor,
 		}
 		body, err := c.do(ctx, creds, path, req)
 		if err != nil {
@@ -674,25 +682,27 @@ func (c *SellerClient) listPostingsPath(ctx context.Context, creds Credentials, 
 		if err := decodeJSON(body, &resp, path); err != nil {
 			return nil, err
 		}
-		items := resp.items()
-		out = append(out, flattenPostings(items)...)
-		if len(items) < postingsPageSize {
+		out = append(out, flattenPostings(resp.items())...)
+		// A cursor that does not move would loop forever — treat it as the end.
+		if !resp.HasNext || resp.Cursor == "" || resp.Cursor == cursor {
 			return out, nil
 		}
+		cursor = resp.Cursor
 	}
 }
 
 // ListPostings pulls FBO + FBS postings for [since, to] via
-// POST /v2/posting/fbo/list and POST /v3/posting/fbs/list (offset pagination,
-// 1000 per page) and returns the merged flat (sku, created_at, quantity)
-// records for heatmap aggregation. A failure on either endpoint fails the
-// whole pull — a half-merged heatmap would silently skew intensities.
+// POST /v3/posting/fbo/list and POST /v4/posting/fbs/list (the v2 FBO / v3 FBS
+// lists were switched off by Ozon on 2026-08-31; cursor pagination, 100 per
+// page) and returns the merged flat (sku, created_at, quantity) records for
+// heatmap aggregation. A failure on either endpoint fails the whole pull — a
+// half-merged heatmap would silently skew intensities.
 func (c *SellerClient) ListPostings(ctx context.Context, creds Credentials, since, to time.Time) ([]PostingSale, error) {
-	fbo, err := c.listPostingsPath(ctx, creds, "/v2/posting/fbo/list", since, to)
+	fbo, err := c.listPostingsPath(ctx, creds, "/v3/posting/fbo/list", since, to)
 	if err != nil {
 		return nil, fmt.Errorf("posting/fbo/list: %w", err)
 	}
-	fbs, err := c.listPostingsPath(ctx, creds, "/v3/posting/fbs/list", since, to)
+	fbs, err := c.listPostingsPath(ctx, creds, "/v4/posting/fbs/list", since, to)
 	if err != nil {
 		return nil, fmt.Errorf("posting/fbs/list: %w", err)
 	}
