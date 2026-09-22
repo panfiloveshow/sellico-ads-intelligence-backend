@@ -347,11 +347,10 @@ func TestOzonAI_RunForCabinetAutopilotApplies(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// weekly-budgeted running campaign so budget_change resolves + a CPO product.
+	// A complete, executable budget reduction plan.
 	weekly := int64(7000)
 	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 8700, "CAMPAIGN_STATE_RUNNING", nil, &weekly)
 	seedOzonCampaignStat(t, fx.db, c.ID, time.Now().UTC().AddDate(0, 0, -1), 1000, 100, 10, 200, 1000)
-	seedOzonProduct(t, fx.db, fx.cabinetID, 66, 66, "ART-66", "CPO")
 
 	strategyID := seedAIStrategy(t, fx, 3) // autopilot
 	strategy, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
@@ -360,11 +359,7 @@ func TestOzonAI_RunForCabinetAutopilotApplies(t *testing.T) {
 	llmClient := &fakeLLM{enabled: true, responses: []*llm.ChatResponse{
 		submitProposalsResponse("apply", []map[string]any{
 			{"action_type": "budget_change", "target": map[string]any{"ozon_campaign_id": 8700},
-				"new_value": 8000.0, "rationale": "scale", "expected_effect": "more"},
-			{"action_type": "campaign_pause", "target": map[string]any{"ozon_campaign_id": 8700},
-				"rationale": "pause", "expected_effect": "less"},
-			{"action_type": "cpo_enable", "target": map[string]any{"sku": 66},
-				"rationale": "promo", "expected_effect": "orders"},
+				"new_value": 6000.0, "rationale": "reduce", "expected_effect": "lower spend"},
 		}),
 	}}
 	mgr := newAIManager(fx.db, llmClient)
@@ -374,7 +369,7 @@ func TestOzonAI_RunForCabinetAutopilotApplies(t *testing.T) {
 
 	decisions, total, err := mgr.ListDecisions(ctx, fx.workspaceID, fx.cabinetID, "", nil, 50, 0)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, total)
+	assert.EqualValues(t, 1, total)
 	// At least one auto_applied decision (the guardrails passed and s.actions wrote).
 	applied := 0
 	for _, d := range decisions {
@@ -382,10 +377,10 @@ func TestOzonAI_RunForCabinetAutopilotApplies(t *testing.T) {
 			applied++
 		}
 	}
-	assert.GreaterOrEqual(t, applied, 1)
+	assert.Equal(t, 1, applied)
 }
 
-func TestOzonAI_AutopilotBidAndCPOApply(t *testing.T) {
+func TestOzonAI_AutopilotRejectsUnavailableCPOPlan(t *testing.T) {
 	fx, cleanup := newOzonFixture(t, "ozon-ai-autopilot-bid")
 	defer cleanup()
 	ctx := context.Background()
@@ -399,7 +394,7 @@ func TestOzonAI_AutopilotBidAndCPOApply(t *testing.T) {
 	strategy, err := fx.db.Queries.GetStrategyByID(ctx, uuidToPgtype(strategyID))
 	require.NoError(t, err)
 
-	// Manager perf returns Ozon minimums (bid 25 >= min 10 passes; cpo below min rejected).
+	// An individually valid bid must not execute as a fragment of an unavailable CPO plan.
 	managerPerf := &fakePerfClient{minBids: map[int64]float64{77: 10}, cpoMinBids: map[int64]float64{77: 3}}
 	llmClient := &fakeLLM{enabled: true, responses: []*llm.ChatResponse{
 		submitProposalsResponse("apply", []map[string]any{
@@ -409,7 +404,8 @@ func TestOzonAI_AutopilotBidAndCPOApply(t *testing.T) {
 				"new_value": 5.0, "rationale": "cpo", "expected_effect": "orders"},
 		}),
 	}}
-	mgr := newAIManagerWithPerf(fx.db, llmClient, managerPerf, &fakePerfClient{})
+	actionsPerf := &fakePerfClient{}
+	mgr := newAIManagerWithPerf(fx.db, llmClient, managerPerf, actionsPerf)
 
 	err = mgr.RunForCabinet(ctx, fx.workspaceID, fx.cabinetID, strategyFromSqlc(strategy), domain.AIRunTriggerManual)
 	require.NoError(t, err)
@@ -423,7 +419,9 @@ func TestOzonAI_AutopilotBidAndCPOApply(t *testing.T) {
 			applied++
 		}
 	}
-	assert.GreaterOrEqual(t, applied, 1)
+	assert.Zero(t, applied)
+	assert.Zero(t, actionsPerf.bidCalls)
+	assert.Zero(t, actionsPerf.cpoBidCalls)
 }
 
 func TestOzonAI_ApproveDecisionSuccess(t *testing.T) {
@@ -682,13 +680,13 @@ func TestOzonAI_Impact(t *testing.T) {
 
 	// Seed an applied campaign-targeted decision + before/after stats, then sweep.
 	c := seedOzonCampaign(t, fx.db, fx.cabinetID, 8100, "CAMPAIGN_STATE_RUNNING", nil, nil)
-	appliedAt := time.Now().UTC().AddDate(0, 0, -4) // recent enough for after-window data
+	appliedAt := time.Now().UTC().AddDate(0, 0, -9) // all seven following days have finished
 	for i := 1; i <= aiImpactWindowDays; i++ {
 		// before window
 		seedOzonCampaignStat(t, fx.db, c.ID, appliedAt.AddDate(0, 0, -i), 100, 10, 1, 50, 100)
 	}
-	for i := 1; i <= 3; i++ {
-		// after window (>= aiImpactMinAfterDays days present)
+	for i := 1; i <= aiImpactWindowDays; i++ {
+		// Complete seven-day after window.
 		seedOzonCampaignStat(t, fx.db, c.ID, appliedAt.AddDate(0, 0, i), 100, 10, 2, 40, 200)
 	}
 
@@ -762,16 +760,19 @@ func TestOzonAI_ContextFeedbackAndMargin(t *testing.T) {
 		GuardrailVerdict: "passed", Status: domain.AIDecisionStatusApplied,
 	})
 	require.NoError(t, err)
-	// Campaign ДРР improved (25 → 18) while the cabinet's total ДРР got worse
-	// (4.0 → 5.5): the decision bought orders that were already converting.
-	// The model can only tell this apart if both pairs reach the pack.
+	// Preserve two independently measured ratios without asserting causality.
+	appliedAt := time.Now().UTC().AddDate(0, 0, -9)
+	for i := 1; i <= aiImpactWindowDays; i++ {
+		seedOzonCampaignStat(t, fx.db, c.ID, appliedAt.AddDate(0, 0, -i), 100, 10, 1, 100, 400)
+		seedOzonCampaignStat(t, fx.db, c.ID, appliedAt.AddDate(0, 0, i), 100, 10, 1, 90, 500)
+	}
 	_, err = fx.db.Pool.Exec(ctx, `
-		UPDATE ai_decisions SET outcome_status='evaluated',
+		UPDATE ai_decisions SET outcome_status='evaluated', applied_at=$2, evaluated_at=now(),
 			drr_before=25.0, drr_after=18.0,
 			total_drr_before=4.0, total_drr_after=5.5,
-			spend_before_rub=500, spend_after_rub=450,
-			revenue_before_rub=2000, revenue_after_rub=2500
-		WHERE id=$1`, dec.ID)
+			spend_before_rub=700, spend_after_rub=630,
+			revenue_before_rub=2800, revenue_after_rub=3500
+		WHERE id=$1`, dec.ID, appliedAt)
 	require.NoError(t, err)
 
 	pack, _, err := mgr.buildAIContext(ctx, fx.workspaceID, fx.cabinetID, strategy, strategy.Params.Merged())
@@ -787,14 +788,13 @@ func TestOzonAI_ContextFeedbackAndMargin(t *testing.T) {
 	require.NotNil(t, rd.DRRAfter)
 	assert.InDelta(t, 25.0, *rd.DRRBefore, 0.01)
 	assert.InDelta(t, 18.0, *rd.DRRAfter, 0.01)
-	require.NotNil(t, rd.TotalDRRBefore)
-	require.NotNil(t, rd.TotalDRRAfter)
-	assert.InDelta(t, 4.0, *rd.TotalDRRBefore, 0.01)
-	assert.InDelta(t, 5.5, *rd.TotalDRRAfter, 0.01)
+	// Stored legacy cabinet ratios without complete turnover evidence stay unknown.
+	assert.Nil(t, rd.TotalDRRBefore)
+	assert.Nil(t, rd.TotalDRRAfter)
 	require.NotNil(t, rd.SpendDelta)
-	assert.InDelta(t, -50.0, *rd.SpendDelta, 0.01) // 450-500
+	assert.InDelta(t, -70.0, *rd.SpendDelta, 0.01) // 630-700
 	require.NotNil(t, rd.RevenueDelta)
-	assert.InDelta(t, 500.0, *rd.RevenueDelta, 0.01) // 2500-2000
+	assert.InDelta(t, 700.0, *rd.RevenueDelta, 0.01) // 3500-2800
 
 	// Margin: SKU 501 has Ozon net_price → cost source "ozon", margin 43%.
 	var econ *aiPackEconomics

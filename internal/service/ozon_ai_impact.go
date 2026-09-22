@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,7 +28,7 @@ import (
 // «стало лучше или хуже вокруг этого решения», not «что именно сделал ИИ».
 //
 // Evaluation states:
-//   - after-window has ≥ 3 days of data           → 'evaluated'
+//   - both windows contain 7 completed daily rows → 'evaluated'
 //   - fewer days but decision younger than 14d    → 'pending_eval' (retry later)
 //   - fewer days and decision older than 14 days  → 'not_evaluable'
 //   - cpo_* actions: per-SKU turnover from ozon_sales_daily, revenue-only
@@ -36,18 +37,16 @@ import (
 const (
 	// aiImpactWindowDays is the length of each comparison window.
 	aiImpactWindowDays = 7
-	// aiImpactMinAfterDays is the minimum after-window days required to judge.
-	aiImpactMinAfterDays = 3
 	// aiImpactMaxAgeDays is when an unevaluated decision stops waiting for data.
 	aiImpactMaxAgeDays = 14
 	// aiImpactSummaryDays is the GET /ozon/ai/impact aggregation window.
 	aiImpactSummaryDays = 30
-	// aiImpactMinEvaluatedForDisplay: below this many evaluated decisions the
+	// aiImpactMinEvaluatedForDisplay: below this many disjoint observations the
 	// aggregate is noise, and the summary is flagged low_data so the UI shows
 	// «данных пока мало» instead of a verdict.
 	aiImpactMinEvaluatedForDisplay = 5
-	// aiImpactDowngradeStreak: this many consecutive evaluated decisions that
-	// worsened their campaign's ДРР switch a level-3 cabinet back to copilot.
+	// aiImpactDowngradeStreak: worsening ДРР in this many consecutive disjoint
+	// campaign observations switches a level-3 cabinet back to copilot.
 	aiImpactDowngradeStreak = 3
 )
 
@@ -55,7 +54,10 @@ const (
 // applied decision without a final evaluation and writes before/after
 // numbers. Best-effort per decision — one broken row never stops the sweep.
 func (s *OzonAIManagerService) EvaluateImpactSweep(ctx context.Context) error {
-	rows, err := s.queries.ListAIDecisionsForImpactEval(ctx)
+	if err := s.queries.InvalidateIncompleteAIImpactOutcomes(ctx); err != nil {
+		return fmt.Errorf("invalidate incomplete impact outcomes: %w", err)
+	}
+	rows, err := s.queries.ListAIDecisionsForCompleteImpactEval(ctx)
 	if err != nil {
 		return fmt.Errorf("list decisions for impact eval: %w", err)
 	}
@@ -81,8 +83,8 @@ func (s *OzonAIManagerService) EvaluateImpactSweep(ctx context.Context) error {
 			skipped++
 		}
 	}
-	// Safety brake: a level-3 cabinet whose last decisions keep making the ДРР
-	// worse loses the right to act on its own until a human looks at it.
+	// Safety brake: repeated worsening observations require a human review.
+	// They do not establish that the AI caused the worsening.
 	for cabinetID, workspaceID := range touchedCabinets {
 		s.maybeDowngradeAutopilot(ctx, workspaceID, cabinetID)
 	}
@@ -96,8 +98,8 @@ func (s *OzonAIManagerService) EvaluateImpactSweep(ctx context.Context) error {
 }
 
 // maybeDowngradeAutopilot switches a cabinet's strategy from level 3 back to
-// level 2 (copilot) when the last aiImpactDowngradeStreak evaluated decisions
-// all worsened their campaign's ДРР. Best-effort: any read/write failure is
+// level 2 (copilot) when the last aiImpactDowngradeStreak disjoint observed
+// campaign windows all show higher ДРР. Best-effort: any read/write failure is
 // logged and skipped — the brake must never break the sweep.
 func (s *OzonAIManagerService) maybeDowngradeAutopilot(ctx context.Context, workspaceID, cabinetID uuid.UUID) {
 	strategyRow, err := s.queries.GetActiveOzonAIStrategyForCabinet(ctx, uuidToPgtype(cabinetID))
@@ -108,17 +110,16 @@ func (s *OzonAIManagerService) maybeDowngradeAutopilot(ctx context.Context, work
 	if strategy.Params.Merged().AutomationLevel < 3 {
 		return
 	}
-	recent, err := s.queries.ListRecentAppliedAIDecisions(ctx, sqlcgen.ListRecentAppliedAIDecisionsParams{
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		Lim:             int32(aiImpactDowngradeStreak * 3),
-	})
+	recent, err := s.queries.ListRecentCompleteAIImpactDecisions(ctx, uuidToPgtype(cabinetID))
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("autopilot downgrade check: history read failed")
 		return
 	}
 	streak := 0
-	for _, row := range recent { // newest first
-		if pgTextValue(row.OutcomeStatus) != domain.AIOutcomeEvaluated {
+	observations := aiImpactObservations{}
+	for _, row := range recent { // newest complete observations first
+		var target domain.AIDecisionTarget
+		if json.Unmarshal(row.Target, &target) != nil || !observations.include(target.OzonCampaignID, row.AppliedAt.Time) {
 			continue
 		}
 		before := pgNumericToFloatPtr(row.DrrBefore)
@@ -137,28 +138,12 @@ func (s *OzonAIManagerService) maybeDowngradeAutopilot(ctx context.Context, work
 	if streak < aiImpactDowngradeStreak {
 		return
 	}
-	// Patch only automation_level in the stored params — a full re-marshal of
-	// the merged struct would bake defaults into the row.
-	var raw map[string]any
-	if len(strategyRow.Params) > 0 {
-		if err := json.Unmarshal(strategyRow.Params, &raw); err != nil {
-			s.logger.Warn().Err(err).Msg("autopilot downgrade: params unmarshal failed")
-			return
-		}
-	}
-	if raw == nil {
-		raw = map[string]any{}
-	}
-	raw["automation_level"] = 2
-	patched, err := json.Marshal(raw)
+	changed, err := s.queries.DowngradeOzonAIForImpact(ctx, strategyRow.ID)
 	if err != nil {
+		s.logger.Warn().Err(err).Msg("autopilot downgrade: strategy update failed")
 		return
 	}
-	if _, err := s.queries.UpdateStrategy(ctx, sqlcgen.UpdateStrategyParams{
-		ID: strategyRow.ID, Name: strategyRow.Name, Type: strategyRow.Type,
-		Params: patched, IsActive: strategyRow.IsActive,
-	}); err != nil {
-		s.logger.Warn().Err(err).Msg("autopilot downgrade: strategy update failed")
+	if !changed {
 		return
 	}
 	s.logger.Warn().
@@ -167,7 +152,7 @@ func (s *OzonAIManagerService) maybeDowngradeAutopilot(ctx context.Context, work
 		Msg("autopilot downgraded to copilot after consecutive worsened decisions")
 	s.notifier.NotifyWorkspaceOwners(ctx, workspaceID, "ads-ai-downgraded",
 		"ИИ-автопилот переведён в режим Копилот",
-		fmt.Sprintf("Последние %d оценённых решений ИИ ухудшили ДРР кампаний. Автопилот остановлен: новые предложения будут ждать вашего подтверждения.", aiImpactDowngradeStreak))
+		fmt.Sprintf("После последних %d независимых по окнам наблюдений ДРР кампаний выросла. Причинная связь с решениями ИИ не установлена. Автопилот остановлен: новые предложения будут ждать вашего подтверждения.", aiImpactDowngradeStreak))
 }
 
 // evaluateDecisionImpact measures one decision and persists the outcome.
@@ -235,10 +220,8 @@ func (s *OzonAIManagerService) evaluateDecisionImpact(ctx context.Context, row s
 }
 
 // evaluateCPODecisionImpact measures a cpo_* decision by the target SKU's own
-// turnover over the same 7d/7d windows. Unlike campaign decisions, «enough
-// data» is calendar time here: a SKU that sold nothing after the change has no
-// sales rows at all, and that zero IS the result — so we evaluate as soon as
-// the after-window has fully elapsed.
+// turnover over the same 7d/7d windows. Every calendar day needs an observed
+// row: an absent sales row cannot distinguish zero sales from incomplete sync.
 func (s *OzonAIManagerService) evaluateCPODecisionImpact(ctx context.Context, row sqlcgen.AiDecision, now time.Time) (string, error) {
 	var target domain.AIDecisionTarget
 	if len(row.Target) > 0 {
@@ -250,14 +233,7 @@ func (s *OzonAIManagerService) evaluateCPODecisionImpact(ctx context.Context, ro
 		return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
 	}
 	windows := aiImpactWindows(row.AppliedAt.Time)
-	if now.Before(windows.AfterTo.Add(24 * time.Hour)) {
-		if now.Sub(row.AppliedAt.Time) > time.Duration(aiImpactMaxAgeDays)*24*time.Hour {
-			return domain.AIOutcomeNotEvaluable, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomeNotEvaluable, nil, nil, aiImpactTotalDRR{})
-		}
-		return domain.AIOutcomePendingEval, s.writeDecisionOutcome(ctx, row.ID, domain.AIOutcomePendingEval, nil, nil, aiImpactTotalDRR{})
-	}
-
-	skuWindow := func(from, to time.Time) (float64, error) {
+	skuWindow := func(from, to time.Time) (aiImpactWindowTotals, error) {
 		totals, err := s.queries.GetOzonSKUSalesWindowTotals(ctx, sqlcgen.GetOzonSKUSalesWindowTotalsParams{
 			SellerCabinetID: row.SellerCabinetID,
 			Sku:             target.SKU,
@@ -265,25 +241,29 @@ func (s *OzonAIManagerService) evaluateCPODecisionImpact(ctx context.Context, ro
 			DateTo:          pgtype.Date{Time: to, Valid: true},
 		})
 		if err != nil {
-			return 0, fmt.Errorf("sku sales window totals: %w", err)
+			return aiImpactWindowTotals{}, fmt.Errorf("sku sales window totals: %w", err)
 		}
-		return pgNumericToFloat(totals.RevenueRub), nil
+		return aiImpactWindowTotals{RevenueRub: pgNumericToFloat(totals.RevenueRub), Days: totals.Days}, nil
 	}
-	beforeRev, err := skuWindow(windows.BeforeFrom, windows.BeforeTo)
+	before, err := skuWindow(windows.BeforeFrom, windows.BeforeTo)
 	if err != nil {
 		return "", err
 	}
-	afterRev, err := skuWindow(windows.AfterFrom, windows.AfterTo)
+	after, err := skuWindow(windows.AfterFrom, windows.AfterTo)
 	if err != nil {
 		return "", err
+	}
+	outcome := aiImpactOutcome(before, after, row.AppliedAt.Time, now)
+	if outcome.Status != domain.AIOutcomeEvaluated {
+		return outcome.Status, s.writeDecisionOutcome(ctx, row.ID, outcome.Status, nil, nil, aiImpactTotalDRR{})
 	}
 	totals := s.cabinetTotalDRRWindows(ctx, row.SellerCabinetID, windows)
 
 	params := sqlcgen.SetAIDecisionOutcomeParams{
 		ID:               row.ID,
 		OutcomeStatus:    textToPgtype(domain.AIOutcomeEvaluated),
-		RevenueBeforeRub: floatToPgNumeric(roundRub(beforeRev)),
-		RevenueAfterRub:  floatToPgNumeric(roundRub(afterRev)),
+		RevenueBeforeRub: floatToPgNumeric(roundRub(before.RevenueRub)),
+		RevenueAfterRub:  floatToPgNumeric(roundRub(after.RevenueRub)),
 	}
 	if totals.Before != nil {
 		params.TotalDrrBefore = floatToPgNumeric(*totals.Before)
@@ -318,22 +298,16 @@ func (s *OzonAIManagerService) cabinetTotalDRRWindow(ctx context.Context, cabine
 	dateFrom := pgtype.Date{Time: from, Valid: true}
 	dateTo := pgtype.Date{Time: to, Valid: true}
 
-	sales, err := s.queries.GetOzonCabinetSalesWindowTotals(ctx, sqlcgen.GetOzonCabinetSalesWindowTotalsParams{
-		SellerCabinetID: cabinetID, DateFrom: dateFrom, DateTo: dateTo,
-	})
+	evidence, err := s.queries.GetOzonDRRWindowEvidence(ctx, cabinetID, dateFrom, dateTo)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("ai impact: cabinet turnover window read failed")
+		s.logger.Warn().Err(err).Msg("ai impact: cabinet window evidence read failed")
 		return nil
 	}
-	spend, err := s.queries.GetOzonCabinetAdSpendWindowTotals(ctx, sqlcgen.GetOzonCabinetAdSpendWindowTotalsParams{
-		SellerCabinetID: cabinetID, DateFrom: dateFrom, DateTo: dateTo,
-	})
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("ai impact: cabinet ad spend window read failed")
+	days := int64(to.Sub(from)/(24*time.Hour)) + 1
+	if evidence.SalesDays != days || evidence.AdDays != days || evidence.MissingCampaignDays > 0 || evidence.InvalidRows > 0 {
 		return nil
 	}
-	// drrPct already returns nil on zero turnover — undefined, not zero.
-	return drrPct(pgNumericToFloat(spend.SpendRub), pgNumericToFloat(sales.RevenueRub))
+	return drrPct(pgNumericToFloat(evidence.SpendRub), pgNumericToFloat(evidence.RevenueRub))
 }
 
 func (s *OzonAIManagerService) campaignWindowTotals(ctx context.Context, campaignID pgtype.UUID, from, to time.Time) (aiImpactWindowTotals, error) {
@@ -410,12 +384,11 @@ type aiImpactDecisionOutcome struct {
 	Status string
 }
 
-// aiImpactOutcome decides the outcome status from the window data: enough
-// after-days → evaluated; not enough but still young → pending; аged out →
-// not_evaluable.
+// aiImpactOutcome compares only two complete, elapsed calendar weeks. Missing
+// baseline or after-days remain unknown until the retry budget expires.
 func aiImpactOutcome(before, after aiImpactWindowTotals, appliedAt, now time.Time) aiImpactDecisionOutcome {
-	_ = before // the before-window may legitimately be empty (fresh campaign)
-	if after.Days >= aiImpactMinAfterDays {
+	if before.Days == aiImpactWindowDays && after.Days == aiImpactWindowDays &&
+		!now.Before(aiImpactWindows(appliedAt).AfterTo.Add(24*time.Hour)) {
 		return aiImpactDecisionOutcome{Status: domain.AIOutcomeEvaluated}
 	}
 	if now.Sub(appliedAt) > time.Duration(aiImpactMaxAgeDays)*24*time.Hour {
@@ -436,6 +409,8 @@ func drrPct(spend, revenue float64) *float64 {
 
 // aiImpactRow is the aggregation input for one applied decision.
 type aiImpactRow struct {
+	CampaignID int64
+	AppliedAt  time.Time
 	Evaluated  bool
 	DRRBefore  *float64
 	DRRAfter   *float64
@@ -446,36 +421,49 @@ type aiImpactRow struct {
 	HasNumbers bool // spend/revenue columns are populated
 }
 
-// aiImpactAggregate implements the GET /ozon/ai/impact formulas. They are
-// simple and honest (документированная грубая атрибуция, окно 7д/7д):
-//
-//	spend_delta_rub   = Σ (spend_after − spend_before)                 по evaluated
-//	revenue_delta_rub = Σ (revenue_after − revenue_before)             по evaluated
-//	saved_rub         = Σ max(0, spend_before − spend_after)           по evaluated,
-//	                    где revenue_after ≥ revenue_before × 0.9
-//	                    (экономия расхода считается только если выручка
-//	                     не просела больше чем на 10%)
-//	extra_revenue_rub = Σ max(0, revenue_after − revenue_before)       по evaluated
-//	avg_drr_before/after — среднее по evaluated-решениям, у которых ДРР
-//	                    определён (выручка окна > 0)
+// aiImpactObservations keeps disjoint campaign footprints. A decision uses the
+// whole [day-7, day+7] span, including the mixed apply day as a separator. Taking
+// the newest non-overlapping pair prevents the same money from being counted
+// again for another SKU action or another decision a few days later.
+type aiImpactObservations map[int64][]aiImpactWindowBounds
+
+func (seen aiImpactObservations) include(campaignID int64, appliedAt time.Time) bool {
+	if campaignID == 0 || appliedAt.IsZero() {
+		return false
+	}
+	window := aiImpactWindows(appliedAt)
+	for _, previous := range seen[campaignID] {
+		if !window.AfterTo.Before(previous.BeforeFrom) && !window.BeforeFrom.After(previous.AfterTo) {
+			return false
+		}
+	}
+	seen[campaignID] = append(seen[campaignID], window)
+	return true
+}
+
+// aiImpactAggregate reports observed deltas from disjoint complete campaign
+// windows. No counterfactual is available, so causal savings and additional
+// revenue remain unavailable even when spend drops or observed revenue grows.
 func aiImpactAggregate(rows []aiImpactRow) domain.AIImpactSummary {
-	summary := domain.AIImpactSummary{WindowDays: aiImpactSummaryDays}
+	summary := domain.AIImpactSummary{WindowDays: aiImpactSummaryDays, AttributionStatus: "observed_only"}
+	rows = append([]aiImpactRow(nil), rows...)
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].AppliedAt.After(rows[j].AppliedAt) })
+	observations := aiImpactObservations{}
+	observationCount := 0
 	var drrBeforeSum, drrAfterSum float64
 	var drrBeforeN, drrAfterN int
 	for _, row := range rows {
 		summary.DecisionsApplied++
-		if !row.Evaluated || !row.HasNumbers {
+		if !row.Evaluated {
 			continue
 		}
 		summary.DecisionsEvaluated++
+		if !row.HasNumbers || !observations.include(row.CampaignID, row.AppliedAt) {
+			continue
+		}
+		observationCount++
 		summary.SpendDeltaRub += row.SpendA - row.SpendB
 		summary.RevenueDeltaRub += row.RevenueA - row.RevenueB
-		if row.RevenueA >= row.RevenueB*0.9 && row.SpendB > row.SpendA {
-			summary.SavedRub += row.SpendB - row.SpendA
-		}
-		if row.RevenueA > row.RevenueB {
-			summary.ExtraRevenueRub += row.RevenueA - row.RevenueB
-		}
 		if row.DRRBefore != nil {
 			drrBeforeSum += *row.DRRBefore
 			drrBeforeN++
@@ -495,9 +483,7 @@ func aiImpactAggregate(rows []aiImpactRow) domain.AIImpactSummary {
 	}
 	summary.SpendDeltaRub = roundRub(summary.SpendDeltaRub)
 	summary.RevenueDeltaRub = roundRub(summary.RevenueDeltaRub)
-	summary.SavedRub = roundRub(summary.SavedRub)
-	summary.ExtraRevenueRub = roundRub(summary.ExtraRevenueRub)
-	summary.LowData = summary.DecisionsEvaluated < aiImpactMinEvaluatedForDisplay
+	summary.LowData = observationCount < aiImpactMinEvaluatedForDisplay
 	return summary
 }
 
@@ -508,7 +494,7 @@ func (s *OzonAIManagerService) GetImpact(ctx context.Context, workspaceID, cabin
 		return nil, err
 	}
 	since := time.Now().UTC().AddDate(0, 0, -aiImpactSummaryDays)
-	rows, err := s.queries.ListAIDecisionImpactRows(ctx, sqlcgen.ListAIDecisionImpactRowsParams{
+	rows, err := s.queries.ListCompleteAIImpactSummaryRows(ctx, sqlcgen.ListAIDecisionImpactRowsParams{
 		WorkspaceID:     uuidToPgtype(workspaceID),
 		SellerCabinetID: uuidToPgtype(cabinetID),
 		Since:           pgtype.Timestamptz{Time: since, Valid: true},
@@ -517,16 +503,21 @@ func (s *OzonAIManagerService) GetImpact(ctx context.Context, workspaceID, cabin
 		return nil, fmt.Errorf("list impact rows: %w", err)
 	}
 	impact := make([]aiImpactRow, 0, len(rows))
-	for _, row := range rows {
+	for _, result := range rows {
+		row := result.Decision
+		var target domain.AIDecisionTarget
+		_ = json.Unmarshal(row.Target, &target)
 		impact = append(impact, aiImpactRow{
-			Evaluated:  pgTextValue(row.OutcomeStatus) == domain.AIOutcomeEvaluated,
+			CampaignID: target.OzonCampaignID,
+			AppliedAt:  row.AppliedAt.Time,
+			Evaluated:  result.Complete,
 			DRRBefore:  pgNumericToFloatPtr(row.DrrBefore),
 			DRRAfter:   pgNumericToFloatPtr(row.DrrAfter),
 			SpendB:     pgNumericToFloat(row.SpendBeforeRub),
 			SpendA:     pgNumericToFloat(row.SpendAfterRub),
 			RevenueB:   pgNumericToFloat(row.RevenueBeforeRub),
 			RevenueA:   pgNumericToFloat(row.RevenueAfterRub),
-			HasNumbers: row.SpendBeforeRub.Valid && row.SpendAfterRub.Valid,
+			HasNumbers: row.SpendBeforeRub.Valid && row.SpendAfterRub.Valid && row.RevenueBeforeRub.Valid && row.RevenueAfterRub.Valid,
 		})
 	}
 	summary := aiImpactAggregate(impact)

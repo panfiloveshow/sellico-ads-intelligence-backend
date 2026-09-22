@@ -210,7 +210,7 @@ func (s *OzonAIManagerService) RunForCabinet(ctx context.Context, workspaceID, c
 			// следующим циклом свипа автоматически.
 			errText = "Провайдер ИИ перегружен — прогон повторится автоматически при следующем цикле"
 		}
-		s.finishRun(ctx, run.ID, domain.AIRunStatusFailed, "", errText, usage)
+		s.finishRun(ctx, run.ID, domain.AIRunStatusFailed, summary, errText, usage)
 		return fmt.Errorf("ai run %s: %w", uuidFromPgtype(run.ID), execErr)
 	}
 	s.finishRun(ctx, run.ID, domain.AIRunStatusCompleted, summary, "", usage)
@@ -241,11 +241,12 @@ func (s *OzonAIManagerService) finishRun(ctx context.Context, runID pgtype.UUID,
 
 // aiProposal is one item of the submit_proposals tool call.
 type aiProposal struct {
-	ActionType     string                  `json:"action_type"`
-	Target         domain.AIDecisionTarget `json:"target"`
-	NewValue       *float64                `json:"new_value"`
-	Rationale      string                  `json:"rationale"`
-	ExpectedEffect string                  `json:"expected_effect"`
+	ExcludeDecisionID uuid.UUID               `json:"-"`
+	ActionType        string                  `json:"action_type"`
+	Target            domain.AIDecisionTarget `json:"target"`
+	NewValue          *float64                `json:"new_value"`
+	Rationale         string                  `json:"rationale"`
+	ExpectedEffect    string                  `json:"expected_effect"`
 }
 
 type aiSubmission struct {
@@ -276,7 +277,7 @@ func (s *OzonAIManagerService) execute(ctx context.Context, run sqlcgen.AiRun, w
 		{Role: "system", Content: aiSystemPrompt(params)},
 		{Role: "user", Content: "Данные кабинета (JSON):\n" + string(packJSON)},
 	}
-	tools := aiTools()
+	tools := aiToolsForContext(data)
 
 	// Call 1: open — the model may ask for extra data once or submit directly.
 	resp, err := s.llm.ChatCompletion(ctx, llm.ChatRequest{Messages: messages, Tools: tools, ToolChoice: "auto"})
@@ -320,36 +321,8 @@ func (s *OzonAIManagerService) execute(ctx context.Context, run sqlcgen.AiRun, w
 		}
 	}
 
-	applied, rejected := 0, 0
-	for _, proposal := range submission.Proposals {
-		status, procErr := s.processProposal(ctx, run, workspaceID, cabinetID, params, proposal, data)
-		if procErr != nil {
-			s.logger.Warn().Err(procErr).Str("action", proposal.ActionType).Msg("failed to process ai proposal")
-			continue
-		}
-		switch status {
-		case domain.AIDecisionStatusRejectedByGuardrail, domain.AIDecisionStatusFailed:
-			rejected++
-		case domain.AIDecisionStatusAutoApplied:
-			applied++
-		}
-	}
-	s.logger.Info().
-		Str("cabinet_id", cabinetID.String()).
-		Int("proposals", len(submission.Proposals)).
-		Int("auto_applied", applied).
-		Int("rejected", rejected).
-		Int("prompt_tokens", usage.PromptTokens).
-		Int("completion_tokens", usage.CompletionTokens).
-		Msg("ai run completed")
-	// The autopilot must never act silently: owners get a bell digest for
-	// every run that actually changed something.
-	if applied > 0 {
-		s.notifier.NotifyWorkspaceOwners(ctx, workspaceID, "ads-ai-applied",
-			"ИИ-автопилот применил изменения",
-			fmt.Sprintf("Применено изменений: %d. %s", applied, submission.Summary))
-	}
-	return submission.Summary, usage, nil
+	summary, err := s.executeAISubmission(ctx, run, workspaceID, cabinetID, strategy, submission)
+	return summary, usage, err
 }
 
 // aiDecisionStatusFor maps a guardrail verdict + automation level to the
@@ -470,8 +443,10 @@ func (s *OzonAIManagerService) handleDataRequest(ctx context.Context, workspaceI
 // --- proposal processing (guardrails → persistence → optional apply) ---
 
 func (s *OzonAIManagerService) processProposal(ctx context.Context, run sqlcgen.AiRun, workspaceID, cabinetID uuid.UUID, params domain.StrategyParams, proposal aiProposal, data *aiCabinetData) (string, error) {
-	verdict := s.evaluateProposal(ctx, cabinetID, params, proposal, data)
+	return s.processProposalWithVerdict(ctx, run, workspaceID, cabinetID, params, proposal, data, s.evaluateProposal(ctx, cabinetID, params, proposal, data))
+}
 
+func (s *OzonAIManagerService) processProposalWithVerdict(ctx context.Context, run sqlcgen.AiRun, workspaceID, cabinetID uuid.UUID, params domain.StrategyParams, proposal aiProposal, data *aiCabinetData, verdict string) (string, error) {
 	status := aiDecisionStatusFor(verdict, params.AutomationLevel)
 	guardrailVerdict := "passed"
 	if verdict != "" {
@@ -484,11 +459,11 @@ func (s *OzonAIManagerService) processProposal(ctx context.Context, run sqlcgen.
 		"new_value":   proposal.NewValue,
 	})
 
-	// auto_applied rows are inserted as proposed first: the apply step can
-	// still fail, and the audit row must reflect what actually happened.
+	// Claim the write durably before contacting Ozon. An interrupted write
+	// must never reappear as a proposal eligible for a second execution.
 	insertStatus := status
 	if status == domain.AIDecisionStatusAutoApplied {
-		insertStatus = domain.AIDecisionStatusProposed
+		insertStatus = domain.AIDecisionStatusApproved
 	}
 	decision, err := s.queries.InsertAIDecision(ctx, sqlcgen.InsertAIDecisionParams{
 		RunID:            run.ID,
@@ -521,10 +496,12 @@ func (s *OzonAIManagerService) processProposal(ctx context.Context, run sqlcgen.
 		final = domain.AIDecisionStatusFailed
 		errText = textToPgtype(truncateError(applyErr.Error()))
 	}
-	if markErr := s.queries.SetAIDecisionStatus(ctx, sqlcgen.SetAIDecisionStatusParams{
-		ID: decision.ID, Status: final, Error: errText,
-	}); markErr != nil {
-		s.logger.Warn().Err(markErr).Msg("failed to finalize ai decision status")
+	marked, markErr := s.queries.TransitionAIDecision(ctx, sqlcgen.TransitionAIDecisionParams{
+		ID: decision.ID, WorkspaceID: uuidToPgtype(workspaceID),
+		ExpectedStatus: domain.AIDecisionStatusApproved, Status: final, Error: errText,
+	})
+	if markErr != nil || !marked {
+		return domain.AIDecisionStatusApproved, fmt.Errorf("decision %s outcome could not be recorded; verify Ozon state before retrying (recorded=%t): %v", uuidFromPgtype(decision.ID), marked, markErr)
 	}
 	return final, nil
 }
@@ -536,6 +513,17 @@ func (s *OzonAIManagerService) processProposal(ctx context.Context, run sqlcgen.
 // time only. Empty return = passed.
 func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID uuid.UUID, params domain.StrategyParams, proposal aiProposal, data *aiCabinetData) string {
 	now := time.Now().UTC()
+	if proposal.NewValue != nil && !isFinitePositive(*proposal.NewValue) {
+		return "Новое значение должно быть конечным положительным числом"
+	}
+	switch proposal.ActionType {
+	case domain.AIActionBidChange, domain.AIActionBudgetChange, domain.AIActionCampaignPause:
+		if campaign, ok := data.campaignsByOzonID[proposal.Target.OzonCampaignID]; ok {
+			if reason := aiCampaignDataReason(campaign, data, params, now); reason != "" {
+				return reason
+			}
+		}
+	}
 	switch proposal.ActionType {
 	case domain.AIActionBidChange:
 		campaign, ok := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
@@ -562,6 +550,9 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		}
 		if reason := ozonAIBidGuardReason(currentBid, *proposal.NewValue, 0, params); reason != "" {
 			return reason
+		}
+		if roundRub(currentBid) == roundRub(*proposal.NewValue) {
+			return "Ставка уже установлена — изменений нет"
 		}
 		// Same total-ДРР ceiling the deterministic strategy obeys. Without it
 		// here the autopilot would keep scaling a cabinet the other branch has
@@ -594,6 +585,9 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		if reason := ozonAIBudgetGuardReason(current, int64(*proposal.NewValue), weekly, params); reason != "" {
 			return reason
 		}
+		if current != nil && *current == int64(*proposal.NewValue) {
+			return "Бюджет уже установлен — изменений нет"
+		}
 		// No configured budget = no anchor for the percent clamp. Bound the
 		// proposal by the campaign's own observed spend instead — without this
 		// the model could set any number at all.
@@ -604,7 +598,7 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 			}
 		}
 		// A budget raise spends more just as surely as a bid raise does.
-		if current != nil && int64(*proposal.NewValue) > *current {
+		if current == nil || int64(*proposal.NewValue) > *current {
 			if reason := totalDRRIncreaseBlockReason(data.totalDRRCeiling, data.totalDRR); reason != "" {
 				return reason
 			}
@@ -627,29 +621,20 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 			// campaign a human switched off stays off until a human decides
 			// otherwise (on copilot the human IS the approval, so level 2 passes).
 			if params.AutomationLevel >= 3 {
-				if reason := s.activateWithoutPriorAIPauseReason(ctx, cabinetID, proposal); reason != "" {
+				if reason := s.activationObservationReason(ctx, cabinetID, campaign, proposal, data, params, now); reason != "" {
 					return reason
 				}
 			}
 		}
 		return s.decisionCooldownReason(ctx, cabinetID, proposal, params, now)
 	case domain.AIActionCPOBid:
-		// Deliberately NOT gated by the total-ДРР ceiling: CPO charges per
-		// order, so raising a CPO bid cannot push ДРР up — spend only grows
-		// alongside the revenue it produced.
 		if proposal.Target.SKU <= 0 {
 			return "cpo_bid requires target.sku"
 		}
 		if _, ok := data.cpoBySKU[proposal.Target.SKU]; !ok {
 			return fmt.Sprintf("cpo sku %d not found in current scope", proposal.Target.SKU)
 		}
-		if proposal.NewValue == nil {
-			return "cpo_bid requires new_value"
-		}
-		if reason := ozonAICPOBidGuardReason(*proposal.NewValue, 0); reason != "" {
-			return reason
-		}
-		return s.cpoCooldownReason(ctx, cabinetID, proposal, params, now)
+		return aiCPOBidUnavailableReason
 	case domain.AIActionCPOEnable, domain.AIActionCPODisable:
 		if proposal.Target.SKU <= 0 {
 			return proposal.ActionType + " requires target.sku"
@@ -659,7 +644,14 @@ func (s *OzonAIManagerService) evaluateProposal(ctx context.Context, cabinetID u
 		}
 		// Включать «Оплату за заказ» товару без остатка бессмысленно: заказов
 		// не будет, а карточка получит показы без покупок. Выключение — всегда.
+		product := data.cpoBySKU[proposal.Target.SKU]
+		if (proposal.ActionType == domain.AIActionCPOEnable) == product.Enabled {
+			return "Оплата за заказ уже находится в требуемом состоянии"
+		}
 		if proposal.ActionType == domain.AIActionCPOEnable {
+			if reason := s.cpoEconomicsGuardReason(proposal, data, params); reason != "" {
+				return reason
+			}
 			if reason := ozonAIStockIncreaseGuardReason(stockPtr(data.stockBySKU, proposal.Target.SKU), params); reason != "" {
 				return reason
 			}
@@ -685,20 +677,6 @@ func (s *OzonAIManagerService) bidCooldownReason(ctx context.Context, campaignID
 	return s.mergedCooldownReason(ctx, cabinetID, proposal, params, now, writeGuard.ChangesToday, writeGuard.LastChangeAt)
 }
 
-// cpoCooldownReason is the CPO flavor of bidCooldownReason.
-func (s *OzonAIManagerService) cpoCooldownReason(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal, params domain.StrategyParams, now time.Time) string {
-	dayStart := pgtype.Timestamptz{Time: ozonStrategyDayStart(now), Valid: true}
-	writeGuard, err := s.queries.GetOzonAICPOGuardState(ctx, sqlcgen.GetOzonAICPOGuardStateParams{
-		DayStart:        dayStart,
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		Sku:             pgtype.Int8{Int64: proposal.Target.SKU, Valid: true},
-	})
-	if err != nil {
-		return "guard state unavailable: " + truncateError(err.Error())
-	}
-	return s.mergedCooldownReason(ctx, cabinetID, proposal, params, now, writeGuard.ChangesToday, writeGuard.LastChangeAt)
-}
-
 // decisionCooldownReason covers actions with no ozon_bid_changes trail
 // (budgets, pause/activate, cpo toggles): ai_decisions history only.
 func (s *OzonAIManagerService) decisionCooldownReason(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal, params domain.StrategyParams, now time.Time) string {
@@ -706,12 +684,13 @@ func (s *OzonAIManagerService) decisionCooldownReason(ctx context.Context, cabin
 }
 
 func (s *OzonAIManagerService) mergedCooldownReason(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal, params domain.StrategyParams, now time.Time, writeChanges int64, writeLast pgtype.Timestamptz) string {
-	targetJSON, _ := json.Marshal(proposal.Target)
-	decisionGuard, err := s.queries.GetAIDecisionGuardState(ctx, sqlcgen.GetAIDecisionGuardStateParams{
-		DayStart:        pgtype.Timestamptz{Time: ozonStrategyDayStart(now), Valid: true},
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		ActionType:      proposal.ActionType,
-		Target:          targetJSON,
+	targetJSON, _ := json.Marshal(aiCanonicalTarget(proposal))
+	decisionGuard, err := s.queries.GetAIDecisionExecutionGuardState(ctx, sqlcgen.GetAIDecisionExecutionGuardStateParams{
+		DayStart:          pgtype.Timestamptz{Time: ozonStrategyDayStart(now), Valid: true},
+		SellerCabinetID:   uuidToPgtype(cabinetID),
+		ActionType:        proposal.ActionType,
+		Target:            targetJSON,
+		ExcludeDecisionID: uuidToNullablePgtype(proposal.ExcludeDecisionID),
 	})
 	if err != nil {
 		return "ai decision guard state unavailable: " + truncateError(err.Error())
@@ -732,25 +711,6 @@ func (s *OzonAIManagerService) mergedCooldownReason(ctx context.Context, cabinet
 		last = &t
 	}
 	return ozonStrategyGuardReason(changes, last, params, now)
-}
-
-// activateWithoutPriorAIPauseReason blocks autopilot re-activation of
-// campaigns the AI never paused: a campaign a human switched off is a human
-// decision, and resurrecting it silently is exactly the kind of surprise an
-// autopilot must not produce. Fail-closed: an unavailable history blocks.
-func (s *OzonAIManagerService) activateWithoutPriorAIPauseReason(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal) string {
-	targetJSON, _ := json.Marshal(domain.AIDecisionTarget{OzonCampaignID: proposal.Target.OzonCampaignID})
-	pauses, err := s.queries.CountAppliedAIPausesForTarget(ctx, sqlcgen.CountAppliedAIPausesForTargetParams{
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		Target:          targetJSON,
-	})
-	if err != nil {
-		return "pause history unavailable: " + truncateError(err.Error())
-	}
-	if pauses == 0 {
-		return "кампанию останавливал не ИИ — включение обратно только вручную или через Копилот"
-	}
-	return ""
 }
 
 // cabinetActionCapReason is the cabinet-wide daily brake: no matter how many
@@ -849,23 +809,17 @@ func (s *OzonAIManagerService) applyProposal(ctx context.Context, workspaceID, c
 	case domain.AIActionCampaignPause:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
 		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryCampaignWrite, 1)
-		return "", s.actions.DeactivateCampaign(ctx, workspaceID, uuidFromPgtype(campaign.ID))
+		return "", s.actions.SetCampaignStateWithSource(ctx, workspaceID, uuidFromPgtype(campaign.ID), false, domain.BidSourceAI)
 	case domain.AIActionCampaignActivate:
 		campaign := data.campaignsByOzonID[proposal.Target.OzonCampaignID]
 		s.apiBudget.Record(ctx, cabinetID, ozonAPICategoryCampaignWrite, 1)
-		return "", s.actions.ActivateCampaign(ctx, workspaceID, uuidFromPgtype(campaign.ID))
+		return "", s.actions.SetCampaignStateWithSource(ctx, workspaceID, uuidFromPgtype(campaign.ID), true, domain.BidSourceAI)
 	case domain.AIActionCPOBid:
-		// CPO minimums are best-effort: CPO charges per order, so an
-		// unavailable minimum does not block (Ozon rejects invalid bids).
-		if minBid, err := s.cpoMinBid(ctx, workspaceID, cabinetID, proposal.Target.SKU); err == nil {
-			if verdict := ozonAICPOBidGuardReason(*proposal.NewValue, minBid); verdict != "" {
-				return verdict, nil
-			}
-		}
-		return "", s.actions.SetCPOBidsWithSource(ctx, workspaceID, cabinetID,
-			[]OzonCPOBidInput{{SKU: proposal.Target.SKU, BidRub: roundRub(*proposal.NewValue)}},
-			domain.BidSourceAI, reason)
+		return aiCPOBidUnavailableReason, nil
 	case domain.AIActionCPOEnable:
+		if verdict := s.liveCPOEnableGuard(ctx, workspaceID, cabinetID, proposal, data, params); verdict != "" {
+			return verdict, nil
+		}
 		return "", s.actions.SetCPOEnabledWithSource(ctx, workspaceID, cabinetID, []int64{proposal.Target.SKU}, true, domain.BidSourceAI, reason)
 	case domain.AIActionCPODisable:
 		return "", s.actions.SetCPOEnabledWithSource(ctx, workspaceID, cabinetID, []int64{proposal.Target.SKU}, false, domain.BidSourceAI, reason)
@@ -903,28 +857,11 @@ func (s *OzonAIManagerService) minSKUBid(ctx context.Context, workspaceID, cabin
 		return 0, err
 	}
 	for _, row := range rows {
-		if row.SKU == sku {
+		if row.SKU == sku && isFinitePositive(row.BidRub) {
 			return row.BidRub, nil
 		}
 	}
-	return 0, nil
-}
-
-func (s *OzonAIManagerService) cpoMinBid(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku int64) (float64, error) {
-	creds, err := s.cabinetPerfCreds(ctx, workspaceID, cabinetID)
-	if err != nil {
-		return 0, err
-	}
-	rows, err := s.perfClient.GetCPOMinBids(ctx, creds, []int64{sku})
-	if err != nil {
-		return 0, err
-	}
-	for _, row := range rows {
-		if row.SKU == sku {
-			return row.BidRub, nil
-		}
-	}
-	return 0, nil
+	return 0, fmt.Errorf("Ozon returned no minimum bid for SKU %d", sku)
 }
 
 // --- prompt + tools ---
@@ -938,24 +875,26 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 Ты работаешь с ДВУМЯ разными показателями, не путай их:
 - «ДРР кампании» = расход кампании / выручка, которую Ozon приписал этой кампании × 100%%. Показывает, окупается ли сама кампания. Поле drr_pct в totals_14d.
 - «ДРР от общего оборота» = рекламный расход / весь оборот × 100%%. Показывает, какую долю оборота съедает реклама. По кабинету — поля total_drr_pct и total_turnover_rub в rules; по каждой кампании — поле total_drr_pct в её totals_14d (оборот SKU делится между кампаниями, которые их рекламируют, пропорционально расходу).
-Кампания может выглядеть отлично по первому показателю и при этом ухудшать второй — это значит, что реклама выкупает заказы, которые пришли бы и без неё.
+Различия этих показателей не доказывают влияние рекламы на органические заказы: сравнение периодов показывает связь, а не причинность.
 
-Цель: привести ДРР кампаний к целевому уровню %.1f%% без потери объёма заказов и не разгоняя при этом ДРР от общего оборота.
+Цель: управлять расходами с ориентиром на ДРР %.1f%%, учитывая прибыль и объём выкупленных заказов. Не обещай сохранение или рост заказов: такой результат требует проверки после изменения.
 
 Жёсткие правила (нарушения отклонит автоматика):
 - Не предлагай изменение ставки или бюджета больше чем на %.0f%% от текущего значения.
 - Ставки CPC держи в диапазоне %d–%d ₽ и не ниже минимальной ставки Ozon.
-- В rules есть incremental_drr — сравнение двух последних периодов. verdict "cannibalizing" означает, что расход вырос, а оборот нет: масштабировать в этом состоянии бессмысленно, ищи, что сокращать. "freed" — расход снизили без потери оборота, можно сокращать и дальше. "accretive" — рост расхода реально приносит оборот. "not_enough_data" — игнорируй.
-- Поле max_total_drr_source говорит, откуда взят потолок: "explicit" — задан вручную, "unit_economics" — рассчитан из маржи кабинета с поправкой на выкуп, "none" — потолка нет. Если в rules задан max_total_drr_pct и total_drr_pct уже достиг его, любое повышение ставки или бюджета будет отклонено. В этом случае предлагай только снижения, паузы и CPO. Когда total_drr_status не равен "ok", показатель не измерен — ориентируйся на ДРР кампаний.
+- В rules есть incremental_drr — сравнение двух последних периодов. verdict "cannibalizing" означает, что расход вырос, а оборот нет: сначала проверь причины и качество данных. "freed" — расход снизился при сохранении оборота в наблюдаемом окне; дальнейшее сокращение может снизить продажи. "accretive" — одновременно выросли расход и оборот; это не доказывает эффект рекламы. "not_enough_data" — игнорируй.
+- Поле max_total_drr_source говорит, откуда взят потолок: "explicit" — задан вручную, "unit_economics" — рассчитан из маржи кабинета с поправкой на выкуп, "none" — потолка нет. Если в rules задан max_total_drr_pct и total_drr_pct уже достиг его, любое повышение ставки или бюджета будет отклонено. В этом случае не увеличивай расходы, в том числе на CPO. Когда total_drr_status не равен "ok", показатель не измерен — не предлагай увеличение расходов.
 - Цель по ДРР %.1f%% остаётся главной, но учитывай маржу SKU (поле margin_pct в экономике, источник себестоимости — cost_source): у товаров с высокой маржой допустим более высокий ДРР, у низкомаржинальных — жёстче. Не масштабируй SKU с отрицательной или неизвестной маржой (margin_pct отсутствует).
-- CPO («Продвижение в поиске») списывает деньги только за заказ — безрисково по ДРР: включай смело для SKU с положительной маржой.
-- Отзывы: в rules есть shop_rating и shop_reviews_count (рейтинг магазина), в экономике у части SKU — rating и reviews_count. Товар с рейтингом ниже ~4.3 конвертирует заметно хуже: не масштабируй его рекламу, пока рейтинг не починен, — предложи снижение/паузу и упомяни рейтинг в summary. Отсутствие полей — «не измерено».
+- Оплата за заказ (CPO) тоже расходует маржу и может увеличить ДРР. Доступна только для SKU из cpo_products, только вне режима bound_campaigns_only. Пустой cpo_products означает, что эти действия недоступны. Не выдумывай доступность CPO и фиксированные ставки: используй подтверждённые поля и ограничения. campaign_activate лишь возобновляет прежнюю кампанию, НЕ переводит её с CPC на CPO. Автоматическая установка фиксированной ставки CPO недоступна: не предлагай cpo_bid.
+- Отзывы: в rules есть shop_rating и shop_reviews_count (рейтинг магазина), в экономике у части SKU — rating и reviews_count. Сам рейтинг магазина и произвольный порог 4.3 не доказывают причину конверсии отдельного товара. Рассматривай отзывы вместе с измеренной воронкой; не останавливай рекламу только из-за рейтинга. Отсутствие полей — «не измерено».
 - Воронка карточки: в экономике могут быть card_impressions_14d (показы в поиске), card_views_14d (просмотры карточки), conv_to_cart_pct и conv_to_order_pct. Различай две болезни: высокий ДРР при здоровой конверсии карточки — проблема ставок, чини ставками; высокий ДРР при слабой конверсии (например, conv_to_cart_pct заметно ниже других SKU кабинета) — проблема карточки или цены, ставками НЕ лечится: не поднимай ставку, предложи снижение/паузу и напиши в summary, что нужно чинить карточку. Отсутствие полей — «не измерено».
 - Склад: в экономике у SKU есть stock (остаток, шт.) и days_of_cover (на сколько дней продаж хватит запаса). Не масштабируй SKU с остатком ниже min_stock_for_increase (автоматика отклонит) и не разгоняй товары с days_of_cover меньше ~14 — товар кончится раньше, чем окупится разгон; при низком покрытии предложи снижение или паузу и упомяни риск в summary. Отсутствие stock — «не измерено», а не ноль.
-- Кампании с ДРР сильно выше цели — снижай ставки или ставь на паузу; с ДРР ниже цели и хорошей маржой — масштабируй.
+- Не останавливай кампанию только из-за превышения ДРР кампании над целью кабинета: у показателей разные знаменатели. Сначала оцени зрелость атрибуции, объём данных, маржу, роль кампании и последствия для продаж. При достаточных данных предлагай соразмерное изменение; паузу обосновывай риском потерь, а не единственным порогом.
 - Учитывай, что из твоих прошлых решений сработало, а что нет (секция recent_decisions: действие, что предлагал, ДРР до→после, изменение расхода/выручки). Не повторяй то, что уже не дало эффекта.
-- В recent_decisions те же два показателя: drr_before/drr_after — ДРР кампании, total_drr_before/total_drr_after — ДРР от общего оборота. Решение, которое улучшило первый, но подняло второй, реального оборота не добавило. Такие решения не повторяй, даже если по кампании они выглядят удачными.
-- Не трогай кампании без статистики за окно (мало данных — не действие, а наблюдение).
+- В recent_decisions те же два показателя: drr_before/drr_after — ДРР кампании, total_drr_before/total_drr_after — ДРР от общего оборота. Улучшение первого при росте второго требует проверки оборота и прибыли, оно само по себе не доказывает пользу или вред решения. Оцени оба показателя, но не выдавай совпадение по времени за доказанный эффект ИИ.
+- Не трогай кампании без достаточной свежей статистики за полные дни. После изменения дождись измеримого результата. Не чередуй паузу и запуск из-за того же исторического ДРР.
+- recent_decisions содержит время, результат и причины отказов. Не повторяй недоступные или отклонённые действия без изменения условий.
+- proposals — единый план: каждый шаг должен быть доступен. Если шаг зависит от перехода на другой способ продвижения, не предлагай его, пока переход не подтверждён. Система проверит весь план до исполнения; ошибка шага останавливает оставшиеся действия.
 - campaign_activate на Автопилоте проходит только для кампаний, которые ранее остановил ты сам; кампании, выключенные человеком, не включай — предложи это в summary как рекомендацию.
 - Для кампании без установленного бюджета budget_change ограничен 2× её фактического расхода за окно; если расхода нет — первый бюджет задаёт человек, не предлагай его.
 - Каждое предложение обосновывай цифрами из контекста (rationale) и ожидаемым эффектом (expected_effect).
@@ -964,7 +903,7 @@ func aiSystemPrompt(params domain.StrategyParams) string {
 - request_data — ОДИН дополнительный запрос данных, только если без них решение невозможно (конкурентные ставки, поисковые запросы по SKU).
 - submit_proposals — финальный список предложений + краткое резюме по кабинету (summary, по-русски).
 
-Действия: bid_change (target: ozon_campaign_id+sku, new_value = ставка ₽), budget_change (target: ozon_campaign_id, new_value = бюджет ₽ в том поле, которое кампания уже использует), campaign_pause / campaign_activate (target: ozon_campaign_id), cpo_bid (target: sku, new_value = фикс. ставка ₽), cpo_enable / cpo_disable (target: sku).
+Действия: bid_change (target: ozon_campaign_id+sku, new_value = ставка ₽), budget_change (target: ozon_campaign_id, new_value = бюджет ₽ в том поле, которое кампания уже использует), campaign_pause / campaign_activate (target: ozon_campaign_id), cpo_enable / cpo_disable (target: sku).
 
 Если менять нечего — вызови submit_proposals с пустым списком proposals и объясни в summary, почему.
 

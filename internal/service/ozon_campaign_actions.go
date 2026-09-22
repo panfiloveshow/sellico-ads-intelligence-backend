@@ -148,6 +148,18 @@ func (s *OzonCampaignActionsService) DeactivateCampaign(ctx context.Context, wor
 }
 
 func (s *OzonCampaignActionsService) setCampaignState(ctx context.Context, workspaceID, campaignID uuid.UUID, activate bool) error {
+	campaign, _, err := s.ownedCampaign(ctx, workspaceID, campaignID)
+	if err != nil {
+		return err
+	}
+	return s.queries.WithOzonAIExecutionLock(ctx, campaign.SellerCabinetID, func(_ *sqlcgen.Queries) error {
+		return s.SetCampaignStateWithSource(ctx, workspaceID, campaignID, activate, domain.BidSourceManual)
+	})
+}
+
+// SetCampaignStateWithSource records the origin of a confirmed state change.
+// AI callers already hold the cabinet execution lock; manual wrappers acquire it.
+func (s *OzonCampaignActionsService) SetCampaignStateWithSource(ctx context.Context, workspaceID, campaignID uuid.UUID, activate bool, source string) error {
 	campaign, creds, err := s.ownedCampaign(ctx, workspaceID, campaignID)
 	if err != nil {
 		return err
@@ -162,11 +174,26 @@ func (s *OzonCampaignActionsService) setCampaignState(ctx context.Context, works
 	if err != nil {
 		return fmt.Errorf("ozon campaign state change: %w", err)
 	}
+	action := domain.AIActionCampaignPause
+	if activate {
+		action = domain.AIActionCampaignActivate
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"source": source, "action_type": action,
+		"previous_state": pgTextValue(campaign.State), "new_state": newState,
+	})
+	// Record the external success even if the local state mirror then fails.
+	if _, err := s.queries.CreateAuditLog(ctx, sqlcgen.CreateAuditLogParams{
+		WorkspaceID: uuidToPgtype(workspaceID), Action: "ozon_campaign_state_applied",
+		EntityType: "ozon_campaign", EntityID: campaign.ID, Metadata: metadata,
+	}); err != nil {
+		return fmt.Errorf("Ozon accepted state change, but recording its outcome failed; synchronization required: %w", err)
+	}
 	if stateErr := s.queries.UpdateOzonCampaignState(ctx, sqlcgen.UpdateOzonCampaignStateParams{
 		ID:    campaign.ID,
 		State: textToPgtype(newState),
 	}); stateErr != nil {
-		s.logger.Warn().Err(stateErr).Str("campaign_id", campaignID.String()).Msg("failed to mirror ozon campaign state")
+		return fmt.Errorf("Ozon accepted state change, but local state update failed; synchronization required: %w", stateErr)
 	}
 	s.logger.Info().
 		Str("campaign_id", campaignID.String()).

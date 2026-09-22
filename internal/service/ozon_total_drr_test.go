@@ -103,19 +103,19 @@ func TestTotalDRRIncreaseBlockReason(t *testing.T) {
 		{"exactly at the ceiling blocks", ceiling(10), ok(10), true},
 		{"above the ceiling blocks", ceiling(10), ok(14.2), true},
 		{
-			// A stalled ozon:sync_analytics must not freeze every increase
-			// across every cabinet.
-			name:      "stale data never blocks",
+			name:      "stale data blocks unverified increases under a ceiling",
 			max:       ceiling(10),
 			total:     totalDRR{Value: 0, Status: totalDRRStatusStale},
-			wantBlock: false,
+			wantBlock: true,
 		},
 		{
-			name:      "missing data never blocks",
+			name:      "missing data blocks unverified increases under a ceiling",
 			max:       ceiling(10),
 			total:     totalDRR{Value: 0, Status: totalDRRStatusNoData},
-			wantBlock: false,
+			wantBlock: true,
 		},
+		{"missing data without a ceiling does not add a ceiling", nil, totalDRR{Status: totalDRRStatusNoData}, false},
+		{"unknown measurement status cannot authorize increases", ceiling(10), totalDRR{Status: "partial"}, true},
 	}
 
 	for _, tc := range tests {

@@ -143,7 +143,7 @@ type aiWeeklyTrend struct {
 // weeklyDRRTrend aggregates the cabinet's campaign stats over the trailing week.
 // drr_start/drr_end are the first- and last-day ДРР (the trend indicator).
 func (s *OzonAIManagerService) weeklyDRRTrend(ctx context.Context, cabinetID uuid.UUID, now time.Time) aiWeeklyTrend {
-	since := now.AddDate(0, 0, -aiWeeklyWindowDays)
+	since := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -aiWeeklyWindowDays)
 	rows, err := s.queries.ListOzonCampaignDailyStatsSince(ctx, sqlcgen.ListOzonCampaignDailyStatsSinceParams{
 		SellerCabinetID: uuidToPgtype(cabinetID),
 		Date:            pgtype.Date{Time: since, Valid: true},
@@ -156,6 +156,9 @@ func (s *OzonAIManagerService) weeklyDRRTrend(ctx context.Context, cabinetID uui
 	byDate := map[string]*dayAgg{}
 	var trend aiWeeklyTrend
 	for _, row := range rows {
+		if !row.Date.Valid || !row.Date.Time.Before(now.UTC().Truncate(24*time.Hour)) {
+			continue
+		}
 		key := row.Date.Time.Format("2006-01-02")
 		d := byDate[key]
 		if d == nil {
@@ -274,7 +277,7 @@ func aiWeeklyReportSystemPrompt() string {
 - Это только резюме, БЕЗ предложений действий и без обещаний — просто расскажи, что было.
 - Опиши динамику ДРР (доля рекламных расходов), расход и выручку человеческим языком, как изменилось за неделю.
 - Если есть «дрр_от_общего_оборота_пункты» — объясни разницу простыми словами: обычная ДРР считается от выручки, которую Ozon приписал рекламе, а эта — от всего оборота магазина. Назови обе цифры.
-- Если есть «вывод_по_доп_расходу»: "accretive" — рост рекламных затрат принёс дополнительный оборот; "cannibalizing" — затраты выросли, а оборот нет, то есть реклама выкупала заказы, которые магазин получил бы и так (это важно сказать прямо); "freed" — затраты снизили без потери оборота; "costly_cut" — сократили рекламу и вместе с ней потеряли оборот. Объясни своими словами, без этих английских слов.
+- Если есть «вывод_по_доп_расходу»: "accretive" — расходы и оборот выросли; "cannibalizing" — расходы выросли, а оборот не вырос; "freed" — расходы снизились, а оборот не снизился; "costly_cut" — расходы и оборот снизились. Это наблюдаемые изменения: нельзя утверждать, что реклама вызвала изменение оборота, принесла дополнительные заказы или сэкономила деньги без контрольного сравнения. Объясни своими словами, без этих английских слов.
 - Упомяни, сколько решений принял ИИ и что было применено, если это уместно.
 - НИКОГДА не используй имена полей и техножаргон: «расход», «выручка», «доля рекламных расходов (ДРР)», «заказы» — обычными словами. Числа пиши по-человечески.
 - Если данных за неделю почти нет — честно скажи об этом одним-двумя предложениями.
@@ -337,6 +340,30 @@ func (s *OzonAIManagerService) GetReadiness(ctx context.Context, workspaceID, ca
 	stats, err := s.queries.GetAIReadinessStats(ctx, uuidToPgtype(cabinetID))
 	if err != nil {
 		return nil, fmt.Errorf("load readiness stats: %w", err)
+	}
+	// Keep the existing shadow/readiness criteria, but derive the displayed
+	// DRR comparison from the same complete, disjoint observations as impact.
+	// Legacy partial evaluations and multiple SKU actions on one campaign
+	// must not give a projection extra evidence or extra weight.
+	evaluated, err := s.queries.ListRecentCompleteAIImpactDecisions(ctx, uuidToPgtype(cabinetID))
+	if err != nil {
+		return nil, fmt.Errorf("load readiness impact evidence: %w", err)
+	}
+	stats.EvaluatedPairs = 0
+	stats.AvgDrrDelta = pgtype.Numeric{}
+	observations := aiImpactObservations{}
+	var deltaSum float64
+	for _, decision := range evaluated {
+		var target domain.AIDecisionTarget
+		if json.Unmarshal(decision.Target, &target) != nil ||
+			!observations.include(target.OzonCampaignID, decision.AppliedAt.Time) {
+			continue
+		}
+		deltaSum += pgNumericToFloat(decision.DrrAfter) - pgNumericToFloat(decision.DrrBefore)
+		stats.EvaluatedPairs++
+	}
+	if stats.EvaluatedPairs > 0 {
+		stats.AvgDrrDelta = floatToPgNumeric(deltaSum / float64(stats.EvaluatedPairs))
 	}
 
 	readiness := computeAIReadiness(params.AutomationLevel, strategy.CreatedAt, stats, time.Now().UTC())

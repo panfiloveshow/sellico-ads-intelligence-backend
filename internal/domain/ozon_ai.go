@@ -132,10 +132,8 @@ type AIDecision struct {
 	EvaluatedAt      *time.Time `json:"evaluated_at,omitempty"`
 }
 
-// AIImpactSummary is the 30-day «ИИ заработал/сэкономил» aggregate for a
-// cabinet. Attribution is deliberately rough: each applied decision is
-// compared over a 7-day window before vs a 7-day window after its apply
-// moment on its target campaign — no holdout, no cross-decision isolation.
+// AIImpactSummary compares observed performance around applied decisions.
+// Without a control group the deltas cannot establish savings caused by AI.
 type AIImpactSummary struct {
 	WindowDays         int      `json:"window_days"`
 	DecisionsApplied   int64    `json:"decisions_applied"`
@@ -144,8 +142,9 @@ type AIImpactSummary struct {
 	AvgDRRAfter        *float64 `json:"avg_drr_after,omitempty"`
 	SpendDeltaRub      float64  `json:"spend_delta_rub"`
 	RevenueDeltaRub    float64  `json:"revenue_delta_rub"`
-	SavedRub           float64  `json:"saved_rub"`
-	ExtraRevenueRub    float64  `json:"extra_revenue_rub"`
+	SavedRub           *float64 `json:"saved_rub,omitempty"`
+	ExtraRevenueRub    *float64 `json:"extra_revenue_rub,omitempty"`
+	AttributionStatus  string   `json:"attribution_status"`
 	// LowData: fewer evaluated decisions than the display threshold — the
 	// aggregate is statistical noise and the UI must say «данных пока мало»
 	// instead of rendering the numbers as a verdict.

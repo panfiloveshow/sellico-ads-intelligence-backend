@@ -19,8 +19,8 @@ import (
 // Ozon attributes to the campaign. This one divides ad spend by the seller's
 // WHOLE turnover (ozon_sales_daily), so it answers a different question: не
 // «окупается ли кампания», а «сколько всего оборота съедает реклама». The two
-// diverge exactly when advertising buys traffic that would have converted
-// organically anyway.
+// have different denominators; their difference does not establish whether
+// advertising caused incremental orders.
 //
 // It is measured at two scopes:
 //
@@ -39,12 +39,12 @@ import (
 const (
 	// totalDRRStatusOK means the number is usable.
 	totalDRRStatusOK = "ok"
-	// totalDRRStatusNoData means there is no turnover to divide by. NOT the
+	// totalDRRStatusNoData means turnover or aligned evidence is missing. NOT the
 	// same as ДРР 0 — a zero denominator makes the ratio undefined, and
 	// reporting it as 0 would read as "всё отлично, можно разгоняться".
 	totalDRRStatusNoData = "no_data"
-	// totalDRRStatusStale means turnover exists but the newest day is older
-	// than the strategy's freshness limit — ozon:sync_analytics is behind.
+	// totalDRRStatusStale means the newest sales or advertising day is older
+	// than the strategy's freshness limit.
 	totalDRRStatusStale = "stale"
 
 	// Scope is recorded alongside every value so cabinet-wide and
@@ -105,13 +105,12 @@ func computeTotalDRR(spend, revenue float64, lastData, now time.Time, maxAgeHour
 	return result
 }
 
-// loadCabinetTotalDRR measures a cabinet's total-turnover ДРР over [since,
-// now]. Shared by the deterministic strategy and the AI autopilot so both
-// branches judge the same number.
+// loadCabinetTotalDRR measures a cabinet's total-turnover ДРР over complete
+// UTC calendar days [since, yesterday]. Shared by the deterministic strategy
+// and the AI autopilot so both branches judge the same number.
 //
-// Read failures are never fatal: they degrade to "no_data", which the ceiling
-// treats as "do not block". Losing the guardrail for one run is strictly
-// better than stopping the sweep.
+// Read failures degrade to "no_data": observation and reductions can continue,
+// but a configured ceiling cannot authorize an increase without evidence.
 func loadCabinetTotalDRR(
 	ctx context.Context,
 	queries *sqlcgen.Queries,
@@ -120,35 +119,41 @@ func loadCabinetTotalDRR(
 	since, now time.Time,
 	maxAgeHours int,
 ) totalDRR {
-	sinceDate := pgtype.Date{Time: since, Valid: true}
-	cabinet := uuidToPgtype(cabinetID)
-
-	sales, err := queries.AggregateOzonCabinetTotalSalesSince(ctx, sqlcgen.AggregateOzonCabinetTotalSalesSinceParams{
-		SellerCabinetID: cabinet,
-		Since:           sinceDate,
-	})
-	if err != nil {
-		logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("total drr: turnover read failed")
-		return computeTotalDRR(0, 0, time.Time{}, now, maxAgeHours)
+	from := since.UTC().Truncate(24 * time.Hour)
+	to := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	if from.After(to) {
+		return totalDRR{Status: totalDRRStatusNoData, Scope: totalDRRScopeCabinet}
 	}
-	spend, err := queries.AggregateOzonCabinetAdSpendSince(ctx, sqlcgen.AggregateOzonCabinetAdSpendSinceParams{
-		SellerCabinetID: cabinet,
-		Since:           sinceDate,
-	})
+	evidence, err := queries.GetOzonDRRWindowEvidence(ctx, uuidToPgtype(cabinetID),
+		pgtype.Date{Time: from, Valid: true}, pgtype.Date{Time: to, Valid: true})
 	if err != nil {
-		logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("total drr: ad spend read failed")
+		logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).Msg("total drr: aligned evidence read failed")
 		return computeTotalDRR(0, 0, time.Time{}, now, maxAgeHours)
 	}
 
 	var lastData time.Time
-	if sales.LastDate.Valid {
-		lastData = sales.LastDate.Time
+	if evidence.SalesLastDate.Valid && evidence.AdLastDate.Valid {
+		lastData = evidence.SalesLastDate.Time
+		if evidence.AdLastDate.Time.Before(lastData) {
+			lastData = evidence.AdLastDate.Time
+		}
 	}
-	return computeTotalDRR(
-		pgNumericToFloat(spend),
-		pgNumericToFloat(sales.RevenueRub),
+	result := computeTotalDRR(
+		pgNumericToFloat(evidence.SpendRub),
+		pgNumericToFloat(evidence.RevenueRub),
 		lastData, now, maxAgeHours,
 	)
+	if result.Status == totalDRRStatusOK && !completeDRRWindowEvidence(evidence, from, to) {
+		result.Status = totalDRRStatusNoData
+		result.Value = 0
+	}
+	return result
+}
+
+func completeDRRWindowEvidence(evidence sqlcgen.OzonDRRWindowEvidence, from, to time.Time) bool {
+	days := int64(to.Sub(from)/(24*time.Hour)) + 1
+	return days > 0 && evidence.SalesDays == days && evidence.AdDays == days &&
+		evidence.MissingCampaignDays == 0 && evidence.InvalidRows == 0
 }
 
 // campaignTotalDRR is the per-campaign variant of the measurement: the
@@ -173,10 +178,13 @@ func loadCampaignAttributedTurnover(
 	cabinetID uuid.UUID,
 	since time.Time,
 ) map[uuid.UUID]sqlcgen.OzonCampaignAttributedTurnoverByCabinetRow {
-	rows, err := queries.OzonCampaignAttributedTurnoverByCabinet(ctx, sqlcgen.OzonCampaignAttributedTurnoverByCabinetParams{
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		Since:           pgtype.Date{Time: since, Valid: true},
-	})
+	from := since.UTC().Truncate(24 * time.Hour)
+	to := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	if from.After(to) {
+		return nil
+	}
+	rows, err := queries.OzonCampaignAttributedTurnoverWindow(ctx, uuidToPgtype(cabinetID),
+		pgtype.Date{Time: from, Valid: true}, pgtype.Date{Time: to, Valid: true})
 	if err != nil {
 		logger.Warn().Err(err).Str("cabinet_id", cabinetID.String()).
 			Msg("total drr: attributed turnover read failed")
@@ -218,8 +226,8 @@ func campaignTotalDRRFrom(
 //
 //	incremental ДРР = Δspend / Δturnover × 100
 //
-// It answers the question neither level ДРР can: did the extra advertising
-// rouble add turnover, or did it buy orders the shop was already getting?
+// It describes co-movement of spend and turnover, not the causal contribution
+// of advertising. Price, stock, seasonality and other changes can affect both.
 //
 // Deliberately observational — recorded and shown, never wired to a bid.
 // On small numbers it is pure noise (a tiny Δturnover sends it to infinity),
@@ -237,12 +245,13 @@ const (
 const (
 	// incrementalDRRNotEnoughData — the windows fail the evidence floors.
 	incrementalDRRNotEnoughData = "not_enough_data"
-	// incrementalDRRAccretive — more spend brought more turnover.
+	// Legacy verdict keys are retained for API compatibility. These describe
+	// observed directions, not causal attribution.
+	// incrementalDRRAccretive — spend and turnover both increased.
 	incrementalDRRAccretive = "accretive"
 	// incrementalDRRCannibalizing — spend went up, turnover did not follow.
-	// This is the case the whole feature exists to surface.
 	incrementalDRRCannibalizing = "cannibalizing"
-	// incrementalDRRFreed — spend went down without losing turnover.
+	// incrementalDRRFreed — spend went down while turnover did not decline.
 	incrementalDRRFreed = "freed"
 	// incrementalDRRCostly — spend went down and turnover fell with it.
 	incrementalDRRCostly = "costly_cut"
@@ -314,33 +323,30 @@ func loadIncrementalDRR(
 	window := func(from, to time.Time) (spend, turnover float64, orders int64, ok bool) {
 		dateFrom := pgtype.Date{Time: from, Valid: true}
 		dateTo := pgtype.Date{Time: to, Valid: true}
-		sales, err := queries.GetOzonCabinetSalesWindowTotals(ctx, sqlcgen.GetOzonCabinetSalesWindowTotalsParams{
-			SellerCabinetID: cabinet, DateFrom: dateFrom, DateTo: dateTo,
-		})
+		evidence, err := queries.GetOzonDRRWindowEvidence(ctx, cabinet, dateFrom, dateTo)
 		if err != nil {
-			logger.Warn().Err(err).Msg("incremental drr: turnover window read failed")
+			logger.Warn().Err(err).Msg("incremental drr: aligned window read failed")
 			return 0, 0, 0, false
 		}
-		spendRow, err := queries.GetOzonCabinetAdSpendWindowTotals(ctx, sqlcgen.GetOzonCabinetAdSpendWindowTotalsParams{
-			SellerCabinetID: cabinet, DateFrom: dateFrom, DateTo: dateTo,
-		})
-		if err != nil {
-			logger.Warn().Err(err).Msg("incremental drr: spend window read failed")
+		if !completeDRRWindowEvidence(evidence, from, to) {
 			return 0, 0, 0, false
 		}
-		return pgNumericToFloat(spendRow.SpendRub), pgNumericToFloat(sales.RevenueRub), sales.OrderedUnits, true
+		return pgNumericToFloat(evidence.SpendRub), pgNumericToFloat(evidence.RevenueRub), evidence.OrderedUnits, true
 	}
 
-	// Two adjacent closed windows: [now-2L, now-L-1] and [now-L, now].
-	curFrom := now.AddDate(0, 0, -lookbackDays)
-	prevFrom := now.AddDate(0, 0, -2*lookbackDays)
+	// Two equal closed windows, excluding the still-changing current day:
+	// [today-2L, today-L-1] and [today-L, yesterday].
+	today := now.UTC().Truncate(24 * time.Hour)
+	curFrom := today.AddDate(0, 0, -lookbackDays)
+	curTo := today.AddDate(0, 0, -1)
+	prevFrom := today.AddDate(0, 0, -2*lookbackDays)
 	prevTo := curFrom.AddDate(0, 0, -1)
 
 	prevSpend, prevTurnover, prevOrders, ok := window(prevFrom, prevTo)
 	if !ok {
 		return incrementalDRR{Verdict: incrementalDRRNotEnoughData}
 	}
-	curSpend, curTurnover, curOrders, ok := window(curFrom, now)
+	curSpend, curTurnover, curOrders, ok := window(curFrom, curTo)
 	if !ok {
 		return incrementalDRR{Verdict: incrementalDRRNotEnoughData}
 	}
@@ -498,15 +504,17 @@ func resolveTotalDRRCeiling(explicit *float64, margin cabinetMargin, targetProfi
 // separate code, and a ceiling installed in only one of them would let the
 // other keep scaling the same cabinet.
 //
-// A stale or missing measurement does NOT block. ozon:sync_analytics runs on
-// its own low-frequency schedule, and one failed sync must not silently freeze
-// every increase across every cabinet; the caller records the reason instead.
+// A configured ceiling is a limit, not a suggestion. A stale, missing or
+// incomplete measurement cannot establish room to increase expenditure.
 func totalDRRIncreaseBlockReason(maxTotalDRR *float64, total totalDRR) string {
 	if maxTotalDRR == nil || *maxTotalDRR <= 0 {
 		return ""
 	}
 	if total.Status != totalDRRStatusOK {
-		return ""
+		if total.Status == totalDRRStatusStale {
+			return "Данные рекламы или продаж устарели — повышение заблокировано до обновления ДРР от общего оборота"
+		}
+		return "Нет полных сопоставимых данных рекламы и продаж — повышение заблокировано до проверки ДРР от общего оборота"
 	}
 	if total.Value < *maxTotalDRR {
 		return ""

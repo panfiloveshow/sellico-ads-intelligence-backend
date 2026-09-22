@@ -45,12 +45,12 @@ const (
 )
 
 type aiPackTotals struct {
-	Views      int64   `json:"views"`
-	Clicks     int64   `json:"clicks"`
-	SpendRub   float64 `json:"spend_rub"`
-	Orders     int64   `json:"orders"`
-	RevenueRub float64 `json:"revenue_rub"`
-	DRR        float64 `json:"drr_pct"`
+	Views      int64    `json:"views"`
+	Clicks     int64    `json:"clicks"`
+	SpendRub   float64  `json:"spend_rub"`
+	Orders     int64    `json:"orders"`
+	RevenueRub float64  `json:"revenue_rub"`
+	DRR        *float64 `json:"drr_pct"`
 	// TotalDRR is this campaign's spend over its attributed share of the
 	// cabinet's whole turnover. A campaign whose drr_pct looks fine while
 	// total_drr_pct is high is buying orders the shop was getting anyway.
@@ -135,16 +135,19 @@ type aiPackEconomics struct {
 // aiPackDecisionOutcome is one past applied decision + its measured result, fed
 // to the model so it learns per-cabinet what worked («что сработало, а что нет»).
 type aiPackDecisionOutcome struct {
-	Action       string   `json:"action"`
-	Campaign     string   `json:"campaign,omitempty"`
-	SKU          int64    `json:"sku,omitempty"`
-	ProposedVal  *float64 `json:"proposed_value,omitempty"`
-	Status       string   `json:"status"`
-	Outcome      string   `json:"outcome,omitempty"`
-	DRRBefore    *float64 `json:"drr_before,omitempty"`
-	DRRAfter     *float64 `json:"drr_after,omitempty"`
-	SpendDelta   *float64 `json:"spend_delta_rub,omitempty"`
-	RevenueDelta *float64 `json:"revenue_delta_rub,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	AppliedAt     *time.Time `json:"applied_at,omitempty"`
+	FailureReason string     `json:"failure_reason,omitempty"`
+	Action        string     `json:"action"`
+	Campaign      string     `json:"campaign,omitempty"`
+	SKU           int64      `json:"sku,omitempty"`
+	ProposedVal   *float64   `json:"proposed_value,omitempty"`
+	Status        string     `json:"status"`
+	Outcome       string     `json:"outcome,omitempty"`
+	DRRBefore     *float64   `json:"drr_before,omitempty"`
+	DRRAfter      *float64   `json:"drr_after,omitempty"`
+	SpendDelta    *float64   `json:"spend_delta_rub,omitempty"`
+	RevenueDelta  *float64   `json:"revenue_delta_rub,omitempty"`
 	// Cabinet-wide ДРР around the same decision. A decision that improved the
 	// campaign ДРР while raising this one bought traffic that was already
 	// converting — without these two fields the model cannot tell the cases
@@ -217,6 +220,9 @@ type aiContextPack struct {
 // aiCabinetData keeps the raw rows the guardrail/apply phases need after the
 // pack is built (local UUIDs, current bids, states).
 type aiCabinetData struct {
+	economicsBySKU    map[int64]aiPackEconomics
+	statsByCampaign   map[int64][]aiPackDay
+	boundCampaigns    bool
 	campaignsByOzonID map[int64]sqlcgen.OzonCampaign
 	bidsByCampaignSKU map[int64]map[int64]float64 // ozon campaign id → sku → current bid
 	cpoBySKU          map[int64]domain.OzonCPOProduct
@@ -251,7 +257,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			campaigns = append(campaigns, sqlcgen.OzonCampaign{
 				ID: b.ID, SellerCabinetID: b.SellerCabinetID, OzonCampaignID: b.OzonCampaignID,
 				Title: b.Title, AdvObjectType: b.AdvObjectType, State: b.State,
-				Placement: b.Placement, DailyBudgetRub: b.DailyBudgetRub, WeeklyBudgetRub: b.WeeklyBudgetRub,
+				Placement: b.Placement, DailyBudgetRub: b.DailyBudgetRub, WeeklyBudgetRub: b.WeeklyBudgetRub, UpdatedAt: b.UpdatedAt,
 			})
 		}
 	} else {
@@ -264,7 +270,8 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		campaigns = rows
 	}
 
-	since := time.Now().UTC().AddDate(0, 0, -aiPackStatsWindowDays)
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	since := today.AddDate(0, 0, -aiPackStatsWindowDays)
 	statRows, err := s.queries.ListOzonCampaignDailyStatsSince(ctx, sqlcgen.ListOzonCampaignDailyStatsSinceParams{
 		SellerCabinetID: uuidToPgtype(cabinetID),
 		Date:            pgtype.Date{Time: since, Valid: true},
@@ -275,6 +282,9 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	dailyByCampaign := map[uuid.UUID][]aiPackDay{}
 	totalsByCampaign := map[uuid.UUID]*aiPackTotals{}
 	for _, row := range statRows {
+		if !row.Date.Valid || !row.Date.Time.Before(today) {
+			continue
+		}
 		id := uuidFromPgtype(row.CampaignID)
 		spend := pgNumericToFloat(row.SpendRub)
 		revenue := pgNumericToFloat(row.RevenueRub)
@@ -297,7 +307,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	attributed := loadCampaignAttributedTurnover(ctx, s.queries, s.logger, cabinetID, since)
 	for id, t := range totalsByCampaign {
 		if t.RevenueRub > 0 {
-			t.DRR = roundRub(t.SpendRub / t.RevenueRub * 100)
+			t.DRR = drrPct(t.SpendRub, t.RevenueRub)
 		}
 		if row, ok := attributed[id]; ok {
 			if v := drrPct(t.SpendRub, pgNumericToFloat(row.RevenueRub)); v != nil {
@@ -321,6 +331,9 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	})
 
 	data := &aiCabinetData{
+		economicsBySKU:    map[int64]aiPackEconomics{},
+		statsByCampaign:   map[int64][]aiPackDay{},
+		boundCampaigns:    bound,
 		campaignsByOzonID: map[int64]sqlcgen.OzonCampaign{},
 		bidsByCampaignSKU: map[int64]map[int64]float64{},
 		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
@@ -366,6 +379,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 	}
 	for _, campaign := range campaigns {
 		data.campaignsByOzonID[campaign.OzonCampaignID] = campaign
+		data.statsByCampaign[campaign.OzonCampaignID] = dailyByCampaign[uuidFromPgtype(campaign.ID)]
 		if t := totalsByCampaign[uuidFromPgtype(campaign.ID)]; t != nil {
 			data.spend14ByOzonID[campaign.OzonCampaignID] = t.SpendRub
 		}
@@ -423,7 +437,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			}
 		}
 		if restTotals.RevenueRub > 0 {
-			restTotals.DRR = roundRub(restTotals.SpendRub / restTotals.RevenueRub * 100)
+			restTotals.DRR = drrPct(restTotals.SpendRub, restTotals.RevenueRub)
 		}
 		pack.RestCampaigns = len(rest)
 		pack.RestTotals = &restTotals
@@ -498,7 +512,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 		for _, row := range cpoRows {
 			bid := pgNumericToFloatPtr(row.Bid)
 			pack.CPO = append(pack.CPO, aiPackCPO{SKU: row.Sku, Enabled: row.Enabled, BidRub: bid})
-			data.cpoBySKU[row.Sku] = domain.OzonCPOProduct{SKU: row.Sku, Enabled: row.Enabled, Bid: bid}
+			data.cpoBySKU[row.Sku] = domain.OzonCPOProduct{SKU: row.Sku, Enabled: row.Enabled, Bid: bid, BidKind: pgTextValue(row.BidKind), BidPriceRub: pgNumericToFloatPtr(row.BidPriceRub), PriceRub: pgNumericToFloatPtr(row.PriceRub), UpdatedAt: row.UpdatedAt.Time}
 			skuSet[row.Sku] = struct{}{}
 		}
 	}
@@ -624,6 +638,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				}
 				entry.MarginPct = ozonSKUMarginPct(*entry.PriceRub, *entry.NetPriceRub, commission, pgNumericToFloat(row.AcquiringPct))
 			}
+			data.economicsBySKU[sku] = entry
 			pack.Economics = append(pack.Economics, entry)
 		}
 	}
@@ -865,19 +880,17 @@ func ozonSKUMarginPct(price, cost, commissionPct, acquiringRub float64) *float64
 	return &v
 }
 
-// recentDecisionOutcomes builds the feedback-loop section: the cabinet's newest
-// applied/auto_applied decisions with the impact numbers the sweep measured.
+// recentDecisionOutcomes includes failed attempts and mature observations.
+// Only complete measured windows may supply performance numbers.
 // Best-effort — any failure returns nil and the section is simply absent.
 func (s *OzonAIManagerService) recentDecisionOutcomes(ctx context.Context, cabinetID uuid.UUID, data *aiCabinetData) []aiPackDecisionOutcome {
-	rows, err := s.queries.ListRecentAppliedAIDecisions(ctx, sqlcgen.ListRecentAppliedAIDecisionsParams{
-		SellerCabinetID: uuidToPgtype(cabinetID),
-		Lim:             aiPackRecentDecisions,
-	})
+	rows, err := s.queries.ListAIDecisionFeedback(ctx, uuidToPgtype(cabinetID), aiPackRecentDecisions)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("failed to load recent ai decisions for context")
 		return nil
 	}
 	out := make([]aiPackDecisionOutcome, 0, len(rows))
+	totalByDate := map[string]aiImpactTotalDRR{}
 	for _, row := range rows {
 		var target domain.AIDecisionTarget
 		if len(row.Target) > 0 {
@@ -890,6 +903,7 @@ func (s *OzonAIManagerService) recentDecisionOutcomes(ctx context.Context, cabin
 			_ = json.Unmarshal(row.Proposal, &payload)
 		}
 		item := aiPackDecisionOutcome{
+			CreatedAt:   row.CreatedAt.Time,
 			Action:      row.ActionType,
 			SKU:         target.SKU,
 			ProposedVal: payload.NewValue,
@@ -897,9 +911,24 @@ func (s *OzonAIManagerService) recentDecisionOutcomes(ctx context.Context, cabin
 			Outcome:     pgTextValue(row.OutcomeStatus),
 			DRRBefore:   pgNumericToFloatPtr(row.DrrBefore),
 			DRRAfter:    pgNumericToFloatPtr(row.DrrAfter),
-
-			TotalDRRBefore: pgNumericToFloatPtr(row.TotalDrrBefore),
-			TotalDRRAfter:  pgNumericToFloatPtr(row.TotalDrrAfter),
+		}
+		if row.AppliedAt.Valid {
+			at := row.AppliedAt.Time
+			item.AppliedAt = &at
+			if item.Outcome == domain.AIOutcomeEvaluated {
+				key := at.UTC().Format("2006-01-02")
+				total, ok := totalByDate[key]
+				if !ok {
+					total = s.cabinetTotalDRRWindows(ctx, row.SellerCabinetID, aiImpactWindows(at))
+					totalByDate[key] = total
+				}
+				item.TotalDRRBefore, item.TotalDRRAfter = total.Before, total.After
+			}
+		}
+		if row.Error.Valid {
+			item.FailureReason = row.Error.String
+		} else if row.GuardrailVerdict != "passed" {
+			item.FailureReason = row.GuardrailVerdict
 		}
 		if target.OzonCampaignID > 0 {
 			if c, ok := data.campaignsByOzonID[target.OzonCampaignID]; ok && pgTextValue(c.Title) != "" {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -278,138 +280,207 @@ func (s *OzonAIManagerService) ExpireStaleProposals(ctx context.Context) {
 	}
 }
 
-// ApproveDecision applies one 'proposed' (copilot) decision. Guardrails run
-// again against fresh data — the cabinet may have changed since the run.
+// ApproveDecision applies a copilot proposal using the current strategy scope
+// and exactly the same fresh guardrail context as automatic execution.
 func (s *OzonAIManagerService) ApproveDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error) {
-	row, err := s.queries.GetAIDecisionByID(ctx, sqlcgen.GetAIDecisionByIDParams{
-		ID: uuidToPgtype(decisionID), WorkspaceID: uuidToPgtype(workspaceID),
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, apperror.New(apperror.ErrNotFound, "ai decision not found")
-	}
+	row, err := s.loadReviewDecision(ctx, workspaceID, decisionID)
 	if err != nil {
-		return nil, fmt.Errorf("load ai decision: %w", err)
-	}
-	if row.Status != domain.AIDecisionStatusProposed {
-		return nil, apperror.New(apperror.ErrConflict, fmt.Sprintf("decision is %s, only proposed decisions can be approved", row.Status))
+		return nil, err
 	}
 	cabinetID := uuidFromPgtype(row.SellerCabinetID)
 	if err := s.resolveAICabinet(ctx, workspaceID, cabinetID); err != nil {
 		return nil, err
 	}
-
-	proposal, err := proposalFromDecision(row)
-	if err != nil {
-		return nil, apperror.New(apperror.ErrValidation, "decision payload is not parseable: "+err.Error())
-	}
-
-	strategyRow, err := s.queries.GetActiveOzonAIStrategyForCabinet(ctx, uuidToPgtype(cabinetID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, apperror.New(apperror.ErrValidation, "cabinet has no active ozon_ai_autopilot strategy anymore")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load ai strategy: %w", err)
-	}
-	params := strategyFromSqlc(strategyRow).Params.Merged()
-
-	data, err := s.loadFreshCabinetData(ctx, cabinetID, proposal)
-	if err != nil {
-		return nil, fmt.Errorf("load fresh cabinet data: %w", err)
-	}
-
-	markRejected := func(verdict string) (*domain.AIDecision, error) {
-		if markErr := s.queries.SetAIDecisionStatus(ctx, sqlcgen.SetAIDecisionStatusParams{
-			ID: row.ID, Status: domain.AIDecisionStatusRejectedByGuardrail,
-			Error: textToPgtype(verdict), AppliedBy: uuidToPgtype(userID),
-		}); markErr != nil {
-			s.logger.Warn().Err(markErr).Msg("failed to mark ai decision guardrail rejection")
+	var result *domain.AIDecision
+	err = s.queries.WithOzonAIExecutionLock(ctx, row.SellerCabinetID, func(q *sqlcgen.Queries) error {
+		// A competing approve/reject may have finished while we waited.
+		row, err := s.loadReviewDecision(ctx, workspaceID, decisionID)
+		if err != nil {
+			return err
 		}
-		return nil, apperror.New(apperror.ErrValidation, "guardrail rejected the decision: "+verdict)
-	}
-
-	if verdict := s.evaluateProposal(ctx, cabinetID, params, proposal, data); verdict != "" {
-		return markRejected(verdict)
-	}
-	applyVerdict, applyErr := s.applyProposal(ctx, workspaceID, cabinetID, params, proposal, data)
-	if applyVerdict != "" {
-		return markRejected(applyVerdict)
-	}
-	if applyErr != nil {
-		if markErr := s.queries.SetAIDecisionStatus(ctx, sqlcgen.SetAIDecisionStatusParams{
-			ID: row.ID, Status: domain.AIDecisionStatusFailed,
-			Error: textToPgtype(truncateError(applyErr.Error())), AppliedBy: uuidToPgtype(userID),
-		}); markErr != nil {
-			s.logger.Warn().Err(markErr).Msg("failed to mark ai decision failure")
+		if row.Status != domain.AIDecisionStatusProposed {
+			return apperror.New(apperror.ErrConflict, fmt.Sprintf("decision is %s, only proposed decisions can be approved", row.Status))
 		}
-		return nil, fmt.Errorf("apply ai decision: %w", applyErr)
-	}
-
-	if err := s.queries.SetAIDecisionStatus(ctx, sqlcgen.SetAIDecisionStatusParams{
-		ID: row.ID, Status: domain.AIDecisionStatusApplied, AppliedBy: uuidToPgtype(userID),
-	}); err != nil {
-		return nil, fmt.Errorf("finalize ai decision: %w", err)
-	}
-	updated, err := s.queries.GetAIDecisionByID(ctx, sqlcgen.GetAIDecisionByIDParams{
-		ID: uuidToPgtype(decisionID), WorkspaceID: uuidToPgtype(workspaceID),
+		proposal, err := proposalFromDecision(row)
+		if err != nil {
+			return apperror.New(apperror.ErrValidation, "decision payload is not parseable: "+err.Error())
+		}
+		proposal.ExcludeDecisionID = decisionID
+		strategyRow, err := q.GetActiveOzonAIStrategyForCabinet(ctx, row.SellerCabinetID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperror.New(apperror.ErrValidation, "cabinet has no active ozon_ai_autopilot strategy anymore")
+		}
+		if err != nil {
+			return fmt.Errorf("load ai strategy: %w", err)
+		}
+		originStrategyID, err := q.GetAIDecisionOriginStrategy(ctx, row.ID, row.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("load decision strategy: %w", err)
+		}
+		if !originStrategyID.Valid || originStrategyID != strategyRow.ID {
+			return apperror.New(apperror.ErrConflict, "decision belongs to a previous strategy; request a new analysis")
+		}
+		strategy := strategyFromSqlc(strategyRow)
+		params := strategy.Params.Merged()
+		if params.AutomationLevel < 2 {
+			return apperror.New(apperror.ErrConflict, "strategy is in observation mode; decision was not applied")
+		}
+		_, data, err := s.buildAIContext(ctx, workspaceID, cabinetID, strategy, params)
+		if err != nil {
+			return fmt.Errorf("load fresh cabinet data: %w", err)
+		}
+		if verdict := s.evaluateProposal(ctx, cabinetID, params, proposal, data); verdict != "" {
+			return s.rejectReviewedDecision(ctx, row, userID, domain.AIDecisionStatusProposed, verdict)
+		}
+		// Commit the claim BEFORE any external write. If the process dies or
+		// an external result is uncertain, the row cannot be approved again.
+		payload := map[string]json.RawMessage{}
+		if err := json.Unmarshal(row.Proposal, &payload); err != nil {
+			return fmt.Errorf("parse decision proposal: %w", err)
+		}
+		payload["new_value"], err = json.Marshal(proposal.NewValue)
+		if err != nil {
+			return fmt.Errorf("encode approved value: %w", err)
+		}
+		proposalJSON, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode approved proposal: %w", err)
+		}
+		if err := s.transitionReviewedDecision(ctx, row, userID, domain.AIDecisionStatusProposed, domain.AIDecisionStatusApproved, "", proposalJSON); err != nil {
+			return err
+		}
+		applyVerdict, applyErr := s.applyProposal(ctx, workspaceID, cabinetID, params, proposal, data)
+		if applyVerdict != "" {
+			return s.rejectReviewedDecision(ctx, row, userID, domain.AIDecisionStatusApproved, applyVerdict)
+		}
+		if applyErr != nil {
+			if err := s.transitionReviewedDecision(ctx, row, userID, domain.AIDecisionStatusApproved, domain.AIDecisionStatusFailed, truncateError(applyErr.Error()), nil); err != nil {
+				return fmt.Errorf("apply ai decision: %w; record failure: %v", applyErr, err)
+			}
+			return fmt.Errorf("apply ai decision: %w", applyErr)
+		}
+		if err := s.transitionReviewedDecision(ctx, row, userID, domain.AIDecisionStatusApproved, domain.AIDecisionStatusApplied, "", nil); err != nil {
+			return fmt.Errorf("finalize ai decision after external application: %w", err)
+		}
+		updated, err := s.loadReviewDecision(ctx, workspaceID, decisionID)
+		if err != nil {
+			return err
+		}
+		decision := aiDecisionFromSqlc(updated)
+		result = &decision
+		return nil
 	})
-	if err != nil {
-		return nil, fmt.Errorf("reload ai decision: %w", err)
-	}
-	result := aiDecisionFromSqlc(updated)
-	return &result, nil
+	return result, err
 }
 
-// RejectDecision marks a 'proposed' decision as rejected by the user.
-func (s *OzonAIManagerService) RejectDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error) {
+func (s *OzonAIManagerService) loadReviewDecision(ctx context.Context, workspaceID, decisionID uuid.UUID) (sqlcgen.AiDecision, error) {
 	row, err := s.queries.GetAIDecisionByID(ctx, sqlcgen.GetAIDecisionByIDParams{
 		ID: uuidToPgtype(decisionID), WorkspaceID: uuidToPgtype(workspaceID),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, apperror.New(apperror.ErrNotFound, "ai decision not found")
+		return row, apperror.New(apperror.ErrNotFound, "ai decision not found")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("load ai decision: %w", err)
+		return row, fmt.Errorf("load ai decision: %w", err)
 	}
-	if row.Status != domain.AIDecisionStatusProposed {
-		return nil, apperror.New(apperror.ErrConflict, fmt.Sprintf("decision is %s, only proposed decisions can be rejected", row.Status))
-	}
-	if err := s.queries.SetAIDecisionStatus(ctx, sqlcgen.SetAIDecisionStatusParams{
-		ID: row.ID, Status: domain.AIDecisionStatusRejectedByUser, AppliedBy: uuidToPgtype(userID),
-	}); err != nil {
-		return nil, fmt.Errorf("reject ai decision: %w", err)
-	}
-	updated, err := s.queries.GetAIDecisionByID(ctx, sqlcgen.GetAIDecisionByIDParams{
-		ID: uuidToPgtype(decisionID), WorkspaceID: uuidToPgtype(workspaceID),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("reload ai decision: %w", err)
-	}
-	result := aiDecisionFromSqlc(updated)
-	return &result, nil
+	return row, nil
 }
 
-// ApproveDecisionsBatch approves each decision id in turn (same tenancy +
-// guardrail path as ApproveDecision), returning a per-id result. A failure on
-// one id never aborts the rest — the frontend groups the cards and shows which
-// ones went through.
+func (s *OzonAIManagerService) transitionReviewedDecision(ctx context.Context, row sqlcgen.AiDecision, userID uuid.UUID, from, to, reason string, proposal []byte) error {
+	changed, err := s.queries.TransitionAIDecision(ctx, sqlcgen.TransitionAIDecisionParams{
+		ID: row.ID, WorkspaceID: row.WorkspaceID, ExpectedStatus: from, Status: to,
+		Error: textToPgtype(reason), AppliedBy: uuidToPgtype(userID), Proposal: proposal,
+	})
+	if err != nil {
+		return fmt.Errorf("transition ai decision: %w", err)
+	}
+	if !changed {
+		return apperror.New(apperror.ErrConflict, "decision changed while being reviewed; no further action was taken")
+	}
+	return nil
+}
+
+func (s *OzonAIManagerService) rejectReviewedDecision(ctx context.Context, row sqlcgen.AiDecision, userID uuid.UUID, from, verdict string) error {
+	// Cooldowns and quotas are temporary: keep the human proposal available
+	// instead of permanently rejecting it for trying before the next window.
+	transient := strings.HasPrefix(verdict, "cooldown active:") || strings.HasPrefix(verdict, "daily change limit reached") || strings.Contains(verdict, "дневной лимит")
+	status := domain.AIDecisionStatusRejectedByGuardrail
+	if transient {
+		status = domain.AIDecisionStatusProposed
+	}
+	if err := s.transitionReviewedDecision(ctx, row, userID, from, status, verdict, nil); err != nil {
+		return err
+	}
+	return apperror.New(apperror.ErrValidation, "guardrail rejected the decision: "+verdict)
+}
+
+// RejectDecision can only transition a still-proposed decision. It shares the
+// cabinet lock with approval so it cannot overwrite an in-flight/applied action.
+func (s *OzonAIManagerService) RejectDecision(ctx context.Context, workspaceID, decisionID, userID uuid.UUID) (*domain.AIDecision, error) {
+	row, err := s.loadReviewDecision(ctx, workspaceID, decisionID)
+	if err != nil {
+		return nil, err
+	}
+	var result *domain.AIDecision
+	err = s.queries.WithOzonAIExecutionLock(ctx, row.SellerCabinetID, func(q *sqlcgen.Queries) error {
+		if err := s.transitionReviewedDecision(ctx, row, userID, domain.AIDecisionStatusProposed, domain.AIDecisionStatusRejectedByUser, "", nil); err != nil {
+			return err
+		}
+		updated, err := s.loadReviewDecision(ctx, workspaceID, decisionID)
+		if err != nil {
+			return err
+		}
+		decision := aiDecisionFromSqlc(updated)
+		result = &decision
+		return nil
+	})
+	return result, err
+}
+
+// ApproveDecisionsBatch applies prerequisites before lifecycle actions using
+// the same fresh approval path. A failed prerequisite stops the remainder of
+// the selected batch; results retain the input order for the review UI.
 func (s *OzonAIManagerService) ApproveDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult {
-	return s.decisionsBatch(ctx, workspaceID, ids, userID, true)
+	type item struct {
+		index int
+		stage int
+		err   error
+	}
+	items := make([]item, 0, len(ids))
+	results := make([]domain.AIDecisionBatchResult, len(ids))
+	for i, id := range ids {
+		row, err := s.loadReviewDecision(ctx, workspaceID, id)
+		items = append(items, item{index: i, stage: aiExecutionStage(aiProposal{ActionType: row.ActionType}), err: err})
+		results[i].ID = id
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].stage < items[j].stage })
+	var failedID uuid.UUID
+	failed := false
+	for _, item := range items {
+		res := &results[item.index]
+		if failed {
+			res.Error = fmt.Sprintf("not applied because earlier batch decision %s failed; review the remaining proposals", failedID)
+			continue
+		}
+		err := item.err
+		if err == nil {
+			_, err = s.ApproveDecision(ctx, workspaceID, res.ID, userID)
+		}
+		res.OK = err == nil
+		if err != nil {
+			res.Error = err.Error()
+			failedID = res.ID
+			failed = true
+		}
+	}
+	return results
 }
 
 // RejectDecisionsBatch is the reject flavor of ApproveDecisionsBatch.
 func (s *OzonAIManagerService) RejectDecisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID) []domain.AIDecisionBatchResult {
-	return s.decisionsBatch(ctx, workspaceID, ids, userID, false)
-}
-
-func (s *OzonAIManagerService) decisionsBatch(ctx context.Context, workspaceID uuid.UUID, ids []uuid.UUID, userID uuid.UUID, approve bool) []domain.AIDecisionBatchResult {
 	results := make([]domain.AIDecisionBatchResult, 0, len(ids))
 	for _, id := range ids {
-		var err error
-		if approve {
-			_, err = s.ApproveDecision(ctx, workspaceID, id, userID)
-		} else {
-			_, err = s.RejectDecision(ctx, workspaceID, id, userID)
-		}
+		_, err := s.RejectDecision(ctx, workspaceID, id, userID)
 		res := domain.AIDecisionBatchResult{ID: id, OK: err == nil}
 		if err != nil {
 			res.Error = err.Error()
@@ -417,59 +488,6 @@ func (s *OzonAIManagerService) decisionsBatch(ctx context.Context, workspaceID u
 		results = append(results, res)
 	}
 	return results
-}
-
-// loadFreshCabinetData rebuilds the minimal lookup set the guardrails need
-// when a decision is approved later than its run.
-func (s *OzonAIManagerService) loadFreshCabinetData(ctx context.Context, cabinetID uuid.UUID, proposal aiProposal) (*aiCabinetData, error) {
-	data := &aiCabinetData{
-		campaignsByOzonID: map[int64]sqlcgen.OzonCampaign{},
-		bidsByCampaignSKU: map[int64]map[int64]float64{},
-		cpoBySKU:          map[int64]domain.OzonCPOProduct{},
-		spend14ByOzonID:   map[int64]float64{},
-		stockBySKU:        map[int64]int64{},
-	}
-	if proposal.Target.SKU > 0 {
-		// Сток для guardrail — через мост идентификаторов (рекламный SKU →
-		// артикул → продажный сток), как и в контексте прогона.
-		bridge := s.buildOzonSKUBridge(ctx, cabinetID, []int64{proposal.Target.SKU})
-		data.stockBySKU = bridge.stockBySKU
-	}
-	campaigns, err := s.queries.ListOzonCampaignsByCabinet(ctx, sqlcgen.ListOzonCampaignsByCabinetParams{
-		SellerCabinetID: uuidToPgtype(cabinetID), Limit: 500, Offset: 0,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list campaigns: %w", err)
-	}
-	for _, campaign := range campaigns {
-		data.campaignsByOzonID[campaign.OzonCampaignID] = campaign
-	}
-	if proposal.Target.OzonCampaignID > 0 {
-		if campaign, ok := data.campaignsByOzonID[proposal.Target.OzonCampaignID]; ok {
-			productRows, listErr := s.queries.ListOzonCampaignProducts(ctx, campaign.ID)
-			if listErr != nil {
-				return nil, fmt.Errorf("list campaign products: %w", listErr)
-			}
-			bids := map[int64]float64{}
-			for _, row := range productRows {
-				if row.IsActive {
-					bids[row.Sku] = pgNumericToFloat(row.BidRub)
-				}
-			}
-			data.bidsByCampaignSKU[campaign.OzonCampaignID] = bids
-			// Spend over the same window the run used — the anchor for budget
-			// proposals on campaigns without a configured budget.
-			since := time.Now().UTC().AddDate(0, 0, -aiPackStatsWindowDays)
-			if totals, totalsErr := s.queries.GetOzonCampaignStatsWindowTotals(ctx, sqlcgen.GetOzonCampaignStatsWindowTotalsParams{
-				CampaignID: campaign.ID,
-				DateFrom:   pgtype.Date{Time: since, Valid: true},
-				DateTo:     pgtype.Date{Time: time.Now().UTC(), Valid: true},
-			}); totalsErr == nil {
-				data.spend14ByOzonID[campaign.OzonCampaignID] = pgNumericToFloat(totals.SpendRub)
-			}
-		}
-	}
-	return data, nil
 }
 
 func proposalFromDecision(row sqlcgen.AiDecision) (aiProposal, error) {

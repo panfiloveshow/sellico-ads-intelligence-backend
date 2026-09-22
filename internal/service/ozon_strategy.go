@@ -243,10 +243,9 @@ func (s *OzonStrategyService) runCampaign(
 
 	campaignID := uuidFromPgtype(binding.ID)
 	since := now.AddDate(0, 0, -params.LookbackDays)
-	agg, err := s.queries.AggregateOzonCampaignStatsSince(ctx, sqlcgen.AggregateOzonCampaignStatsSinceParams{
-		CampaignID: binding.ID,
-		Date:       pgtype.Date{Time: since, Valid: true},
-	})
+	agg, err := s.queries.AggregateOzonCampaignStatsWindow(ctx, binding.ID,
+		pgtype.Date{Time: since.UTC().Truncate(24 * time.Hour), Valid: true},
+		pgtype.Date{Time: now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -1), Valid: true})
 	if err != nil {
 		return 0, fmt.Errorf("aggregate stats: %w", err)
 	}

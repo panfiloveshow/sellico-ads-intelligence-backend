@@ -76,7 +76,7 @@ func TestOzonAICPOBidGuard(t *testing.T) {
 	assert.Contains(t, ozonAICPOBidGuardReason(0, 0), "positive")
 	assert.Contains(t, ozonAICPOBidGuardReason(30, 50), "CPO minimum")
 	assert.Empty(t, ozonAICPOBidGuardReason(60, 50))
-	// Unknown minimum (0) does not block — CPO is riskless by design.
+	// This arithmetic helper does not establish API capability; the execution gate blocks unverified CPO bid writes.
 	assert.Empty(t, ozonAICPOBidGuardReason(60, 0))
 }
 
@@ -119,7 +119,7 @@ func TestMarshalAIContextPack_SizeCap(t *testing.T) {
 			Title:          fmt.Sprintf("Кампания с длинным названием номер %d — трафареты и вывод в топ", i),
 			State:          "CAMPAIGN_STATE_RUNNING",
 			Placement:      "PLACEMENT_TOP_PROMOTION",
-			Totals:         aiPackTotals{Views: 100000, Clicks: 2500, SpendRub: 45000.55, Orders: 120, RevenueRub: 380000.10, DRR: 11.8},
+			Totals:         aiPackTotals{Views: 100000, Clicks: 2500, SpendRub: 45000.55, Orders: 120, RevenueRub: 380000.10, DRR: drrPct(45000.55, 380000.10)},
 		}
 		for d := 0; d < aiPackStatsWindowDays; d++ {
 			campaign.Daily = append(campaign.Daily, aiPackDay{"2026-08-01", int64(7000), int64(180), 3200.5, int64(9), 27000.0})
