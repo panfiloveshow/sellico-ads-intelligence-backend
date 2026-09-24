@@ -29,7 +29,8 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/api ./cmd/api && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/worker ./cmd/worker
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/worker ./cmd/worker && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/ozon-campaign-sku-backfill ./cmd/ozon-campaign-sku-backfill
 
 # --- Final stage ---
 FROM alpine:3.20
@@ -42,6 +43,7 @@ WORKDIR /app
 # The only difference between the api and worker images.
 ARG TARGET=api
 COPY --from=builder /out/${TARGET} /app/server
+COPY --from=builder /out/ozon-campaign-sku-backfill /app/bin/ozon-campaign-sku-backfill
 COPY --from=builder /app/migrations /app/migrations
 COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 
