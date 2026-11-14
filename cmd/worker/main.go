@@ -33,7 +33,7 @@ func main() {
 	}
 	defer deps.Close()
 
-	wbClient := wb.NewClient(cfg, deps.Logger)
+	wbClient := wb.NewClient(cfg, deps.Logger).WithAdGuard(deps.Queries)
 	tgClient := telegram.NewClient()
 	mailClient := emailclient.NewClient(emailclient.Config{
 		Host:      cfg.SMTPHost,
@@ -120,7 +120,7 @@ func main() {
 		deps.Logger.Info().Str("base", cfg.ProductsAPIBaseURL).Str("path", cfg.SellicoUnitEconomicsExportPath).Msg("products economics bridge enabled for repricer")
 	}
 	ozonSellerClient := ozon.NewSellerClient(cfg, deps.Logger)
-	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
+	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger).WithAdGuard(deps.Queries)
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonStrategyService := service.NewOzonStrategyService(deps.Queries, ozonPerfClient, service.NewBidEngine(deps.Logger), []byte(cfg.EncryptionKey), deps.Logger)
 	ozonRepricerService := service.NewOzonRepricerService(deps.Queries, ozonSellerClient, []byte(cfg.EncryptionKey), deps.Logger)

@@ -71,6 +71,8 @@ func TestOzonReadService_GetCPOOverview_PromoRunning(t *testing.T) {
 	testdb.OzonCPOProduct(t, env.pool, env.cabinetID, 555, true, 5)
 	testdb.OzonCPOProduct(t, env.pool, env.cabinetID, 777, true, 0)
 
+	// A cached RUNNING state can lag Ozon. Reading must never activate promotion.
+	env.fake.setJSON("/api/client/campaign/all_sku_promo/activate", map[string]any{"selectedBid": "7"})
 	ov, err := env.syncSvc.GetCPOOverview(ctx, env.workspaceID, env.cabinetID)
 	require.NoError(t, err)
 	assert.True(t, ov.Enabled)
@@ -78,7 +80,8 @@ func TestOzonReadService_GetCPOOverview_PromoRunning(t *testing.T) {
 	assert.Equal(t, int64(25626134), *ov.PromoCampaignID)
 	assert.Equal(t, "Оплата за заказ - все товары", ov.PromoCampaignTitle)
 	assert.Equal(t, int64(2), ov.ProductsCount)
-	assert.Nil(t, ov.RatePct) // display-only, not derivable yet
+	assert.Zero(t, env.fake.callCount("/api/client/campaign/all_sku_promo/activate"), "opening the overview must not activate promotion")
+	assert.Nil(t, ov.RatePct) // no side-effect-free source for the current cabinet rate
 	assert.Equal(t, int64(300), ov.Stats7d.Views)
 	assert.Equal(t, int64(30), ov.Stats7d.Clicks)
 	assert.InDelta(t, 150.0, ov.Stats7d.SpendRub, 0.001)

@@ -34,7 +34,7 @@ func TestConstructors(t *testing.T) {
 	assert.NotNil(t, pc.tokens)
 }
 
-// --- doJSON retry semantics (exercised via ActivateCampaign, a POST) ---
+// --- doJSON read retry semantics. Mutations have separate one-send tests. ---
 
 func TestDoJSON_401InvalidatesTokenAndRetries(t *testing.T) {
 	var tokenCalls, dataCalls int32
@@ -53,7 +53,8 @@ func TestDoJSON_401InvalidatesTokenAndRetries(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestPerfClient(srv.URL)
-	require.NoError(t, c.ActivateCampaign(context.Background(), testCreds, 1))
+	_, readErr := c.doJSON(context.Background(), testCreds, http.MethodGet, "/api/client/campaign/1/products/bids/competitive", nil, nil)
+	require.NoError(t, readErr)
 	assert.Equal(t, int32(2), atomic.LoadInt32(&tokenCalls), "401 drops the cached token")
 	assert.Equal(t, int32(2), atomic.LoadInt32(&dataCalls))
 }
@@ -76,7 +77,8 @@ func TestDoJSON_429HonorsRetryAfterThenSucceeds(t *testing.T) {
 
 	c := newTestPerfClient(srv.URL)
 	start := time.Now()
-	require.NoError(t, c.ActivateCampaign(context.Background(), testCreds, 1))
+	_, readErr := c.doJSON(context.Background(), testCreds, http.MethodGet, "/api/client/campaign/1/products/bids/competitive", nil, nil)
+	require.NoError(t, readErr)
 	assert.GreaterOrEqual(t, time.Since(start), time.Second)
 	assert.Equal(t, int32(2), atomic.LoadInt32(&dataCalls))
 }
@@ -97,7 +99,8 @@ func TestDoJSON_5xxRetriesThenSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestPerfClient(srv.URL)
-	require.NoError(t, c.DeactivateCampaign(context.Background(), testCreds, 1))
+	_, readErr := c.doJSON(context.Background(), testCreds, http.MethodGet, "/api/client/campaign/1/products/bids/competitive", nil, nil)
+	require.NoError(t, readErr)
 	assert.Equal(t, int32(2), atomic.LoadInt32(&dataCalls))
 }
 
@@ -115,7 +118,7 @@ func TestDoJSON_429ExhaustsRetries(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestPerfClient(srv.URL)
-	err := c.ActivateCampaign(context.Background(), testCreds, 1)
+	_, err := c.doJSON(context.Background(), testCreds, http.MethodGet, "/api/client/campaign/1/products/bids/competitive", nil, nil)
 	require.Error(t, err)
 	var apiErr *APIError
 	require.ErrorAs(t, err, &apiErr)
@@ -137,7 +140,7 @@ func TestDoJSON_ClientErrorNoRetry(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestPerfClient(srv.URL)
-	err := c.ActivateCampaign(context.Background(), testCreds, 1)
+	_, err := c.doJSON(context.Background(), testCreds, http.MethodGet, "/api/client/campaign/1/products/bids/competitive", nil, nil)
 	require.Error(t, err)
 	var apiErr *APIError
 	require.ErrorAs(t, err, &apiErr)

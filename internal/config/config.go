@@ -96,6 +96,13 @@ type Config struct {
 	ProductsAPIToken                   string        // env: PRODUCTS_API_TOKEN, shared secret for economics endpoints
 	ProductsUnitEconomicsReadinessPath string        // env: PRODUCTS_UNIT_ECONOMICS_READINESS_PATH
 	ProductsUnitEconomicsMaxAge        time.Duration // env: PRODUCTS_UNIT_ECONOMICS_MAX_AGE, default 72h
+	ManagerPriceAccountControlEnabled  bool          // env: MANAGER_PRICE_ACCOUNT_CONTROL_ENABLED; default off
+	PriceDispatchGateSecret            string        // env: PRICE_DISPATCH_GATE_SECRET; separate Products service credential
+	ManagerAdAccountControlEnabled     bool          // env: MANAGER_AD_ACCOUNT_CONTROL_ENABLED; default off
+	ManagerAdExecutionEnabled          bool          // env: MANAGER_AD_EXECUTION_ENABLED; default off
+	ManagerPriceExecutionEnabled       bool          // env: MANAGER_PRICE_EXECUTION_ENABLED; default off
+	ManagerLegacyPriceReviewEnabled    bool          // env: MANAGER_LEGACY_PRICE_REVIEW_ENABLED; default off
+	LegacyPriceDispatchEnabled         bool          // env: LEGACY_PRICE_DISPATCH_ENABLED; default off (Products price senders retired)
 
 	// Sellico service-account credentials. The backend uses them to call the
 	// service-account endpoints documented in financial-dashboard/rules.md
@@ -196,6 +203,13 @@ func Load() *Config {
 		ProductsAPIToken:                   getEnvOrDefault("PRODUCTS_API_TOKEN", ""),
 		ProductsUnitEconomicsReadinessPath: getEnvOrDefault("PRODUCTS_UNIT_ECONOMICS_READINESS_PATH", "/products/unit-economics/readiness"),
 		ProductsUnitEconomicsMaxAge:        getEnvAsDuration("PRODUCTS_UNIT_ECONOMICS_MAX_AGE", 72*time.Hour),
+		ManagerPriceAccountControlEnabled:  getEnvOrDefault("MANAGER_PRICE_ACCOUNT_CONTROL_ENABLED", "false") == "true",
+		PriceDispatchGateSecret:            getEnvOrDefault("PRICE_DISPATCH_GATE_SECRET", ""),
+		ManagerAdAccountControlEnabled:     getEnvOrDefault("MANAGER_AD_ACCOUNT_CONTROL_ENABLED", "false") == "true",
+		ManagerAdExecutionEnabled:          getEnvOrDefault("MANAGER_AD_EXECUTION_ENABLED", "false") == "true",
+		ManagerPriceExecutionEnabled:       getEnvOrDefault("MANAGER_PRICE_EXECUTION_ENABLED", "false") == "true",
+		ManagerLegacyPriceReviewEnabled:    getEnvOrDefault("MANAGER_LEGACY_PRICE_REVIEW_ENABLED", "false") == "true",
+		LegacyPriceDispatchEnabled:         getEnvOrDefault("LEGACY_PRICE_DISPATCH_ENABLED", "false") == "true",
 		SellicoServiceToken:                getEnvOrDefault("SELLICO_API_TOKEN", ""),
 		SellicoServiceEmail:                getEnvOrDefault("SELLICO_EMAIL", ""),
 		SellicoServicePassword:             getEnvOrDefault("SELLICO_PASSWORD", ""),

@@ -121,7 +121,7 @@ func TestDoRequest_WriteNotRetriedOn5xx(t *testing.T) {
 	assert.Equal(t, int32(1), attempts.Load())
 }
 
-func TestDoRequest_WriteStillRetriedOn429(t *testing.T) {
+func TestDoRequest_WriteRateLimitIsReturnedWithoutAnotherAttempt(t *testing.T) {
 	withFastWBRetryTiming(t)
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,12 +136,13 @@ func TestDoRequest_WriteStillRetriedOn429(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClient(server.URL)
-	// 429 means the write was rejected before processing, so retrying it is safe.
+	// The rejection is definite, but a one-use command cannot silently acquire
+	// another attempt inside the read retry loop.
 	resp, _, err := client.doRequest(context.Background(), http.MethodPost, "/test", "token", nil)
 
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(2), attempts.Load())
+	require.Error(t, err)
+	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	assert.Equal(t, int32(1), attempts.Load())
 }
 
 func TestDoRequest_ClientErrorsDoNotOpenBreaker(t *testing.T) {

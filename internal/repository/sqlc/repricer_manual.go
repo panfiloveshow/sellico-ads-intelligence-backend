@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -508,27 +509,25 @@ func (q *Queries) CreatePriceUploadTask(ctx context.Context, arg CreatePriceUplo
 }
 
 // CreatePriceUploadTaskAndLinkChanges records the WB task and links all locally
-// reserved changes in one SQL statement. On a duplicate WB task, its terminal
-// status is preserved instead of being reset to uploaded.
+// reserved changes in one SQL statement. A repeated native ID reopens polling;
+// its historical completion cannot prove the price of a newly linked command.
 const createPriceUploadTaskAndLinkChanges = `
 WITH task AS (
   INSERT INTO price_upload_tasks (workspace_id, seller_cabinet_id, wb_task_id, status, items_count)
   VALUES ($1, $2, $3, $4, $5)
   ON CONFLICT (seller_cabinet_id, wb_task_id) DO UPDATE
   SET items_count = GREATEST(price_upload_tasks.items_count, EXCLUDED.items_count),
+      status = 'uploaded', completed_at = NULL, error = NULL, poll_count = 0,
       updated_at = now()
   RETURNING id, workspace_id, seller_cabinet_id, wb_task_id, status, items_count, poll_count,
       last_polled_at, completed_at, error, created_at, updated_at
 ), linked AS (
   UPDATE price_changes
   SET upload_task_id = (SELECT id FROM task),
-      wb_status = CASE (SELECT status FROM task)
-        WHEN 'applied' THEN 'applied'
-        WHEN 'failed' THEN 'failed'
-        ELSE 'uploaded'
-      END,
+      wb_status = 'uploaded', error = NULL,
       updated_at = now()
-  WHERE id = ANY($6::uuid[]) AND wb_status = 'submitting'
+  WHERE id = ANY($6::uuid[]) AND workspace_id=$1 AND seller_cabinet_id=$2
+    AND (wb_status = 'submitting' OR (wb_status = 'submit_unknown' AND decision_context ? 'wb_dispatch'))
   RETURNING id, schedule_entry_id
 ), attached AS (
   UPDATE price_schedule_entries schedule
@@ -660,12 +659,13 @@ SET status = 'processing', poll_count = poll_count + 1, error = $4,
 WHERE id = $1 AND workspace_id = $2
   AND status IN ('uploaded', 'processing')
   AND poll_count = $3
+  AND updated_at = $5
 RETURNING id
 `
 
-func (q *Queries) BumpPriceUploadTaskPoll(ctx context.Context, taskID, workspaceID pgtype.UUID, expectedPollCount int32, errorText pgtype.Text) (bool, error) {
+func (q *Queries) BumpPriceUploadTaskPoll(ctx context.Context, taskID, workspaceID pgtype.UUID, expectedPollCount int32, errorText pgtype.Text, expectedUpdatedAt pgtype.Timestamptz) (bool, error) {
 	var id pgtype.UUID
-	err := q.db.QueryRow(ctx, bumpPriceUploadTaskPoll, taskID, workspaceID, expectedPollCount, errorText).Scan(&id)
+	err := q.db.QueryRow(ctx, bumpPriceUploadTaskPoll, taskID, workspaceID, expectedPollCount, errorText, expectedUpdatedAt).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -831,10 +831,10 @@ WITH candidates AS (
   WHERE pending.workspace_id = $1
     AND pending.seller_cabinet_id = $2
     AND pending.wb_status = 'pending'
+    AND ($5::uuid[] IS NULL OR pending.id=ANY($5::uuid[]))
     AND NOT EXISTS (
       SELECT 1 FROM price_changes active
-      WHERE active.seller_cabinet_id = pending.seller_cabinet_id
-        AND active.wb_product_id = pending.wb_product_id
+      WHERE active.wb_product_id = pending.wb_product_id
         AND active.wb_status IN ('submitting', 'submit_unknown', 'uploaded')
     )
   ORDER BY pending.created_at
@@ -842,54 +842,30 @@ WITH candidates AS (
   LIMIT $3
 )
 UPDATE price_changes claimed
-SET wb_status = 'submitting', submission_batch_id = $4, updated_at = now()
+SET wb_status = 'submitting', submission_batch_id = $4, updated_at = now(),
+    decision_context=jsonb_set(COALESCE(NULLIF(claimed.decision_context,'null'::jsonb),'{}'::jsonb),
+        '{wb_write_protocol}','"observed_v1"'::jsonb,true)
 FROM candidates
 WHERE claimed.id = candidates.id AND claimed.wb_status = 'pending'
 RETURNING ` + claimedPriceChangeColumns
 
 func (q *Queries) ClaimPendingPriceChanges(ctx context.Context, workspaceID, sellerCabinetID, submissionBatchID pgtype.UUID, limit int32) ([]PriceChange, error) {
-	rows, err := q.db.Query(ctx, claimPendingPriceChanges, workspaceID, sellerCabinetID, limit, submissionBatchID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var changes []PriceChange
-	for rows.Next() {
-		change, err := scanPriceChange(rows)
-		if err != nil {
-			return nil, err
-		}
-		changes = append(changes, change)
-	}
-	return changes, rows.Err()
+	return q.claimPendingPrices(ctx, workspaceID, sellerCabinetID, submissionBatchID, limit, nil)
 }
 
-const claimUnknownPriceChanges = `
-WITH candidate_batch AS (
-  SELECT uncertain.submission_batch_id
-  FROM price_changes uncertain
-  WHERE uncertain.workspace_id = $1
-    AND uncertain.seller_cabinet_id = $2
-    AND uncertain.wb_status = 'submit_unknown'
-    AND uncertain.upload_task_id IS NULL
-    AND uncertain.submission_batch_id IS NOT NULL
-  ORDER BY uncertain.updated_at
-  LIMIT 1
-), locked_batch AS (
-  SELECT pg_advisory_xact_lock(hashtextextended(candidate_batch.submission_batch_id::text, 0))
-  FROM candidate_batch
-)
-UPDATE price_changes claimed
-SET wb_status = 'submitting', updated_at = now()
-FROM candidate_batch, locked_batch
-WHERE claimed.submission_batch_id = candidate_batch.submission_batch_id
-  AND claimed.wb_status = 'submit_unknown'
-  AND claimed.upload_task_id IS NULL
-RETURNING ` + claimedPriceChangeColumns
+func (q *Queries) ClaimSelectedPendingPriceChanges(ctx context.Context, workspaceID, sellerCabinetID, submissionBatchID pgtype.UUID, ids []pgtype.UUID) ([]PriceChange, error) {
+	if len(ids) == 0 || len(ids) > 1000 {
+		return nil, errors.New("bounded selected WB commands required")
+	}
+	return q.claimPendingPrices(ctx, workspaceID, sellerCabinetID, submissionBatchID, int32(len(ids)), ids)
+}
 
-func (q *Queries) ClaimUnknownPriceChanges(ctx context.Context, workspaceID, sellerCabinetID pgtype.UUID) ([]PriceChange, error) {
-	rows, err := q.db.Query(ctx, claimUnknownPriceChanges, workspaceID, sellerCabinetID)
+func (q *Queries) claimPendingPrices(ctx context.Context, workspaceID, sellerCabinetID, submissionBatchID pgtype.UUID, limit int32, ids []pgtype.UUID) ([]PriceChange, error) {
+	rows, err := q.db.Query(ctx, claimPendingPriceChanges, workspaceID, sellerCabinetID, limit, submissionBatchID, ids)
 	if err != nil {
+		if isWBPhysicalPriceHoldConflict(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -901,7 +877,20 @@ func (q *Queries) ClaimUnknownPriceChanges(ctx context.Context, workspaceID, sel
 		}
 		changes = append(changes, change)
 	}
-	return changes, rows.Err()
+	if err := rows.Err(); err != nil {
+		if isWBPhysicalPriceHoldConflict(err) {
+			// PostgreSQL rolls back the entire statement, including any rows
+			// already streamed by RETURNING. Never dispatch that partial slice.
+			return nil, nil
+		}
+		return nil, err
+	}
+	return changes, nil
+}
+
+func isWBPhysicalPriceHoldConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "price_changes_one_transport_per_nm"
 }
 
 type UpdatePriceChangeStatusParams struct {
@@ -970,14 +959,11 @@ const listClaimablePriceChangeCabinets = `
 SELECT DISTINCT pending.seller_cabinet_id
 FROM price_changes pending
 WHERE pending.workspace_id = $1
-  AND (
-    pending.wb_status = 'submit_unknown'
-    OR (pending.wb_status = 'pending' AND NOT EXISTS (
+  AND pending.wb_status = 'pending'
+  AND NOT EXISTS (
     SELECT 1 FROM price_changes active
-    WHERE active.seller_cabinet_id = pending.seller_cabinet_id
-      AND active.wb_product_id = pending.wb_product_id
+    WHERE active.wb_product_id = pending.wb_product_id
       AND active.wb_status IN ('submitting', 'submit_unknown', 'uploaded')
-    ))
   )
 ORDER BY pending.seller_cabinet_id
 `
@@ -1036,11 +1022,17 @@ func (q *Queries) ListPriceUploadTaskIDsForChanges(ctx context.Context, workspac
 	return taskIDs, rows.Err()
 }
 
-// RecoverStaleRepricerState preserves the original submission batch for an
-// exact idempotent retry. Rows linked to an accepted WB task are never resent.
+// RecoverStaleRepricerState preserves the original submission batch for
+// read-only reconciliation. Unknown submissions and linked tasks are never resent.
 func (q *Queries) RecoverStaleRepricerState(ctx context.Context, workspaceID pgtype.UUID, staleBefore pgtype.Timestamptz) (submittingRecovered, schedulesReleased int64, err error) {
 	tag, err := q.db.Exec(ctx, `UPDATE price_changes
-		SET wb_status = 'submit_unknown', error = 'stale_submission_requires_exact_retry', updated_at = now()
+		SET wb_status = CASE
+		      WHEN decision_context->>'wb_write_protocol'='observed_v1' AND NOT (decision_context ? 'wb_dispatch')
+		        THEN 'failed' ELSE 'submit_unknown' END,
+		    error = CASE
+		      WHEN decision_context->>'wb_write_protocol'='observed_v1' AND NOT (decision_context ? 'wb_dispatch')
+		        THEN 'unsent_claim_expired' ELSE 'stale_submission_requires_reconciliation' END,
+		    updated_at = now()
 		WHERE workspace_id = $1
 		  AND wb_status = 'submitting'
 		  AND upload_task_id IS NULL

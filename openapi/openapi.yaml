@@ -29,6 +29,1596 @@ tags:
   - name: Events
   - name: Repricer
 paths:
+  /api/v1/manager/prices/operations:
+    post:
+      tags: [Repricer]
+      summary: Execute one personally approved exact WB/Ozon price
+      description: |
+        Disabled unless MANAGER_PRICE_EXECUTION_ENABLED=true. Requires fresh
+        personal CRM permissions products.view, marketing.view, marketing.manage,
+        unit_economics.view, unit_economics.calculate and integrations.view.
+        Products must confirm the exact immutable approval before creation and
+        under the shared physical product hold. No target clamping, rounding or
+        stepping is allowed. An existing operation is never sent again; use its
+        receipt after an interrupted response. The personal token is not stored.
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: X-Sellico-Workspace
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [version, operation_id, product_id, workspace_id, user_id, integration_id, proposal_fingerprint, financial_review_hash, credential_binding, executor_credentials_digest, marketplace, seller_price_cents, issued_at, expires_at]
+              properties:
+                version: {type: string, enum: [manager_price_approval_v1]}
+                operation_id: {type: string, format: uuid}
+                product_id: {type: string, format: uuid}
+                workspace_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                user_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                integration_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                proposal_fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                financial_review_hash: {type: string, pattern: '^[a-f0-9]{64}$'}
+                credential_binding: {type: string, pattern: '^[a-f0-9]{64}$'}
+                executor_credentials_digest: {type: string, pattern: '^[a-f0-9]{64}$'}
+                marketplace: {type: string, enum: [wb, ozon]}
+                seller_price_cents: {type: integer, format: int64, minimum: 1, maximum: 100000000000}
+                wb_base_price_rub: {type: integer, format: int64, minimum: 1, maximum: 1000000000}
+                before_wb: {type: object, description: Exact WB nm_id and complete size/discount/club/wholesale observation; required only for WB.}
+                before_ozon: {type: object, description: Exact Ozon product/offer and seller/old/min prices with known simple promotion conditions; required only for Ozon.}
+                issued_at: {type: string, format: date-time}
+                expires_at: {type: string, format: date-time, description: No later than five minutes after issued_at.}
+                execution_control_version:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  maximum: 9007199254740991
+                  description: Version captured by the original financial proposal. Required for manual-only execution; missing version is legacy zero and cannot revive a proposal after stop/open.
+      responses:
+        '200':
+          description: Durable native receipt; succeeded requires exact observed price and preserved conditions. Unknown never authorizes replay.
+          content:
+            application/json:
+              schema: &ManagerPriceReceiptEnvelope
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required: [version, operation_id, native_change_id, marketplace, proposal_fingerprint, status, native_state]
+                    properties:
+                      version: {type: string, enum: [manager_price_receipt_v1]}
+                      operation_id: {type: string, format: uuid}
+                      native_change_id: {type: string, format: uuid}
+                      marketplace: {type: string, enum: [wb, ozon]}
+                      proposal_fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                      status: {type: string, enum: [executing, verifying, succeeded, failed, unknown]}
+                      native_state: {type: string, enum: [pending, submitting, uploaded, verifying, applied, failed, submit_unknown]}
+        '400': {description: Invalid exact command or unknown parameters}
+        '401': {description: Personal session required}
+        '403': {description: Current CRM permissions or workspace access denied}
+        '409': {description: Execution stopped or approval not confirmed; read the operation before any further action}
+        '503': {description: Executor or identity verification unavailable}
+  /api/v1/manager/prices/operations/{id}:
+    get:
+      tags: [Repricer]
+      summary: Read and reconcile the same owned native price operation
+      description: |
+        Requires fresh personal CRM read access. Available while new price
+        execution is stopped. May observe the previously submitted WB task or
+        Ozon price and update its journal; never submits a price import/upload.
+        Expired commands are failed only when transport demonstrably never began.
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: X-Sellico-Workspace
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Same durable native receipt; source read failures retain the previous uncertain state.
+          content:
+            application/json:
+              schema: *ManagerPriceReceiptEnvelope
+        '400': {description: Invalid operation ID or unknown parameters}
+        '401': {description: Personal session required}
+        '403': {description: Current CRM permissions or workspace access denied}
+        '404': {description: Owned receipt not found or unavailable}
+        '503': {description: Executor or identity verification unavailable}
+  /api/v1/manager/ads/campaigns:
+    get:
+      tags: [Campaigns]
+      summary: Scoped WB/Ozon daily campaign statistics for the manager chat
+      description: |
+        Read only. Requires a personal Sellico session and fresh marketing.view
+        and integrations.view permissions. Uses an existing, exact CRM integration
+        mapping; does not create cabinets or start synchronization. Missing daily
+        observations are unknown, not zero. Comparison uses the preceding period
+        of equal calendar length. WB legacy stored monetary precision is whole RUB;
+        Ozon amounts retain kopecks but legacy daily rows have no update timestamp.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: X-Sellico-Workspace
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+        - name: integration_id
+          in: query
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+        - name: date_from
+          in: query
+          required: true
+          schema: {type: string, format: date}
+        - name: date_to
+          in: query
+          required: true
+          description: Inclusive; the requested period must contain 1 to 90 days.
+          schema: {type: string, format: date}
+        - name: compare
+          in: query
+          schema: {type: boolean, default: false}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 10000, default: 1}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: |
+            Data envelope with workspace_id, integration_id, cabinet, marketplace,
+            period, optional comparison, items, page/limit/total/has_more, RUB,
+            source, monetary_precision, retrieved_at, partial and warnings.
+            Each item has IDs, status, observed_days, nullable data_updated_at and
+            nullable metrics. Money and ratios are decimal strings. Orders and
+            revenue remain null if attribution is incomplete. Retrieval time does
+            not establish source freshness. No metric is a claim of net profit.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: object}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/campaigns/{id}/context:
+    get:
+      tags: [Campaigns]
+      summary: Current native parameters of one scoped WB/Ozon campaign
+      description: |
+        Read only. Fresh marketing.view and integrations.view permissions and
+        exact workspace/integration/campaign mapping are required before reading
+        credentials. Reads the marketplace API; API failure never falls back to
+        the stored campaign state. WB uses a targeted read. Ozon uses the existing
+        campaign pagination, bounded to 100 pages. Amounts retain native precision
+        (up to six RUB fractional digits). Missing fields remain null. Native status
+        and type codes are not mapped to execution permissions. Product bids and
+        execution constraints are not checked. No advertising action is authorized.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: X-Sellico-Workspace
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+        - name: integration_id
+          in: query
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+        - name: id
+          in: path
+          required: true
+          description: Internal campaign UUID returned by the scoped campaign report.
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Native read with exact nullable budgets and explicit incomplete execution context.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required: [workspace_id, integration_id, integration_name, marketplace, campaign_id, external_id, name, status, campaign_type, bid_type, payment_type, daily_budget_rub, weekly_budget_rub, currency, source, retrieved_at, data_updated_at, partial, execution_policy, available_actions, warnings]
+                    properties:
+                      workspace_id: {type: string}
+                      integration_id: {type: string}
+                      integration_name: {type: string}
+                      marketplace: {type: string, enum: [wb, ozon]}
+                      campaign_id: {type: string, format: uuid}
+                      external_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                      name: {type: string}
+                      status: {type: string, description: Unmodified native status code.}
+                      campaign_type: {type: string, nullable: true}
+                      bid_type: {type: string, nullable: true}
+                      payment_type: {type: string, nullable: true}
+                      daily_budget_rub: {type: string, nullable: true, pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,6})?$'}
+                      weekly_budget_rub: {type: string, nullable: true, pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,6})?$'}
+                      currency: {type: string, enum: [RUB]}
+                      source: {type: string, enum: [WB Advertising API, Ozon Performance API]}
+                      retrieved_at: {type: string, format: date-time}
+                      data_updated_at: {type: string, format: date-time, nullable: true, description: Unknown; retrieval time does not establish marketplace update time.}
+                      partial: {type: boolean, enum: [true]}
+                      execution_policy: {type: string, enum: [not_configured]}
+                      available_actions: {type: array, maxItems: 0, items: {type: string}}
+                      warnings: {type: array, items: {type: string}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/campaigns/{id}/bid-context:
+    get:
+      tags: [Campaigns]
+      summary: Read one exact native product bid without preparing a mutation
+      description: |
+        Requires fresh marketing.view and integrations.view. The selected store,
+        cabinet, campaign and product are checked. Manual WB placements and Ozon
+        TARGET_BIDS SKU campaigns are supported. Exact money remains strings.
+        Unquoted Ozon minima with ambiguous units remain raw evidence, not RUB
+        limits. Missing maximum stays null. This read grants no execution.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: integration_id, in: query, required: true, schema: {type: string}}
+        - {name: product_id, in: query, required: true, schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}}
+        - {name: placement, in: query, required: true, schema: {type: string, enum: [search, recommendations, campaign_product]}}
+      responses:
+        '200': {description: Partial scoped native campaign/product observation with exact current bid, nullable limits, source and retrieval time. No target or personal money limit is invented.}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/campaigns/{id}/budget-context:
+    get:
+      tags: [Campaigns]
+      summary: Read exact scoped campaign budget settings without authorizing a change
+      description: |
+        Fresh marketing.view and integrations.view access is required. WB reads
+        the CPC daily limit, explicit flags and currency-specific config minimum.
+        Kopecks are converted to RUB strings. This is distinct from remaining
+        campaign funds and from a deposit. Ozon reads the requested daily/weekly
+        SKU budget with all six native fractional digits. A zero/disabled limit
+        does not mean zero expenses. Ambiguous/unlimited Ozon observations do
+        not establish the original budget period. Unknown limits stay null.
+        No proposal, native mutation, budget deposit or execution permission is
+        created. Vendor failure never falls back to a legacy cached budget.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: integration_id, in: query, required: true, schema: {type: string}}
+        - {name: period, in: query, required: true, schema: {type: string, enum: [daily, weekly]}}
+      responses:
+        '200':
+          description: Partial current settings and exact source. Execution is not configured.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [workspace_id, integration_id, integration_name, marketplace, campaign_id, campaign, budget, currency, source, retrieved_at, data_updated_at, partial, execution_policy, execution_allowed, available_actions]
+                    properties:
+                      workspace_id: {type: string}
+                      integration_id: {type: string}
+                      integration_name: {type: string}
+                      marketplace: {type: string, enum: [wb, ozon]}
+                      campaign_id: {type: string, format: uuid}
+                      campaign: {type: object, description: Native campaign identity/state and nullable unrounded budget fields.}
+                      budget: &NativeBudgetObservation
+                        type: object
+                        required: [period, period_confirmed, enabled, amount_rub, carry_over_enabled, spent_today_rub, minimum_amount_rub, recommended_minimum_rub, maximum_amount_rub, vendor_limit_valid, currency, warnings]
+                        properties:
+                          period: {type: string, enum: [daily, weekly]}
+                          period_confirmed: {type: boolean, description: False when the original period cannot be established from current positive budget fields.}
+                          enabled: {type: boolean, description: False means no active period limit; it does not establish zero expenses.}
+                          amount_rub: {type: string, nullable: true, pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,6})?$'}
+                          carry_over_enabled: {type: boolean, nullable: true, description: Explicit WB carry-over flag; unknown/not applicable for Ozon.}
+                          spent_today_rub: {type: string, nullable: true}
+                          minimum_amount_rub: {type: string, nullable: true, description: Mandatory minimum read from WB config; unknown for Ozon.}
+                          recommended_minimum_rub: {type: string, nullable: true, description: WB recommendation for current bids; not the hard config minimum.}
+                          maximum_amount_rub: {type: string, nullable: true}
+                          vendor_limit_valid: {type: boolean, nullable: true}
+                          currency: {type: string, enum: [RUB]}
+                          warnings: {type: array, items: {type: string}}
+                      currency: {type: string, enum: [RUB]}
+                      source: {type: string, enum: [WB Advertising API, Ozon Performance API]}
+                      retrieved_at: {type: string, format: date-time}
+                      data_updated_at: {type: string, nullable: true, format: date-time}
+                      partial: {type: boolean, enum: [true]}
+                      execution_policy: {type: string, enum: [not_configured]}
+                      execution_allowed: {type: boolean, enum: [false]}
+                      available_actions: {type: array, maxItems: 0, items: {type: string}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/prices/execution-controls/context:
+    get:
+      tags:
+      - Campaigns
+      summary: Read the service write restriction for a verified price account
+      description: Personal service-write control for this verified price executor account.
+        Does not change marketplace prices, discounts or promotions. Other publishers/services,
+        advertising and FBS remain outside this executor scope. An already-started request
+        may finish. A separate manual-only opening permits only new financial proposals
+        captured against the current execution_control_version; old proposals and queues
+        cannot resume. History and current control are separate.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: integration_id
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[1-9][0-9]{0,15}$
+      - name: resource_id
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[1-9][0-9]{0,18}$
+          maxLength: 19
+      responses:
+        '200':
+          description: Exact configured-account scope and current execution control
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PriceExecutionControlContext'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/execution-controls:
+    post:
+      tags:
+      - Campaigns
+      summary: Prepare one immutable personal service-write restriction
+      description: Personal service-write control for this verified price executor account.
+        Does not change marketplace prices, discounts or promotions. Other publishers/services,
+        advertising and FBS remain outside this executor scope. An already-started request
+        may finish. A separate manual-only opening permits only new financial proposals
+        captured against the current execution_control_version; old proposals and queues
+        cannot resume. History and current control are separate.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - integration_id
+              - resource_id
+              - target_mode
+              - reason
+              - context_fingerprint
+              properties:
+                integration_id:
+                  type: string
+                  pattern: ^[1-9][0-9]{0,15}$
+                resource_id:
+                  type: string
+                  pattern: ^[1-9][0-9]{0,18}$
+                  maxLength: 19
+                target_mode:
+                  type: string
+                  enum:
+                  - stopped
+                  - manual_only
+                reason:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+                context_fingerprint:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+      responses:
+        '200':
+          $ref: '#/components/responses/PriceExecutionControlResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/execution-controls/{id}:
+    get:
+      tags:
+      - Campaigns
+      summary: Read an owned personal decision and the latest service restriction
+      description: Personal service-write control for this verified price executor account.
+        Does not change marketplace prices, discounts or promotions. Other publishers/services,
+        advertising and FBS remain outside this executor scope. An already-started request
+        may finish. A separate manual-only opening permits only new financial proposals
+        captured against the current execution_control_version; old proposals and queues
+        cannot resume. History and current control are separate.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[1-9][0-9]{0,18}$
+      responses:
+        '200':
+          $ref: '#/components/responses/PriceExecutionControlResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/execution-controls/{id}/approve:
+    post:
+      tags:
+      - Campaigns
+      summary: Personally confirm the exact service restriction and three checks
+      description: Personal service-write control for this verified price executor account.
+        Does not change marketplace prices, discounts or promotions. Other publishers/services,
+        advertising and FBS remain outside this executor scope. An already-started request
+        may finish. A separate manual-only opening permits only new financial proposals
+        captured against the current execution_control_version; old proposals and queues
+        cannot resume. History and current control are separate.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - fingerprint
+              - confirmations
+              properties:
+                fingerprint:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                confirmations:
+                  type: object
+                  additionalProperties: false
+                  required:
+                  - price_account_scope_checked
+                  - price_service_effect_checked
+                  - price_reopening_checked
+                  properties:
+                    price_account_scope_checked:
+                      type: boolean
+                      enum:
+                      - true
+                    price_service_effect_checked:
+                      type: boolean
+                      enum:
+                      - true
+                    price_reopening_checked:
+                      type: boolean
+                      enum:
+                      - true
+      responses:
+        '200':
+          $ref: '#/components/responses/PriceExecutionControlResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/execution-controls/{id}/cancel:
+    post:
+      tags:
+      - Campaigns
+      summary: Cancel an owned unconfirmed control proposal without changing the restriction
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - fingerprint
+              properties:
+                fingerprint:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+      responses:
+        '200':
+          $ref: '#/components/responses/PriceExecutionControlResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+      description: Personal service-write control for this verified price executor account.
+        Does not change marketplace prices, discounts or promotions. Other publishers/services,
+        advertising and FBS remain outside this executor scope. An already-started request
+        may finish. A separate manual-only opening permits only new financial proposals
+        captured against the current execution_control_version; old proposals and queues
+        cannot resume. History and current control are separate.
+  /api/v1/manager/prices/legacy-journal/context:
+    get:
+      tags:
+      - Campaigns
+      summary: Read recorded legacy price admissions and their holds for a verified price account
+      description: Personal review of a recorded legacy Products price admission for this verified
+        price account. An admission is permission to start one raw request, never a Native
+        receipt. The journal and every decision report native_outcome_verified=false. A
+        review requires an explicit stopped or manual_only restriction, an expired admission
+        window, no active physical price write, a personal reason, a marketplace/support
+        investigation reference and four separate confirmations. It sends no Native command,
+        changes no price, discount or promotion, never reopens the legacy path and does not
+        prove that the old request failed or succeeded. A committed resolution releases only
+        that admission from the account fence for new personally approved commands.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: integration_id
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[1-9][0-9]{0,15}$
+      - name: resource_id
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[1-9][0-9]{0,18}$
+          maxLength: 19
+      - name: cursor
+        in: query
+        required: false
+        description: Opaque next_cursor of the same unchanged account context; at most 25
+          admissions per page ordered by admission time.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 512
+      responses:
+        '200':
+          description: Account-scoped journal page; no payload, product, credential or account key
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum:
+                - private, no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/LegacyPriceJournalContext'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/legacy-reviews:
+    post:
+      tags:
+      - Campaigns
+      summary: Prepare one immutable personal review of an expired legacy price admission
+      description: Personal review of a recorded legacy Products price admission for this verified
+        price account. An admission is permission to start one raw request, never a Native
+        receipt. The journal and every decision report native_outcome_verified=false. A
+        review requires an explicit stopped or manual_only restriction, an expired admission
+        window, no active physical price write, a personal reason, a marketplace/support
+        investigation reference and four separate confirmations. It sends no Native command,
+        changes no price, discount or promotion, never reopens the legacy path and does not
+        prove that the old request failed or succeeded. A committed resolution releases only
+        that admission from the account fence for new personally approved commands.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - integration_id
+              - resource_id
+              - command_id
+              - context_fingerprint
+              - reason
+              - support_reference
+              properties:
+                integration_id:
+                  type: string
+                  pattern: ^[1-9][0-9]{0,15}$
+                resource_id:
+                  type: string
+                  pattern: ^[1-9][0-9]{0,18}$
+                  maxLength: 19
+                command_id:
+                  type: string
+                  format: uuid
+                context_fingerprint:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                  description: review_context_fingerprint of that journal item
+                reason:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+                support_reference:
+                  type: string
+                  minLength: 12
+                  maxLength: 1500
+                  description: Personal statement of the marketplace cabinet/support investigation;
+                    stored verbatim and not verified by the service.
+      responses:
+        '200':
+          $ref: '#/components/responses/LegacyPriceReviewResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/legacy-reviews/{id}:
+    get:
+      tags:
+      - Campaigns
+      summary: Read an owned personal review with the current hold and restriction
+      description: Personal review of a recorded legacy Products price admission for this verified
+        price account. An admission is permission to start one raw request, never a Native
+        receipt. The journal and every decision report native_outcome_verified=false. A
+        review requires an explicit stopped or manual_only restriction, an expired admission
+        window, no active physical price write, a personal reason, a marketplace/support
+        investigation reference and four separate confirmations. It sends no Native command,
+        changes no price, discount or promotion, never reopens the legacy path and does not
+        prove that the old request failed or succeeded. A committed resolution releases only
+        that admission from the account fence for new personally approved commands.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          $ref: '#/components/responses/LegacyPriceReviewResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/legacy-reviews/{id}/approve:
+    post:
+      tags:
+      - Campaigns
+      summary: Personally resolve the exact reviewed admission with four confirmations
+      description: Personal review of a recorded legacy Products price admission for this verified
+        price account. An admission is permission to start one raw request, never a Native
+        receipt. The journal and every decision report native_outcome_verified=false. A
+        review requires an explicit stopped or manual_only restriction, an expired admission
+        window, no active physical price write, a personal reason, a marketplace/support
+        investigation reference and four separate confirmations. It sends no Native command,
+        changes no price, discount or promotion, never reopens the legacy path and does not
+        prove that the old request failed or succeeded. A committed resolution releases only
+        that admission from the account fence for new personally approved commands.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - fingerprint
+              - confirmations
+              properties:
+                fingerprint:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+                confirmations:
+                  $ref: '#/components/schemas/LegacyPriceReviewConfirmations'
+      responses:
+        '200':
+          $ref: '#/components/responses/LegacyPriceReviewResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/prices/legacy-reviews/{id}/cancel:
+    post:
+      tags:
+      - Campaigns
+      summary: Cancel an owned unconfirmed review; the admission stays held
+      description: Personal review of a recorded legacy Products price admission for this verified
+        price account. An admission is permission to start one raw request, never a Native
+        receipt. The journal and every decision report native_outcome_verified=false. A
+        review requires an explicit stopped or manual_only restriction, an expired admission
+        window, no active physical price write, a personal reason, a marketplace/support
+        investigation reference and four separate confirmations. It sends no Native command,
+        changes no price, discount or promotion, never reopens the legacy path and does not
+        prove that the old request failed or succeeded. A committed resolution releases only
+        that admission from the account fence for new personally approved commands.
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: X-Sellico-Workspace
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - fingerprint
+              properties:
+                fingerprint:
+                  type: string
+                  pattern: ^[a-f0-9]{64}$
+      responses:
+        '200':
+          $ref: '#/components/responses/LegacyPriceReviewResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ErrorResponse'
+  /api/v1/manager/ads/execution-controls/context:
+    get:
+      tags: [Campaigns]
+      summary: Read the service write restriction for a verified advertising account
+      description: Uses one current native campaign read to verify the configured account. Does not pause campaigns or change native bids/budgets. Current control is read from the service journal, not inferred from native activity.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: integration_id, in: query, required: true, schema: {type: string, pattern: '^[1-9][0-9]{0,15}$'}}
+        - {name: campaign_id, in: query, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Exact configured-account scope and current execution control
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {$ref: '#/components/schemas/AdExecutionControlContext'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/execution-controls:
+    post:
+      tags: [Campaigns]
+      summary: Prepare one immutable personal service-write restriction
+      description: |
+        Requires fresh marketing.manage, marketing.view, integrations.view and an
+        explicitly personal CRM profile. The proposal expires in five minutes.
+        stopped blocks subsequent classified advertising mutations from API and
+        worker for the verified native account, including its aliases. manual_only
+        admits only new personally approved commands; it never wakes legacy
+        automation or approvals prepared before the control changed. Native campaign
+        activity, bids and budgets are not changed. The restriction persists until
+        another explicit decision. Already-started requests may finish. Other
+        advertising accounts, services, prices and FBS are outside this scope.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [integration_id, campaign_id, target_mode, reason, context_fingerprint]
+              properties:
+                integration_id: {type: string, pattern: '^[1-9][0-9]{0,15}$'}
+                campaign_id: {type: string, format: uuid}
+                target_mode: {type: string, enum: [stopped, manual_only]}
+                reason: {type: string, minLength: 3, maxLength: 500}
+                context_fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200': {$ref: '#/components/responses/AdExecutionControlResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/execution-controls/{id}:
+    get:
+      tags: [Campaigns]
+      summary: Read an owned personal decision and the latest service restriction
+      description: Saved result_control and latest current_control are separate. Readback remains available when new control proposals are disabled and never replays a mutation.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {$ref: '#/components/responses/AdExecutionControlResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/execution-controls/{id}/approve:
+    post:
+      tags: [Campaigns]
+      summary: Personally confirm the exact service restriction and three checks
+      description: Commits the immutable owned decision and account control in one transaction under the native account lock. Fresh identity/store/credential checks, expected version and expiry are enforced before committing. This endpoint does not send a native advertising mutation.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fingerprint, confirmations]
+              properties:
+                fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                confirmations:
+                  type: object
+                  additionalProperties: false
+                  required: [advertising_account_scope_checked, advertising_service_effect_checked, advertising_reopening_checked]
+                  properties:
+                    advertising_account_scope_checked: {type: boolean, enum: [true]}
+                    advertising_service_effect_checked: {type: boolean, enum: [true]}
+                    advertising_reopening_checked: {type: boolean, enum: [true]}
+      responses:
+        '200': {$ref: '#/components/responses/AdExecutionControlResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/execution-controls/{id}/cancel:
+    post:
+      tags: [Campaigns]
+      summary: Cancel an owned unconfirmed control proposal without changing the restriction
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fingerprint]
+              properties:
+                fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200': {$ref: '#/components/responses/AdExecutionControlResponse'}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations:
+    post:
+      tags: [Campaigns]
+      summary: Prepare one immutable personal advertising control decision
+      description: |
+        Requires fresh marketing.view, marketing.manage, integrations.view and an
+        explicitly personal CRM account. Reads one exact mapped native campaign.
+        Supports pause, resume of an observed managed pause with a positive native
+        budget, and local handover of observed management to legacy/autopilot
+        writers. Resume and handover require a current transferable control in the
+        exact workspace/store/cabinet/campaign/account. Launch separately supports
+        configured manual WB campaigns in state 4/11 and Ozon SKU TARGET_BIDS
+        inactive campaigns. All configured product bids/placements are saved.
+        A positive balance, enabled CPC WB daily limit or one positive Ozon period
+        is required. Three personal checks cover scope, vendor readiness and
+        spending permission. Eligibility and all vendor limits remain unverified.
+        Global CPO and other strategies are separate actions. Preparation never sends a native mutation.
+        Pause/resume retain a control hold; handover releases it explicitly.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [integration_id, campaign_id, action]
+              properties:
+                integration_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                campaign_id: {type: string, format: uuid}
+                action: {type: string, enum: [pause, resume, handover, launch]}
+      responses:
+        '200':
+          description: Saved proposal; approval_available reflects the execution stop. No native mutation has been sent.
+          content:
+            application/json:
+              schema: &ManagerAdOperationEnvelope
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [id, operation_type, workspace_id, integration_id, integration_name, campaign_id, external_id, marketplace, action, snapshot, target_status, source, fingerprint, status, message_code, result, created_at, expires_at, approval_available, execution_allowed]
+                    properties:
+                      id: {type: string, format: uuid}
+                      operation_type: {type: string, enum: [ad_change]}
+                      workspace_id: {type: string}
+                      integration_id: {type: string}
+                      integration_name: {type: string}
+                      campaign_id: {type: string, format: uuid}
+                      external_id: {type: string}
+                      marketplace: {type: string, enum: [wb, ozon]}
+                      action: {type: string, enum: [pause, resume, handover, set_bid, set_budget, launch]}
+                      launch_plan:
+                        type: object
+                        description: Present only for launch; settings are read from native API, not selected by a model.
+                        required: [settings]
+                        properties:
+                          settings: &ManagerAdLaunchSettings
+                            type: object
+                            required: [strategy, payment_type, placements, products, budget, eligibility_verified, vendor_limits_verified]
+                            properties:
+                              strategy: {type: string, enum: [manual, TARGET_BIDS]}
+                              payment_type: {type: string, enum: [cpm, cpc, CPC]}
+                              placements: {type: array, minItems: 1, uniqueItems: true, items: {type: string}}
+                              products:
+                                type: array
+                                minItems: 1
+                                maxItems: 10000
+                                items:
+                                  type: object
+                                  required: [product_id, bids_rub, minimum_bids_rub]
+                                  properties:
+                                    product_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                                    bids_rub: {type: object, additionalProperties: {type: string}, description: Exact configured RUB by placement, sorted by product ID.}
+                                    minimum_bids_rub: {type: object, nullable: true, additionalProperties: {type: string}, description: Explicit WB minima for every enabled placement; null for Ozon where not established.}
+                              budget:
+                                <<: *NativeBudgetObservation
+                                nullable: true
+                              eligibility_verified: {type: boolean, enum: [false]}
+                              vendor_limits_verified: {type: boolean, enum: [false]}
+                      bid_plan: {type: object, description: Present only for set_bid; exact native before observation, target_bid_rub and two explicit personal constraints.}
+                      budget_plan:
+                        type: object
+                        description: Present only for set_budget. The spent-today counter is a historical observation; all approved limit settings are fingerprinted. No full campaign money mirror is updated.
+                        required: [before, target, constraints, period_evidence]
+                        properties:
+                          before: *NativeBudgetObservation
+                          target: &ManagerAdBudgetTarget
+                            type: object
+                            additionalProperties: false
+                            required: [enabled]
+                            properties:
+                              enabled: {type: boolean, description: False removes the selected period limit; it does not mean zero expenses.}
+                              amount_rub: {type: string, nullable: true, pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,2})?$', description: Positive whole-kopeck RUB when enabled; null when disabled.}
+                              carry_over_enabled: {type: boolean, nullable: true, description: Explicit true/false for enabled WB daily limits; null for Ozon or disabled targets.}
+                          constraints: &ManagerAdBudgetConstraints
+                            type: object
+                            nullable: true
+                            additionalProperties: false
+                            required: [max_budget_rub, max_absolute_change_rub]
+                            properties:
+                              max_budget_rub: {type: string, pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,6})?$', description: Explicit positive nominal maximum; not a total spending guarantee.}
+                              max_absolute_change_rub: {type: string, pattern: '^(0|[1-9][0-9]{0,18})(\.[0-9]{1,6})?$', description: Explicit nonnegative RUB delta from the stored native nominal value.}
+                          period_evidence:
+                            type: object
+                            nullable: true
+                            required: [operation_id, fingerprint, period]
+                            properties:
+                              operation_id: {type: string, format: uuid}
+                              fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                              period: {type: string, enum: [daily, weekly]}
+                      snapshot: {type: object, description: Immutable native parameters observed during preparation; absent budgets remain null and money is an exact decimal string.}
+                      previous_operation_id: {type: string, format: uuid, description: Previous observed control; required for resume/handover.}
+                      target_status: {type: string, enum: ['9', '11', CAMPAIGN_STATE_RUNNING, CAMPAIGN_STATE_INACTIVE]}
+                      source: {type: string, enum: [WB Advertising API, Ozon Performance API]}
+                      fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                      status: {type: string, enum: [awaiting_confirmation, executing, verifying, succeeded, failed, unknown, cancelled, expired]}
+                      message_code: {type: string, nullable: true}
+                      result:
+                        type: object
+                        nullable: true
+                        properties:
+                          launch_verified: {type: boolean, description: Active state and unchanged configured settings were separately observed; not a profit/eligibility claim.}
+                          launch_settings: *ManagerAdLaunchSettings
+                          fields_verified: {type: boolean}
+                          submission_acknowledged: {type: boolean}
+                          vendor_state: {type: string, nullable: true}
+                          control_hold_active: {type: boolean}
+                          budget_verified: {type: boolean, description: Exact selected-period mode, amount and applicable carry settings were observed independently.}
+                          budget: *NativeBudgetObservation
+                          bid_verified: {type: boolean}
+                          bid_rub: {type: string, description: Exact observed bid, not an HTTP-only success.}
+                          product_id: {type: string}
+                          placement: {type: string}
+                          mirror_updated: {type: boolean, description: False when the local mirror was not updated. Budget receipts preserve exact settings without rewriting legacy whole-ruble campaign fields.}
+                          control_transferred_to: {type: string, format: uuid, description: Later personal decision that acquired or released this control.}
+                          control_released: {type: boolean, description: Local handover completed; no vendor command was sent.}
+                          observed_at: {type: string, format: date-time, nullable: true}
+                      created_at: {type: string, format: date-time}
+                      expires_at: {type: string, format: date-time, description: At most five minutes after creation.}
+                      approval_available: {type: boolean}
+                      execution_allowed: {type: boolean, enum: [false]}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '422': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/budget-operations:
+    post:
+      tags: [Campaigns]
+      summary: Prepare one immutable personal campaign budget limit change
+      description: |
+        Requires a personal profile, fresh marketing.manage/view and integrations.view.
+        Preparation only reads native settings. WB supports existing active/paused
+        CPC daily limits with an explicit carry-over choice. Ozon SKU daily/weekly
+        limits use the period established by a positive native field or a verified
+        uninterrupted personal control history; contradictory positive fields and
+        unknown original periods are rejected. Initial launch, deposit, profit and
+        total-spending policy are separate. Enabled targets require a positive
+        whole-kopeck amount and two explicit nominal caps. Disabled targets require
+        null amount, carry and caps; the extra unlimited-spending check is required
+        at approval. Newly enabling WB carry-over also needs its own fourth check.
+        Separate native readback establishes exact settings. Lost responses are
+        read without replay. Legacy campaign budget mirrors are not rewritten.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [integration_id, campaign_id, period, target]
+              properties:
+                integration_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                campaign_id: {type: string, format: uuid}
+                period: {type: string, enum: [daily, weekly]}
+                target: *ManagerAdBudgetTarget
+                constraints: *ManagerAdBudgetConstraints
+      responses:
+        '200': {description: Saved exact budget_plan; no native command has been sent., content: {application/json: {schema: *ManagerAdOperationEnvelope}}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '422': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/bid-operations:
+    post:
+      tags: [Campaigns]
+      summary: Prepare one immutable personal product bid change
+      description: |
+        Requires explicit personal profile and fresh marketing.manage/view plus
+        integrations.view. Reads the exact native baseline and minimum evidence.
+        No write during preparation. Two explicit user constraints are required;
+        no default maximum or change percentage is invented. Unknown native
+        maximum/minimum units require personal vendor-limit review and do not
+        establish profit or a complete automated policy. Three checks are required
+        at the existing approve endpoint. One native attempt, separate exact
+        readback, no replay of unknown. A successful bid retains campaign control.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [integration_id, campaign_id, product_id, placement, target_bid_rub, constraints]
+              properties:
+                integration_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                campaign_id: {type: string, format: uuid}
+                product_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                placement: {type: string, enum: [search, recommendations, campaign_product]}
+                target_bid_rub: {type: string, description: Exact positive decimal RUB; WB must fit kopecks, Ozon micro-rubles. No rounding.}
+                constraints:
+                  type: object
+                  additionalProperties: false
+                  required: [max_bid_rub, max_change_percent]
+                  properties:
+                    max_bid_rub: {type: string, description: Explicit positive personal maximum.}
+                    max_change_percent: {type: string, description: Explicit personal percentage from 0 through 1000.}
+      responses:
+        '200': {description: Saved exact bid_plan; no native command has been sent., content: {application/json: {schema: *ManagerAdOperationEnvelope}}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '422': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}/approve:
+    post:
+      tags: [Campaigns]
+      summary: Personally approve the saved advertising control decision once
+      description: |
+        Exact owned fingerprint and action-specific true personal checks are required
+        (two for pause/resume/handover; three for launch, a product bid or enabled budget; a fourth
+        for removing a budget limit or newly enabling WB carry-over). Fresh
+        personal permissions, mapping, credentials and the unchanged native
+        snapshot are checked again while the durable resource hold exists, before
+        the SQL dispatch marker. One native attempt only. Receipt/state observation
+        is separate; a lost response cannot authorize a replay. Success means the
+        native target state was observed, including when the acknowledgement is
+        unknown. Resume transfers the previous hold without a committed gap.
+        A definite rejection or never-sent expiry restores the previous control;
+        unknown never releases it. Handover sends no vendor mutation and releases
+        only the exact previously observed control in a local transaction.
+        Receipt GET never performs handover or replays a native command.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fingerprint, confirmations]
+              properties:
+                fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                confirmations:
+                  oneOf:
+                    - type: object
+                      additionalProperties: false
+                      required: [campaign_checked, pause_impact_checked]
+                      properties:
+                        campaign_checked: {type: boolean, enum: [true]}
+                        pause_impact_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [campaign_checked, resume_spend_checked]
+                      properties:
+                        campaign_checked: {type: boolean, enum: [true]}
+                        resume_spend_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [campaign_checked, handover_impact_checked]
+                      properties:
+                        campaign_checked: {type: boolean, enum: [true]}
+                        handover_impact_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [bid_target_checked, bid_spend_checked, vendor_limits_checked]
+                      properties:
+                        bid_target_checked: {type: boolean, enum: [true]}
+                        bid_spend_checked: {type: boolean, enum: [true]}
+                        vendor_limits_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [budget_target_checked, budget_spend_checked, vendor_limits_checked]
+                      properties:
+                        budget_target_checked: {type: boolean, enum: [true]}
+                        budget_spend_checked: {type: boolean, enum: [true]}
+                        vendor_limits_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [budget_target_checked, budget_spend_checked, vendor_limits_checked, unlimited_spend_checked]
+                      properties:
+                        budget_target_checked: {type: boolean, enum: [true]}
+                        budget_spend_checked: {type: boolean, enum: [true]}
+                        vendor_limits_checked: {type: boolean, enum: [true]}
+                        unlimited_spend_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [budget_target_checked, budget_spend_checked, vendor_limits_checked, carry_over_spend_checked]
+                      properties:
+                        budget_target_checked: {type: boolean, enum: [true]}
+                        budget_spend_checked: {type: boolean, enum: [true]}
+                        vendor_limits_checked: {type: boolean, enum: [true]}
+                        carry_over_spend_checked: {type: boolean, enum: [true]}
+                    - type: object
+                      additionalProperties: false
+                      required: [campaign_checked, launch_settings_checked, launch_spend_checked]
+                      properties:
+                        campaign_checked: {type: boolean, enum: [true]}
+                        launch_settings_checked: {type: boolean, enum: [true]}
+                        launch_spend_checked: {type: boolean, enum: [true]}
+      responses:
+        '200': {description: Owned durable state, not an unconditional native success., content: {application/json: {schema: *ManagerAdOperationEnvelope}}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '422': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}/cancel:
+    post:
+      tags: [Campaigns]
+      summary: Cancel only a still unclaimed owned advertising proposal
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fingerprint]
+              properties:
+                fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200': {description: Cancellation does not undo a started command or release a managed pause., content: {application/json: {schema: *ManagerAdOperationEnvelope}}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}:
+    get:
+      tags: [Campaigns]
+      summary: Read an owned receipt and observe native pause without resending
+      description: Available while execution is stopped. Never sends or retries a native mutation and never releases a started hold by time.
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Owned proposal and durable observation state., content: {application/json: {schema: *ManagerAdOperationEnvelope}}}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/attribution:
+    get:
+      tags: [Campaigns]
+      summary: Scoped WB/Ozon ad spend attribution, CPO and strategy write capability breakdown
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}}
+        - {name: integration_id, in: query, required: true, schema: {type: string, pattern: '^[1-9][0-9]{0,18}$'}}
+        - {name: date_from, in: query, required: true, schema: {type: string, format: date}}
+        - {name: date_to, in: query, required: true, schema: {type: string, format: date}}
+        - {name: campaign_id, in: query, required: false, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Attribution summary and strategy breakdown envelope.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: object}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}/resolution/prepare:
+    post:
+      tags: [Campaigns]
+      summary: Prepare a personal manual resolution for an unknown advertising operation without replaying it
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [integration_id, marketplace, campaign_id, reason, support_reference]
+              properties:
+                integration_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+                marketplace: {type: string, enum: [wb, wildberries, ozon]}
+                campaign_id: {type: string, format: uuid}
+                reason: {type: string, minLength: 10, maxLength: 2000}
+                support_reference: {type: string, minLength: 12, maxLength: 256}
+      responses:
+        '200':
+          description: Prepared personal resolution receipt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: object}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '422': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}/resolution/{resolutionId}:
+    get:
+      tags: [Campaigns]
+      summary: Read an owned advertising manual resolution receipt
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: resolutionId, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Owned resolution receipt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: object}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}/resolution/{resolutionId}/approve:
+    post:
+      tags: [Campaigns]
+      summary: Approve personal manual resolution and release hold without replaying the vendor command
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: resolutionId, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fingerprint, confirmations]
+              properties:
+                fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+                confirmations:
+                  type: object
+                  additionalProperties: {type: boolean}
+      responses:
+        '200':
+          description: Committed manual resolution receipt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: object}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
+        '422': {$ref: '#/components/responses/ErrorResponse'}
+        '503': {$ref: '#/components/responses/ErrorResponse'}
+  /api/v1/manager/ads/operations/{id}/resolution/{resolutionId}/cancel:
+    post:
+      tags: [Campaigns]
+      summary: Cancel an unclaimed owned advertising manual resolution
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Sellico-Workspace, in: header, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: resolutionId, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fingerprint]
+              properties:
+                fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200':
+          description: Cancelled resolution receipt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: object}
+        '400': {$ref: '#/components/responses/ErrorResponse'}
+        '401': {$ref: '#/components/responses/ErrorResponse'}
+        '403': {$ref: '#/components/responses/ErrorResponse'}
+        '404': {$ref: '#/components/responses/ErrorResponse'}
+        '409': {$ref: '#/components/responses/ErrorResponse'}
   /health/live:
     get:
       tags: [Health]
@@ -3655,7 +5245,7 @@ paths:
   /api/v1/ozon/price-changes/{id}/rollback:
     post:
       tags: [Ozon]
-      summary: Roll an applied price change back to its previous price (verifies the mirror price still matches before writing)
+      summary: Roll an applied price change back to its previous price after fresh vendor baseline verification
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/WorkspaceHeader"
@@ -3676,6 +5266,32 @@ paths:
         "400": { $ref: "#/components/responses/ErrorResponse" }
         "404": { $ref: "#/components/responses/ErrorResponse" }
         "429": { $ref: "#/components/responses/ErrorResponse" }
+  /api/v1/ozon/price-changes/{id}/reconcile:
+    post:
+      tags: [Ozon]
+      summary: Read the current Ozon price and reconcile an existing change without resending
+      description: A matching observation cannot resolve submit_unknown without an acknowledgement. Uses the same workspace and read permissions as the price audit.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceHeader"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Current audit state; unresolved commands remain blocked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OzonPriceChange" }
+        "400": { $ref: "#/components/responses/ErrorResponse" }
+        "401": { $ref: "#/components/responses/ErrorResponse" }
+        "403": { $ref: "#/components/responses/ErrorResponse" }
+        "404": { $ref: "#/components/responses/ErrorResponse" }
+        "502": { $ref: "#/components/responses/ErrorResponse" }
   /api/v1/ozon/repricer/run:
     post:
       tags: [Ozon]
@@ -4372,12 +5988,97 @@ paths:
         "202": { description: Repricer run enqueued }
         "403": { $ref: "#/components/responses/ErrorResponse" }
 
+  /internal/v1/prices/dispatch-authorizations:
+    post:
+      tags:
+      - Internal Price Dispatch
+      summary: One-use legacy Products price dispatch barrier
+      description: >-
+        Internal attestation, never personal financial approval. The shared
+        SQL account lock allows only legacy version zero without an active physical
+        price hold or unresolved earlier v1 authorization for this account. Admission
+        expiry does not release that authorization; v1 has no terminal Native receipt.
+        The same durable fence applies before WB/Ozon Go dispatch markers commit.
+        Unbound old WB holds deny raw WB authorizations
+        because their account cannot be inferred from current credentials. A marker
+        issued before a stop or hold counts as in-flight; it does not prove native
+        dispatch or completion. Unless LEGACY_PRICE_DISPATCH_ENABLED=true the
+        senders are retired: every valid signed request is refused with 409
+        price_dispatch_retired and records no authorization.
+      security:
+      - priceDispatchSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyPriceDispatchRequest'
+      responses:
+        '200':
+          description: Exact request may be started immediately; no native completion
+            claim
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum:
+                - no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - data
+                properties:
+                  data:
+                    $ref: '#/components/schemas/LegacyPriceDispatchGrant'
+        '400':
+          description: Malformed body, content type or query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyPriceDispatchError'
+        '401':
+          description: Invalid separate service HMAC; personal bearer is insufficient
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyPriceDispatchError'
+        '409':
+          description: Stopped/manual-only account, active price write, unknown WB hold
+            binding, held account, replay or expiry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyPriceDispatchError'
+        '422':
+          description: Unsupported exact scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyPriceDispatchError'
+        '503':
+          description: Missing credential, storage or unavailable authorization
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyPriceDispatchError'
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    priceDispatchSignature:
+      type: apiKey
+      in: header
+      name: X-Sellico-Price-Authorization
+      description: Separate Products service credential (at least 32 bytes). v1= lowercase
+        HMAC-SHA256(secret, UTF-8 legacy-price-dispatch-v1 + LF + exact JSON body). SQL
+        checks sent_at within 30 seconds; command_id is never granted twice.
+
   parameters:
     WorkspaceHeader:
       name: X-Workspace-ID
@@ -4482,6 +6183,53 @@ components:
       schema:
         type: boolean
   responses:
+    PriceExecutionControlResponse:
+      description: Owned service-control decision with independent historical and current
+        state
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum:
+            - private, no-store
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+            - data
+            properties:
+              data:
+                $ref: '#/components/schemas/PriceExecutionControlOperation'
+    LegacyPriceReviewResponse:
+      description: Owned personal review with its frozen admission snapshot and separately
+        read current hold and restriction
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum:
+            - private, no-store
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+            - data
+            properties:
+              data:
+                $ref: '#/components/schemas/LegacyPriceReviewOperation'
+    AdExecutionControlResponse:
+      description: Owned service-control decision with independent historical and current state
+      headers:
+        Cache-Control: {schema: {type: string, enum: ['private, no-store']}}
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: {$ref: '#/components/schemas/AdExecutionControlOperation'}
     ErrorResponse:
       description: API error envelope
       content:
@@ -4489,6 +6237,498 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    PriceExecutionControlState:
+      type: object
+      additionalProperties: false
+      required:
+      - mode
+      - version
+      - changed_at
+      properties:
+        mode:
+          type: string
+          enum:
+          - legacy
+          - stopped
+          - manual_only
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+        changed_at:
+          type: string
+          format: date-time
+          nullable: true
+      description: legacy/version 0/null time is confirmed absence of an explicit account
+        restriction; other resource holds and policies still apply.
+    PriceExecutionAccountProof:
+      type: object
+      additionalProperties: false
+      required:
+      - resource_id
+      - resource_label
+      - source
+      - observed_at
+      properties:
+        resource_id:
+          type: string
+          pattern: ^[1-9][0-9]{0,18}$
+        resource_label:
+          type: string
+          maxLength: 1120
+        source:
+          type: string
+          enum:
+          - WB Prices API
+          - Ozon Seller API
+        observed_at:
+          type: string
+          format: date-time
+    PriceExecutionControlContext:
+      type: object
+      required:
+      - workspace_id
+      - integration_id
+      - integration_name
+      - marketplace
+      - scope
+      - account_proof
+      - control
+      - context_fingerprint
+      - approval_available
+      - legacy_held_count
+      properties:
+        workspace_id:
+          type: string
+        integration_id:
+          type: string
+        integration_name:
+          type: string
+        marketplace:
+          type: string
+          enum:
+          - wb
+          - ozon
+        scope:
+          type: string
+          enum:
+          - configured_price_account
+        account_proof:
+          $ref: '#/components/schemas/PriceExecutionAccountProof'
+        control:
+          $ref: '#/components/schemas/PriceExecutionControlState'
+        context_fingerprint:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        approval_available:
+          type: boolean
+        legacy_held_count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Recorded legacy price admissions of this physical account without a
+            committed personal resolution. Any positive value holds every new
+            Native price command of the account until each admission is
+            personally reviewed. Informational; not part of context_fingerprint.
+    PriceExecutionControlOperation:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - workspace_id
+      - integration_id
+      - integration_name
+      - marketplace
+      - scope
+      - target_mode
+      - before
+      - account_proof
+      - reason
+      - fingerprint
+      - status
+      - created_at
+      - expires_at
+      - result_control
+      - current_control
+      - current_checked_at
+      - approval_available
+      - native_prices_changed
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+        integration_id:
+          type: string
+        integration_name:
+          type: string
+        marketplace:
+          type: string
+          enum:
+          - wb
+          - ozon
+        scope:
+          type: string
+          enum:
+          - configured_price_account
+        target_mode:
+          type: string
+          enum:
+          - stopped
+          - manual_only
+        before:
+          $ref: '#/components/schemas/PriceExecutionControlState'
+        account_proof:
+          $ref: '#/components/schemas/PriceExecutionAccountProof'
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+        fingerprint:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        status:
+          type: string
+          enum:
+          - awaiting_confirmation
+          - succeeded
+          - cancelled
+          - expired
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        result_control:
+          allOf:
+          - $ref: '#/components/schemas/PriceExecutionControlState'
+          nullable: true
+        current_control:
+          $ref: '#/components/schemas/PriceExecutionControlState'
+        current_checked_at:
+          type: string
+          format: date-time
+        approval_available:
+          type: boolean
+        native_prices_changed:
+          type: boolean
+          enum:
+          - false
+    LegacyPriceJournalItem:
+      type: object
+      additionalProperties: false
+      required:
+      - command_id
+      - marketplace
+      - operation_kind
+      - issued_at
+      - admission_expires_at
+      - status
+      - hold_active
+      - native_outcome_verified
+      - resolution_id
+      - review_context_fingerprint
+      - personal_review_available
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        marketplace:
+          type: string
+          enum:
+          - wb
+          - ozon
+        operation_kind:
+          type: string
+          description: Derived from the recorded Native path only; the request body and products
+            are not stored.
+          enum:
+          - seller_prices_and_discounts
+          - size_prices
+          - club_discounts
+          - seller_prices
+          - product_import_with_prices
+          - promotion_activation
+          - promotion_deactivation
+          - unknown_price_operation
+        issued_at:
+          type: string
+          format: date-time
+        admission_expires_at:
+          type: string
+          format: date-time
+          description: End of the five-second window to start the request; not a completion time.
+        status:
+          type: string
+          enum:
+          - unresolved
+          - resolved_manually
+        hold_active:
+          type: boolean
+        native_outcome_verified:
+          type: boolean
+          enum:
+          - false
+        resolution_id:
+          type: string
+          format: uuid
+          nullable: true
+        review_context_fingerprint:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        personal_review_available:
+          type: boolean
+    LegacyPriceJournalContext:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      - workspace_id
+      - integration_id
+      - integration_name
+      - marketplace
+      - scope
+      - account_proof
+      - control
+      - items
+      - next_cursor
+      - held_count
+      - approval_available
+      properties:
+        version:
+          type: string
+          enum:
+          - legacy_price_journal_v1
+        workspace_id:
+          type: string
+        integration_id:
+          type: string
+        integration_name:
+          type: string
+        marketplace:
+          type: string
+          enum:
+          - wb
+          - ozon
+        scope:
+          type: string
+          enum:
+          - configured_price_account_legacy_review
+        account_proof:
+          $ref: '#/components/schemas/PriceExecutionAccountProof'
+        control:
+          $ref: '#/components/schemas/PriceExecutionControlState'
+        items:
+          type: array
+          maxItems: 25
+          items:
+            $ref: '#/components/schemas/LegacyPriceJournalItem'
+        next_cursor:
+          type: string
+          maxLength: 512
+          nullable: true
+        held_count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: All unreviewed admissions of this physical account, across pages.
+        approval_available:
+          type: boolean
+    LegacyPriceReviewConfirmations:
+      type: object
+      additionalProperties: false
+      required:
+      - legacy_history_and_support_checked
+      - legacy_no_native_work_in_progress
+      - legacy_late_effect_risk_accepted
+      - legacy_new_approvals_only
+      properties:
+        legacy_history_and_support_checked:
+          type: boolean
+          enum:
+          - true
+        legacy_no_native_work_in_progress:
+          type: boolean
+          enum:
+          - true
+        legacy_late_effect_risk_accepted:
+          type: boolean
+          enum:
+          - true
+        legacy_new_approvals_only:
+          type: boolean
+          enum:
+          - true
+    LegacyPriceReviewOperation:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - workspace_id
+      - integration_id
+      - integration_name
+      - marketplace
+      - scope
+      - entry
+      - before
+      - account_proof
+      - reason
+      - support_reference
+      - fingerprint
+      - status
+      - confirmations
+      - created_at
+      - expires_at
+      - resolved_at
+      - current_control
+      - current_hold_active
+      - current_held_count
+      - current_checked_at
+      - approval_available
+      - native_outcome_verified
+      - native_prices_changed
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+        integration_id:
+          type: string
+        integration_name:
+          type: string
+        marketplace:
+          type: string
+          enum:
+          - wb
+          - ozon
+        scope:
+          type: string
+          enum:
+          - configured_price_account_legacy_review
+        entry:
+          allOf:
+          - $ref: '#/components/schemas/LegacyPriceJournalItem'
+          description: Frozen journal item at preparation; current_hold_active is the present state.
+        before:
+          $ref: '#/components/schemas/PriceExecutionControlState'
+        account_proof:
+          $ref: '#/components/schemas/PriceExecutionAccountProof'
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+        support_reference:
+          type: string
+          minLength: 12
+          maxLength: 1500
+        fingerprint:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        status:
+          type: string
+          enum:
+          - awaiting_confirmation
+          - resolved_manually
+          - cancelled
+          - expired
+        confirmations:
+          allOf:
+          - $ref: '#/components/schemas/LegacyPriceReviewConfirmations'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        current_control:
+          $ref: '#/components/schemas/PriceExecutionControlState'
+        current_hold_active:
+          type: boolean
+        current_held_count:
+          type: integer
+          format: int64
+          minimum: 0
+        current_checked_at:
+          type: string
+          format: date-time
+        approval_available:
+          type: boolean
+        native_outcome_verified:
+          type: boolean
+          enum:
+          - false
+        native_prices_changed:
+          type: boolean
+          enum:
+          - false
+    AdExecutionControlState:
+      type: object
+      additionalProperties: false
+      required: [mode, version, changed_at]
+      properties:
+        mode: {type: string, enum: [legacy, stopped, manual_only]}
+        version: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        changed_at: {type: string, format: date-time, nullable: true}
+      description: legacy/version 0/null time is confirmed absence of an explicit account restriction; other resource holds and policies still apply.
+    AdExecutionAccountProof:
+      type: object
+      additionalProperties: false
+      required: [campaign_id, external_id, campaign_name, source, observed_at]
+      properties:
+        campaign_id: {type: string, format: uuid}
+        external_id: {type: string, pattern: '^[1-9][0-9]{0,18}$'}
+        campaign_name: {type: string, maxLength: 280}
+        source: {type: string, enum: [WB Advertising API, Ozon Performance API]}
+        observed_at: {type: string, format: date-time}
+    AdExecutionControlContext:
+      type: object
+      required: [workspace_id, integration_id, integration_name, marketplace, scope, account_proof, control, context_fingerprint, approval_available]
+      properties:
+        workspace_id: {type: string}
+        integration_id: {type: string}
+        integration_name: {type: string}
+        marketplace: {type: string, enum: [wb, ozon]}
+        scope: {type: string, enum: [configured_advertising_account]}
+        account_proof: {$ref: '#/components/schemas/AdExecutionAccountProof'}
+        control: {$ref: '#/components/schemas/AdExecutionControlState'}
+        context_fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+        approval_available: {type: boolean}
+    AdExecutionControlOperation:
+      type: object
+      additionalProperties: false
+      required: [id, workspace_id, integration_id, integration_name, marketplace, scope, target_mode, before, account_proof, reason, fingerprint, status, created_at, expires_at, result_control, current_control, current_checked_at, approval_available, native_campaigns_changed]
+      properties:
+        id: {type: string, format: uuid}
+        workspace_id: {type: string}
+        integration_id: {type: string}
+        integration_name: {type: string}
+        marketplace: {type: string, enum: [wb, ozon]}
+        scope: {type: string, enum: [configured_advertising_account]}
+        target_mode: {type: string, enum: [stopped, manual_only]}
+        before: {$ref: '#/components/schemas/AdExecutionControlState'}
+        account_proof: {$ref: '#/components/schemas/AdExecutionAccountProof'}
+        reason: {type: string, minLength: 3, maxLength: 500}
+        fingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+        status: {type: string, enum: [awaiting_confirmation, succeeded, cancelled, expired]}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        result_control:
+          allOf: [{$ref: '#/components/schemas/AdExecutionControlState'}]
+          nullable: true
+        current_control: {$ref: '#/components/schemas/AdExecutionControlState'}
+        current_checked_at: {type: string, format: date-time}
+        approval_available: {type: boolean}
+        native_campaigns_changed: {type: boolean, enum: [false]}
     Meta:
       type: object
       required: [page, per_page, total]
@@ -5911,7 +8151,7 @@ components:
         new_bid_rub: { type: number, nullable: true }
         reason: { type: string }
         source: { type: string, enum: [strategy, manual, ai] }
-        status: { type: string, enum: [pending, applied, failed, rolled_back, shadow] }
+        status: { type: string, enum: [pending, applied, failed, rolled_back, shadow, unknown] }
         decision_context: { type: object, nullable: true }
         error: { type: string }
         created_at: { type: string, format: date-time }
@@ -5927,7 +8167,7 @@ components:
           $ref: "#/components/schemas/Meta"
     OzonPriceChange:
       type: object
-      description: One audited Ozon price write (strategy, manual or AI); status=shadow rows are dry-run decisions
+      description: One audited Ozon price write. Applied requires an acknowledgement and an exact vendor readback. Submit_unknown is held and never automatically resent. Shadow rows never dispatch.
       properties:
         id: { type: string, format: uuid }
         seller_cabinet_id: { type: string, format: uuid }
@@ -5942,7 +8182,7 @@ components:
         reason: { type: string }
         source: { type: string, enum: [strategy, manual, ai] }
         strategy_id: { type: string, format: uuid, nullable: true }
-        status: { type: string, enum: [pending, applied, failed, rolled_back, shadow] }
+        status: { type: string, enum: [pending, submitting, verifying, submit_unknown, applied, failed, rolled_back, shadow] }
         decision_context: { type: object, nullable: true }
         error: { type: string }
         created_at: { type: string, format: date-time }
@@ -7183,3 +9423,124 @@ components:
           type: array
           items: { $ref: "#/components/schemas/PriceSchedule" }
         meta: { $ref: "#/components/schemas/Meta" }
+    LegacyPriceDispatchRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      - origin
+      - command_id
+      - sent_at
+      - marketplace
+      - method
+      - account_key
+      - endpoint
+      - payload_sha256
+      properties:
+        version:
+          type: string
+          enum:
+          - legacy_price_dispatch_v1
+        origin: &id001
+          type: string
+          enum:
+          - products
+        command_id: &id002
+          type: string
+          format: uuid
+        sent_at:
+          type: integer
+          format: int64
+          minimum: 1
+        marketplace: &id003
+          type: string
+          enum:
+          - wb
+          - ozon
+        method: &id004
+          type: string
+          enum:
+          - POST
+        account_key:
+          type: string
+          pattern: ^(wb|ozon):[a-f0-9]{64}$
+          description: Attested from the actual native credential binding. Vendor keys
+            are not sent.
+        endpoint: &id005
+          type: string
+          enum:
+          - /api/v2/upload/task
+          - /api/v2/upload/task/size
+          - /api/v2/upload/task/club-discount
+          - /v1/product/import/prices
+          - /v3/product/import
+          - /v1/actions/products/activate
+          - /v1/actions/products/deactivate
+          - /v1/actions/hotsales/activate
+          - /v1/actions/hotsales/deactivate
+        payload_sha256: &id006
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          description: SHA256 of the exact native JSON wire bytes.
+    LegacyPriceDispatchGrant:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      - origin
+      - command_id
+      - marketplace
+      - method
+      - endpoint
+      - payload_sha256
+      - authorized
+      - scope
+      - control_version
+      - issued_at
+      - expires_at
+      - valid_for_ms
+      properties:
+        version:
+          type: string
+          enum:
+          - legacy_price_dispatch_grant_v1
+        origin: *id001
+        command_id: *id002
+        marketplace: *id003
+        method: *id004
+        endpoint: *id005
+        payload_sha256: *id006
+        authorized:
+          type: boolean
+          enum:
+          - true
+        scope:
+          type: string
+          enum:
+          - one_legacy_price_request
+        control_version:
+          type: integer
+          enum:
+          - 0
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        valid_for_ms:
+          type: integer
+          enum:
+          - 5000
+    LegacyPriceDispatchError:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - error
+      properties:
+        data:
+          type: object
+          nullable: true
+        error:
+          type: string

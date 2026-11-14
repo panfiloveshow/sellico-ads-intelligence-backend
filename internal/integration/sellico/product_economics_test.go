@@ -2,6 +2,7 @@ package sellico
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,5 +51,45 @@ func TestListWBUnitEconomicsFailsClosedOnExportEnvelopeMismatch(t *testing.T) {
 			_, err := client.ListWBUnitEconomics(context.Background(), "token", "/export", "17")
 			require.Error(t, err)
 		})
+	}
+}
+
+func TestListWBUnitEconomicsExplicitZeroContract(t *testing.T) {
+	for _, key := range []string{`"nm_id":101`, `"offer_id":"ZERO-OFFER"`} {
+		for _, tc := range []struct {
+			name, fields string
+			want         int
+			wantError    bool
+		}{
+			{"explicit ready zero", `"cost_price":0,"explicit_zero_cost_price":true,"ready":true`, 1, false},
+			{"zero default", `"cost_price":0,"ready":true`, 0, false},
+			{"false marker", `"cost_price":0,"explicit_zero_cost_price":false,"ready":true`, 0, false},
+			{"old calculation", `"cost_price":0,"explicit_zero_cost_price":true,"ready":false`, 0, false},
+			{"missing cost", `"explicit_zero_cost_price":true,"ready":true`, 0, false},
+			{"null cost", `"cost_price":null,"explicit_zero_cost_price":true,"ready":true`, 0, false},
+			{"negative cost", `"cost_price":-1,"explicit_zero_cost_price":true,"ready":true`, 0, false},
+			{"string marker", `"cost_price":0,"explicit_zero_cost_price":"true","ready":true`, 0, true},
+			{"numeric marker", `"cost_price":0,"explicit_zero_cost_price":1,"ready":true`, 0, true},
+			{"legacy positive partial", `"cost_price":500,"ready":false`, 1, false},
+		} {
+			t.Run(key+"/"+tc.name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+					require.Equal(t, "17", r.URL.Query().Get("integration_id"))
+					_, _ = fmt.Fprintf(w, `{"schema_version":2,"source":"sellico-products-unit-economics","integration_id":17,"complete":true,"items":[{%s,%s}]}`, key, tc.fields)
+				}))
+				defer server.Close()
+				rows, err := NewClient(server.URL, time.Second).ListWBUnitEconomics(context.Background(), "test-token", "/export", "17")
+				if tc.wantError {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Len(t, rows, tc.want)
+				if tc.name == "explicit ready zero" {
+					require.Equal(t, 0.0, rows[0].CostPrice)
+				}
+			})
+		}
 	}
 }

@@ -31,9 +31,7 @@ func TestPendingClaimFreezesPayloadBeforeHTTP(t *testing.T) {
 	require.Contains(t, claimPendingPriceChanges, "FOR UPDATE SKIP LOCKED")
 	require.Contains(t, claimPendingPriceChanges, "wb_status = 'submitting'")
 	require.Contains(t, claimPendingPriceChanges, "active.wb_status IN ('submitting', 'submit_unknown', 'uploaded')")
-	require.Contains(t, claimUnknownPriceChanges, "uncertain.wb_status = 'submit_unknown'")
 	require.Contains(t, claimPendingPriceChanges, "submission_batch_id = $4")
-	require.Contains(t, claimUnknownPriceChanges, "claimed.submission_batch_id = candidate_batch.submission_batch_id")
 	require.Contains(t, claimPendingPriceChanges, "claimed.new_price_rub")
 }
 
@@ -67,7 +65,6 @@ func TestRecoveryIsWorkspaceScopedAndNeverResendsLinkedTask(t *testing.T) {
 	t.Parallel()
 	require.Contains(t, listClaimablePriceChangeCabinets, "pending.workspace_id = $1")
 	require.Contains(t, listClaimablePriceChangeCabinets, "active.wb_status IN ('submitting', 'submit_unknown', 'uploaded')")
-	require.Contains(t, claimUnknownPriceChanges, "submission_batch_id")
 }
 
 func TestSchedulesListNewestFirst(t *testing.T) {

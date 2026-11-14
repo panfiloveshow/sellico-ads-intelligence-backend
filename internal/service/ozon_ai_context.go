@@ -573,7 +573,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 			}
 			if (entry.NetPriceRub == nil || *entry.NetPriceRub <= 0) && entry.OfferID != "" {
 				if econ, ok := economics[entry.OfferID]; ok {
-					if cost := ozonEffectiveNetPrice(0, &econ); cost > 0 {
+					if cost, known := ozonEffectiveCostBasis(0, &econ); known {
 						entry.NetPriceRub = &cost
 						costSource = "sellico"
 					}
@@ -636,7 +636,7 @@ func (s *OzonAIManagerService) buildAIContext(ctx context.Context, workspaceID, 
 				if entry.CommissionFBSPct != nil && *entry.CommissionFBSPct > commission {
 					commission = *entry.CommissionFBSPct
 				}
-				entry.MarginPct = ozonSKUMarginPct(*entry.PriceRub, *entry.NetPriceRub, commission, pgNumericToFloat(row.AcquiringPct))
+				entry.MarginPct = ozonSKUMarginPctWithKnownCost(*entry.PriceRub, *entry.NetPriceRub, commission, pgNumericToFloat(row.AcquiringPct), costSource != "")
 			}
 			data.economicsBySKU[sku] = entry
 			pack.Economics = append(pack.Economics, entry)
@@ -872,7 +872,12 @@ func (s *OzonAIManagerService) topSearchQueriesForSKUs(ctx context.Context, cabi
 // unknown (the model must not scale unknown-margin SKUs); a negative margin is
 // a real value and is returned so the model can steer clear of it.
 func ozonSKUMarginPct(price, cost, commissionPct, acquiringRub float64) *float64 {
-	if price <= 0 || cost <= 0 {
+	// Native API zero has historically meant that the cost is unknown.
+	return ozonSKUMarginPctWithKnownCost(price, cost, commissionPct, acquiringRub, cost > 0)
+}
+
+func ozonSKUMarginPctWithKnownCost(price, cost, commissionPct, acquiringRub float64, costKnown bool) *float64 {
+	if !costKnown || price <= 0 || cost < 0 {
 		return nil
 	}
 	margin := (price - cost - price*commissionPct/100 - acquiringRub) / price * 100

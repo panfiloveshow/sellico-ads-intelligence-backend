@@ -26,17 +26,20 @@ func TestTerminalPriceTaskResultTreatsWBCanceledAsFailed(t *testing.T) {
 func TestPartialPriceGoodFailure(t *testing.T) {
 	t.Parallel()
 
-	reason, failed := partialPriceGoodFailure(wb.PriceTaskGood{Status: 3})
+	reason, failed := partialPriceGoodFailure(wb.PriceTaskGood{Status: 2})
 	require.False(t, failed)
 	require.Empty(t, reason)
 
-	reason, failed = partialPriceGoodFailure(wb.PriceTaskGood{Status: 4, ErrorText: "bad discount"})
+	reason, failed = partialPriceGoodFailure(wb.PriceTaskGood{Status: 3, ErrorText: "bad discount"})
 	require.True(t, failed)
 	require.Equal(t, "bad discount", reason)
 
-	reason, failed = partialPriceGoodFailure(wb.PriceTaskGood{Status: 6})
+	reason, failed = partialPriceGoodFailure(wb.PriceTaskGood{Status: 3})
 	require.True(t, failed)
-	require.Equal(t, "WB item status 6", reason)
+	require.Equal(t, "WB item status 3", reason)
+
+	_, failed = partialPriceGoodFailure(wb.PriceTaskGood{Status: 6})
+	require.False(t, failed, "unknown item status is not an explicit rejection")
 }
 
 func TestRollbackBaselineMatches(t *testing.T) {

@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/adguard"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/testdb"
 )
@@ -94,6 +96,31 @@ func TestOzonCampaignActions_SetProductBids_APIFailureMarksFailed(t *testing.T) 
 		`SELECT bid_rub FROM ozon_campaign_products WHERE campaign_id = $1 AND sku = 555`,
 		campaignID).Scan(&mirrorBid))
 	assert.InDelta(t, 10.0, mirrorBid, 0.001)
+}
+
+func TestOzonCampaignActions_UncertainBidRemainsUnknownAndBlocksAnySecondNativeWrite(t *testing.T) {
+	env := newOzonTestEnv(t, testdb.OzonCredentials())
+	ctx := context.Background()
+	env.actionsSvc.perfClient.(*ozon.PerfClient).WithAdGuard(env.queries)
+	campaignID := testdb.OzonCampaign(t, env.pool, env.cabinetID, 502, "Кампания", "CAMPAIGN_STATE_RUNNING")
+	testdb.OzonCampaignProduct(t, env.pool, campaignID, 555, 10)
+	path := "/api/client/campaign/502/products"
+	env.fake.fail(path, 503)
+	changes, err := env.actionsSvc.SetProductBids(ctx, env.workspaceID, campaignID, []OzonBidInput{{SKU: 555, BidRub: 20}})
+	require.Error(t, err)
+	require.True(t, adguard.IsUnknown(err))
+	require.Len(t, changes, 1)
+	require.Equal(t, domain.OzonBidStatusUnknown, changes[0].Status)
+	var state string
+	require.NoError(t, env.pool.QueryRow(ctx, `SELECT status FROM ozon_bid_changes WHERE id=$1`, changes[0].ID).Scan(&state))
+	require.Equal(t, "unknown", state)
+	_, err = env.actionsSvc.SetProductBids(ctx, env.workspaceID, campaignID, []OzonBidInput{{SKU: 555, BidRub: 21}})
+	require.Error(t, err)
+	require.True(t, adguard.WasNotSent(err))
+	require.Equal(t, 1, env.fake.callCount(path))
+	var bid float64
+	require.NoError(t, env.pool.QueryRow(ctx, `SELECT bid_rub FROM ozon_campaign_products WHERE campaign_id=$1 AND sku=555`, campaignID).Scan(&bid))
+	require.Equal(t, float64(10), bid)
 }
 
 // Лимит Ozon на ставки (с 14.09.2026): 429 не повторяется, пользователю —

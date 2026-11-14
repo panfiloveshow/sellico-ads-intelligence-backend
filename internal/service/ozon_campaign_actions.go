@@ -15,6 +15,7 @@ import (
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/adguard"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
 )
@@ -61,7 +62,7 @@ type ozonCampaignPerfClient interface {
 	DisableSearchPromo(ctx context.Context, creds ozon.Credentials, skus []int64) error
 	SetSearchPromoBids(ctx context.Context, creds ozon.Credentials, bids []ozon.CPOBid) error
 	GetCPOMinBids(ctx context.Context, creds ozon.Credentials, skus []int64) ([]ozon.MinSKUBid, error)
-	GetAllSKUPromoRate(ctx context.Context, creds ozon.Credentials) (int, error)
+	ActivateAllSKUPromo(ctx context.Context, creds ozon.Credentials) (int, error)
 	SetAllSKUPromoRate(ctx context.Context, creds ozon.Credentials, ratePct int) error
 	DeactivateAllSKUPromo(ctx context.Context, creds ozon.Credentials) error
 	GetBidLimits(ctx context.Context, creds ozon.Credentials) (json.RawMessage, error)
@@ -320,6 +321,9 @@ func (s *OzonCampaignActionsService) SetProductBidsWithSource(ctx context.Contex
 	var errText pgtype.Text
 	if writeErr != nil {
 		status = domain.OzonBidStatusFailed
+		if adguard.IsUnknown(writeErr) {
+			status = domain.OzonBidStatusUnknown
+		}
 		errText = textToPgtype(truncateError(writeErr.Error()))
 	}
 	for i, id := range changeIDs {
@@ -760,7 +764,7 @@ func (s *OzonCampaignActionsService) SetCPORate(ctx context.Context, workspaceID
 }
 
 // SetCPOActive turns the whole-cabinet CPO promo on or off. Activating goes
-// through GetAllSKUPromoRate (the activate endpoint enables the promo and
+// through ActivateAllSKUPromo (the activate endpoint enables the promo and
 // reports the current rate, idempotent when already active); deactivating calls
 // all_sku_promo/deactivate. Tenancy-gated; requires Performance API creds.
 func (s *OzonCampaignActionsService) SetCPOActive(ctx context.Context, workspaceID, cabinetID uuid.UUID, active bool) error {
@@ -769,7 +773,7 @@ func (s *OzonCampaignActionsService) SetCPOActive(ctx context.Context, workspace
 		return err
 	}
 	if active {
-		rate, actErr := s.perfClient.GetAllSKUPromoRate(ctx, creds)
+		rate, actErr := s.perfClient.ActivateAllSKUPromo(ctx, creds)
 		if actErr != nil {
 			return fmt.Errorf("ozon cpo activate: %w", actErr)
 		}
@@ -819,6 +823,9 @@ func (s *OzonCampaignActionsService) finalizeBidChanges(ctx context.Context, ids
 	var errText pgtype.Text
 	if writeErr != nil {
 		status = domain.OzonBidStatusFailed
+		if adguard.IsUnknown(writeErr) {
+			status = domain.OzonBidStatusUnknown
+		}
 		errText = textToPgtype(truncateError(writeErr.Error()))
 	}
 	for _, id := range ids {

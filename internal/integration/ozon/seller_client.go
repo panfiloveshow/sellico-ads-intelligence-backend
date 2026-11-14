@@ -345,7 +345,7 @@ func (c *SellerClient) UpdatePrices(ctx context.Context, creds Credentials, item
 	type wireResult struct {
 		ProductID flexInt64   `json:"product_id"`
 		OfferID   string      `json:"offer_id"`
-		Updated   bool        `json:"updated"`
+		Updated   *bool       `json:"updated"`
 		Errors    []wireError `json:"errors"`
 	}
 	type response struct {
@@ -379,7 +379,9 @@ func (c *SellerClient) UpdatePrices(ctx context.Context, creds Credentials, item
 			req.Prices = append(req.Prices, price)
 		}
 
-		body, err := c.do(ctx, creds, "/v1/product/import/prices", req)
+		// An accepted price command can lose its response. Read retries must
+		// never replay a mutation; its caller must reconcile the durable record.
+		body, err := c.do(withoutRetry(ctx), creds, "/v1/product/import/prices", req)
 		if err != nil {
 			return out, err
 		}
@@ -388,12 +390,18 @@ func (c *SellerClient) UpdatePrices(ctx context.Context, creds Credentials, item
 			return out, err
 		}
 		for _, result := range resp.Result {
+			if result.Updated == nil {
+				return out, errors.New("ozon seller: price receipt is missing its outcome")
+			}
 			item := PriceUpdateResult{
 				ProductID: int64(result.ProductID),
 				OfferID:   result.OfferID,
-				Updated:   result.Updated,
+				Updated:   *result.Updated,
 			}
 			for _, wireErr := range result.Errors {
+				if wireErr.Code == "" && wireErr.Message == "" {
+					return out, errors.New("ozon seller: price receipt has a malformed error")
+				}
 				item.Errors = append(item.Errors, fmt.Sprintf("%s: %s", wireErr.Code, wireErr.Message))
 			}
 			out = append(out, item)
@@ -743,9 +751,8 @@ func (c *SellerClient) ListPostings(ctx context.Context, creds Credentials, sinc
 	return append(fbo, fbs...), nil
 }
 
-// do executes one Seller API POST with rate limiting, retry (429 honors
-// Retry-After, 5xx uses exponential backoff — these are idempotent reads)
-// and Prometheus metrics.
+// do executes a Seller API POST with rate limiting and metrics. Read callers
+// retry (429 honors Retry-After; 5xx uses backoff); writes use withoutRetry.
 func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, payload any) ([]byte, error) {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -758,6 +765,10 @@ func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, p
 		metrics.OzonAPILatency.WithLabelValues("seller", path).Observe(time.Since(start).Seconds())
 	}()
 
+	// Preserve the supplied transport/timeout while keeping seller credentials
+	// at the configured origin, including for clients supplied by tests.
+	httpClient := *c.httpClient
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if err := lim.Wait(ctx); err != nil {
@@ -772,7 +783,7 @@ func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, p
 		req.Header.Set("Client-Id", creds.ClientID)
 		req.Header.Set("Api-Key", creds.APIKey)
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("ozon seller: %s: %w", path, err)
 			metrics.OzonAPIRequests.WithLabelValues("seller", path, "error").Inc()
@@ -794,6 +805,9 @@ func (c *SellerClient) do(ctx context.Context, creds Credentials, path string, p
 		}
 
 		switch {
+		case resp.StatusCode < 200 || (resp.StatusCode >= 300 && resp.StatusCode < 400):
+			metrics.OzonAPIRequests.WithLabelValues("seller", path, fmt.Sprintf("%d", resp.StatusCode)).Inc()
+			return nil, &APIError{StatusCode: resp.StatusCode, URL: c.baseURL + path, Message: "ozon seller: unexpected response status"}
 		case resp.StatusCode == http.StatusTooManyRequests:
 			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 			metrics.OzonAPIRequests.WithLabelValues("seller", path, "429").Inc()

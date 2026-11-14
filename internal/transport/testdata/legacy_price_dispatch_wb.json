@@ -1,0 +1,4 @@
+{
+    "body": "{\"version\":\"legacy_price_dispatch_v1\",\"origin\":\"products\",\"command_id\":\"6ea26786-9e23-4c9f-b328-bcb4eb01f923\",\"sent_at\":1794018385,\"marketplace\":\"wb\",\"method\":\"POST\",\"account_key\":\"wb:8c9b0e9d71193a11c3ec247db3f9220857e3502ee00be9757cfc9c8c8bec8369\",\"endpoint\":\"/api/v2/upload/task\",\"payload_sha256\":\"281093116ad530e8a38a1888d6df8ba9e7bcb31f7c69b37da4130a92cd17093d\"}",
+    "signature": "v1=02aa1d0d533c5850c0bf9d1b8f9a5d43864f45c02382dcc37a042c905d40c410"
+}

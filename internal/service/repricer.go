@@ -24,14 +24,15 @@ const priceListPageSize = 1000
 // RepricerService manages WB product prices: sync (read), strategy evaluation,
 // upload, polling, manual bulk changes, rollback, and quarantine monitoring.
 type RepricerService struct {
-	queries       *sqlcgen.Queries
-	strategies    *StrategyService
-	engine        *PriceEngine
-	wbClient      *wb.Client
-	encryptionKey []byte
-	economics     UnitEconomicsReadinessProvider
-	notifications *NotificationService
-	logger        zerolog.Logger
+	queries               *sqlcgen.Queries
+	strategies            *StrategyService
+	engine                *PriceEngine
+	wbClient              *wb.Client
+	encryptionKey         []byte
+	economics             UnitEconomicsReadinessProvider
+	managerPriceValidator ManagerPriceValidator
+	notifications         *NotificationService
+	logger                zerolog.Logger
 }
 
 type RepricerOption func(*RepricerService)

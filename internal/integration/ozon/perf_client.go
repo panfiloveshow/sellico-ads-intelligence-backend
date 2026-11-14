@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/adguard"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/metrics"
 )
 
@@ -40,6 +41,7 @@ type cachedToken struct {
 // Bearer token on every call). Tokens are cached per client_id with
 // singleflight so concurrent cabinet syncs don't stampede the token endpoint.
 type PerfClient struct {
+	adGuard    adguard.Guard
 	baseURL    string
 	httpClient *http.Client
 	logger     zerolog.Logger
@@ -56,7 +58,7 @@ type PerfClient struct {
 func NewPerfClient(cfg *config.Config, logger zerolog.Logger) *PerfClient {
 	return &PerfClient{
 		baseURL:    cfg.OzonPerfAPIBaseURL,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		logger:     logger.With().Str("component", "ozon_perf_client").Logger(),
 		limiters:   newLimiterPool(rate.Limit(perfRPS), perfRPS),
 		tokens:     make(map[string]cachedToken),

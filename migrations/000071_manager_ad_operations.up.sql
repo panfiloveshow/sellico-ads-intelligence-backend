@@ -1,0 +1,28 @@
+CREATE TABLE manager_ad_operations (
+ id uuid PRIMARY KEY,
+ workspace_id uuid NOT NULL,
+ actor_id uuid NOT NULL,
+ external_user_id text NOT NULL,
+ external_workspace_id text NOT NULL,
+ integration_id text NOT NULL,
+ integration_name text NOT NULL,
+ seller_cabinet_id uuid NOT NULL,
+ campaign_id uuid NOT NULL,
+ external_id text NOT NULL,
+ marketplace text NOT NULL CHECK(marketplace IN ('wb','ozon')),
+ action text NOT NULL CHECK(action='pause'),
+ before_snapshot jsonb NOT NULL,
+ target_status text NOT NULL,
+ source text NOT NULL,
+ native_request jsonb NOT NULL,
+ credential_digest char(64) NOT NULL,
+ fingerprint char(64) NOT NULL,
+ status text NOT NULL CHECK(status IN ('awaiting_confirmation','executing','verifying','succeeded','failed','unknown','cancelled','expired')),
+ message_code text,
+ result jsonb,
+ created_at timestamptz NOT NULL,
+ expires_at timestamptz NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ CHECK(expires_at>created_at AND expires_at<=created_at+interval '5 minutes')
+);
+CREATE INDEX manager_ad_operations_owner ON manager_ad_operations(workspace_id,actor_id,created_at);

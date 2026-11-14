@@ -33,7 +33,7 @@ const countOzonPriceWritesBySkuSince = `-- name: CountOzonPriceWritesBySkuSince 
 SELECT COUNT(*) FROM ozon_price_changes
 WHERE seller_cabinet_id = $1
   AND sku = $2
-  AND status IN ('pending', 'applied', 'rolled_back')
+  AND status IN ('pending', 'submitting', 'verifying', 'submit_unknown', 'applied', 'rolled_back')
   AND created_at >= $3
 `
 
@@ -45,8 +45,9 @@ type CountOzonPriceWritesBySkuSinceParams struct {
 
 // CountOzonPriceWritesBySkuSince feeds the hard hourly write limit (Ozon
 // rejects more than 10 price changes per product per hour). Only rows that
-// did (or may still) reach Ozon count: pending + applied + rolled_back
-// (a rollback is a real write too).
+// did (or may still) reach Ozon count, including in-flight and unknown rows.
+// This is a cabinet-local early check. The dispatch journal enforces the
+// physical seller/product budget across cabinet aliases atomically.
 func (q *Queries) CountOzonPriceWritesBySkuSince(ctx context.Context, arg CountOzonPriceWritesBySkuSinceParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countOzonPriceWritesBySkuSince, arg.SellerCabinetID, arg.Sku, arg.Since)
 	var count int64
@@ -59,7 +60,7 @@ SELECT COUNT(*) FROM ozon_price_changes
 WHERE seller_cabinet_id = $1
   AND sku = $2
   AND source = 'strategy'
-  AND status IN ('pending', 'applied', 'shadow')
+  AND status IN ('pending', 'submitting', 'verifying', 'submit_unknown', 'applied', 'shadow')
   AND created_at >= $3
 `
 

@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/config"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/adguard"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/apperror"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/metrics"
 	"github.com/rs/zerolog"
@@ -57,7 +59,11 @@ var (
 type requestRetryPolicyKey struct{}
 
 type requestRetryPolicy struct {
-	retryRateLimit bool
+	oneAttempt       bool
+	limiterAcquired  bool
+	retryRateLimit   bool
+	noRedirects      bool
+	maxResponseBytes int64
 }
 
 // withoutRateLimitRetry is used for live bid writes executed while the caller
@@ -65,7 +71,21 @@ type requestRetryPolicy struct {
 // apply the write), so surfacing it immediately preserves safety without
 // sleeping under the workspace advisory lock.
 func withoutRateLimitRetry(ctx context.Context) context.Context {
-	return context.WithValue(ctx, requestRetryPolicyKey{}, requestRetryPolicy{retryRateLimit: false})
+	policy, _ := ctx.Value(requestRetryPolicyKey{}).(requestRetryPolicy)
+	policy.retryRateLimit = false
+	return context.WithValue(ctx, requestRetryPolicyKey{}, policy)
+}
+
+// Price commands and observations use the configured origin and a bounded
+// response. A redirect cannot forward the token or replay an approved payload.
+func priceRequestContext(ctx context.Context, maxResponseBytes int64) context.Context {
+	policy, ok := ctx.Value(requestRetryPolicyKey{}).(requestRetryPolicy)
+	if !ok {
+		policy.retryRateLimit = true
+	}
+	policy.noRedirects = true
+	policy.maxResponseBytes = maxResponseBytes
+	return context.WithValue(ctx, requestRetryPolicyKey{}, policy)
 }
 
 func retryRateLimitForRequest(ctx context.Context) bool {
@@ -90,6 +110,7 @@ func (t serviceUARoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 
 // Client is the concrete HTTP client for the WB Advertising API.
 type Client struct {
+	adGuard                  adguard.Guard
 	httpClient               *http.Client
 	baseURL                  string
 	contentURL               string
@@ -115,8 +136,10 @@ type Client struct {
 	campaignProductLimiters *boundedLRU[*rate.Limiter]
 	// budgetLimiters paces POST /api/advert/v2/budget batches: 20 requests per
 	// minute (3 s interval) for Personal/Service access.
-	budgetLimiters *boundedLRU[*rate.Limiter]
-	breakers       *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
+	budgetLimiters         *boundedLRU[*rate.Limiter]
+	managerBudgetLimiterMu sync.Mutex
+	managerBudgetLimiters  *boundedLRU[*rate.Limiter]
+	breakers               *boundedLRU[*gobreaker.CircuitBreaker[[]byte]]
 }
 
 // NewClient creates a new WB API client from the application config.
@@ -163,6 +186,7 @@ func NewClient(cfg *config.Config, logger zerolog.Logger) *Client {
 		priceLimiters:            newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		campaignProductLimiters:  newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		budgetLimiters:           newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
+		managerBudgetLimiters:    newBoundedLRU[*rate.Limiter](tokenCacheCapacity, tokenCacheTTL),
 		breakers:                 newBoundedLRU[*gobreaker.CircuitBreaker[[]byte]](tokenCacheCapacity, tokenCacheTTL),
 	}
 }
@@ -351,7 +375,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, token string, body
 
 	cb := c.breakerForToken(token)
 	result, err := cb.Execute(func() ([]byte, error) {
-		r, b, e := c.doRequestInner(ctx, method, path, token, body)
+		r, b, e := c.doAdvertisingRequest(ctx, method, path, token, body)
 		resp = r
 		return b, e
 	})
@@ -525,6 +549,10 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 	// campaign). 429 is still safe to retry for any method — it means the request was
 	// rejected before processing.
 	idempotent := method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+	requestPolicy, _ := ctx.Value(requestRetryPolicyKey{}).(requestRetryPolicy)
+	if requestPolicy.oneAttempt {
+		idempotent = false
+	}
 
 	// Buffer body so it can be re-read on retry (fix: audit MEDIUM #15)
 	var bodyBytes []byte
@@ -537,11 +565,23 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 	}
 
 	var lastErr error
+	requestClient := c.httpClient
+	if policy, ok := ctx.Value(requestRetryPolicyKey{}).(requestRetryPolicy); ok && policy.noRedirects {
+		fixedOrigin := *c.httpClient
+		fixedOrigin.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		requestClient = &fixedOrigin
+	}
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	attemptLimit := maxRetries
+	if requestPolicy.oneAttempt {
+		attemptLimit = 1
+	}
+	for attempt := 1; attempt <= attemptLimit; attempt++ {
 		// Wait for rate limiter
-		if err := lim.Wait(ctx); err != nil {
-			return nil, nil, fmt.Errorf("rate limiter wait: %w", err)
+		if !requestPolicy.limiterAcquired || attempt > 1 {
+			if err := lim.Wait(ctx); err != nil {
+				return nil, nil, fmt.Errorf("rate limiter wait: %w", err)
+			}
 		}
 
 		var reqBody io.Reader
@@ -554,6 +594,12 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 		}
 		req.Header.Set("Authorization", token)
 		req.Header.Set("Content-Type", "application/json")
+		if requestPolicy.oneAttempt && method == http.MethodGet {
+			// A lifecycle GET changes vendor state. A non-replayable body also
+			// disables the standard transport's retry on a reused connection.
+			req.Body = io.NopCloser(bytes.NewReader(nil))
+			req.GetBody = nil
+		}
 
 		c.logger.Debug().
 			Str("method", method).
@@ -561,7 +607,7 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 			Int("attempt", attempt).
 			Msg("sending request")
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := requestClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("http request failed: %w", err)
 			c.logger.Debug().
@@ -583,10 +629,19 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 			continue
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		var responseReader io.Reader = resp.Body
+		policy, _ := ctx.Value(requestRetryPolicyKey{}).(requestRetryPolicy)
+		if policy.maxResponseBytes > 0 {
+			responseReader = io.LimitReader(resp.Body, policy.maxResponseBytes+1)
+		}
+		respBody, err := io.ReadAll(responseReader)
 		resp.Body.Close()
 		if err != nil {
 			return nil, nil, fmt.Errorf("read response body: %w", err)
+		}
+		if policy.maxResponseBytes > 0 && int64(len(respBody)) > policy.maxResponseBytes {
+			// A bounded/truncated write receipt cannot prove rejection.
+			return nil, nil, fmt.Errorf("WB price response exceeds supported size")
 		}
 
 		c.logger.Debug().

@@ -198,21 +198,6 @@ func (s *RepricerService) drainCabinetPriceChanges(ctx context.Context, workspac
 	}
 	var taskIDs []uuid.UUID
 	for {
-		uncertain, err := s.queries.ClaimUnknownPriceChanges(ctx, uuidToPgtype(workspaceID), uuidToPgtype(cabinetID))
-		if err != nil {
-			return taskIDs, err
-		}
-		if len(uncertain) > 0 {
-			taskID, err := s.uploadClaimedChunk(ctx, workspaceID, cabinetID, token, uncertain)
-			if taskID != uuid.Nil {
-				taskIDs = append(taskIDs, taskID)
-			}
-			if err != nil {
-				s.recordPricesRateLimit(ctx, cabinetID, wbEndpointPricesUpload, err)
-				return taskIDs, err
-			}
-			continue
-		}
 		claimed, err := s.queries.ClaimPendingPriceChanges(ctx, uuidToPgtype(workspaceID), uuidToPgtype(cabinetID), uuidToPgtype(uuid.New()), priceUploadChunkSize)
 		if err != nil {
 			return taskIDs, err
@@ -232,8 +217,11 @@ func (s *RepricerService) drainCabinetPriceChanges(ctx context.Context, workspac
 }
 
 func (s *RepricerService) uploadClaimedChunk(ctx context.Context, workspaceID, cabinetID uuid.UUID, token string, claimed []sqlcgen.PriceChange) (uuid.UUID, error) {
-	// WB duplicate detection is payload-sensitive. Keep both the first submit
-	// and an unknown-outcome retry byte-equivalent for the persisted batch.
+	if err := s.beginWBPriceDispatch(ctx, workspaceID, cabinetID, token, claimed); err != nil {
+		return uuid.Nil, err
+	}
+	// Keep the persisted batch deterministic. Unknown submissions are held;
+	// they are never replayed based on an assumed duplicate-detection window.
 	sort.Slice(claimed, func(i, j int) bool { return claimed[i].WbProductID < claimed[j].WbProductID })
 	items := make([]wb.PriceUpdateItem, 0, len(claimed))
 	changeIDs := make([]uuid.UUID, 0, len(claimed))
@@ -242,17 +230,21 @@ func (s *RepricerService) uploadClaimedChunk(ctx context.Context, workspaceID, c
 		items = append(items, wb.PriceUpdateItem{NmID: change.WbProductID, Price: change.NewPriceRub, Discount: int(change.NewDiscountPercent)})
 	}
 	wbTaskID, duplicate, err := s.wbClient.UploadPriceTask(ctx, token, items)
+	// Once transport may have started, a disappearing HTTP caller cannot erase
+	// the receipt or unknown outcome needed for recovery.
+	persist, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancelPersist()
 	if err != nil {
 		metrics.RepricerUploadsTotal.WithLabelValues("submit_failed").Inc()
 		if wb.IsPriceUploadOutcomeUnknown(err) {
-			_, stateErr := s.queries.MarkSubmittingPriceChangesUnknown(ctx, uuidToPgtype(workspaceID), uuidsToPgtype(changeIDs), truncatedText(err.Error()))
+			_, stateErr := s.queries.MarkSubmittingPriceChangesUnknown(persist, uuidToPgtype(workspaceID), uuidsToPgtype(changeIDs), truncatedText(err.Error()))
 			return uuid.Nil, errors.Join(err, stateErr)
 		}
-		_, stateErr := s.queries.FailSubmittingPriceChanges(ctx, uuidToPgtype(workspaceID), uuidsToPgtype(changeIDs), truncatedText(err.Error()))
+		_, stateErr := s.queries.FailSubmittingPriceChanges(persist, uuidToPgtype(workspaceID), uuidsToPgtype(changeIDs), truncatedText(err.Error()))
 		return uuid.Nil, errors.Join(err, stateErr)
 	}
 
-	task, linked, err := s.queries.CreatePriceUploadTaskAndLinkChanges(ctx, sqlcgen.CreatePriceUploadTaskParams{
+	task, linked, err := s.queries.CreatePriceUploadTaskAndLinkChanges(persist, sqlcgen.CreatePriceUploadTaskParams{
 		WorkspaceID:     uuidToPgtype(workspaceID),
 		SellerCabinetID: uuidToPgtype(cabinetID),
 		WbTaskID:        wbTaskID,
@@ -272,20 +264,7 @@ func (s *RepricerService) uploadClaimedChunk(ctx context.Context, workspaceID, c
 	} else {
 		metrics.RepricerUploadsTotal.WithLabelValues("accepted").Inc()
 	}
-	if duplicate {
-		switch task.Status {
-		case domain.PriceTaskFailed:
-			s.aggregateSchedulesForTask(ctx, workspaceID, taskUUID)
-			return taskUUID, errors.New("duplicate WB price task already failed")
-		case domain.PriceTaskPartial:
-			if _, err := s.resolvePartial(ctx, workspaceID, token, task); err != nil {
-				return taskUUID, fmt.Errorf("reconcile duplicate partial task: %w", err)
-			}
-			s.aggregateSchedulesForTask(ctx, workspaceID, taskUUID)
-			return taskUUID, errors.New("duplicate WB price task completed partially")
-		}
-	}
-	s.aggregateSchedulesForTask(ctx, workspaceID, taskUUID)
+	s.aggregateSchedulesForTask(persist, workspaceID, taskUUID)
 	return taskUUID, nil
 }
 
@@ -399,28 +378,25 @@ func (s *RepricerService) pollOneTask(ctx context.Context, workspaceID uuid.UUID
 		return s.bumpPoll(ctx, workspaceID, task, "")
 	}
 
-	if terminal, ok := terminalPriceTaskResult(status.Status); ok {
-		transitioned := s.completeTask(ctx, workspaceID, taskUUID, terminal.taskStatus, terminal.changeStatus, terminal.reason)
-		if transitioned {
-			metrics.RepricerUploadsTotal.WithLabelValues(terminal.metric).Inc()
-			if terminal.outcome != "" {
-				s.notifyPriceResult(ctx, workspaceID, task, terminal.outcome)
-			}
-		}
-		return transitioned
-	}
-
 	switch status.Status {
-	case 5: // partial — resolve per product
-		transitioned, err := s.resolvePartial(ctx, workspaceID, token, task)
+	case 3, 4, 5, 6:
+		transitioned, err := s.reconcileWBPriceTask(ctx, workspaceID, token, task, status.Status)
 		if err != nil {
-			s.logger.Warn().Err(err).Int64("wb_task_id", task.WbTaskID).Msg("failed to resolve partial price task")
-			return s.bumpPoll(ctx, workspaceID, task, "resolve partial: "+err.Error())
+			s.logger.Warn().Err(err).Int64("wb_task_id", task.WbTaskID).Msg("price task awaits verified result")
+			return s.bumpPoll(ctx, workspaceID, task, "verification: "+err.Error())
 		}
-		s.aggregateSchedulesForTask(ctx, workspaceID, taskUUID)
 		if transitioned {
-			metrics.RepricerUploadsTotal.WithLabelValues("partial").Inc()
-			s.notifyPriceResult(ctx, workspaceID, task, "partial")
+			s.aggregateSchedulesForTask(ctx, workspaceID, taskUUID)
+			metric, outcome := "applied", ""
+			if terminal, failed := terminalPriceTaskResult(status.Status); failed {
+				metric, outcome = terminal.metric, terminal.outcome
+			} else if status.Status == 5 {
+				metric, outcome = "partial", "partial"
+			}
+			metrics.RepricerUploadsTotal.WithLabelValues(metric).Inc()
+			if outcome != "" {
+				s.notifyPriceResult(ctx, workspaceID, task, outcome)
+			}
 		}
 		return transitioned
 	default:
@@ -438,8 +414,6 @@ type priceTaskTerminalResult struct {
 
 func terminalPriceTaskResult(status int) (priceTaskTerminalResult, bool) {
 	switch status {
-	case 3:
-		return priceTaskTerminalResult{taskStatus: domain.PriceTaskApplied, changeStatus: domain.PriceStatusApplied, metric: "applied"}, true
 	case 4:
 		// WB documents status 4 as terminal cancellation, so it must not age into poll_timeout.
 		return priceTaskTerminalResult{taskStatus: domain.PriceTaskFailed, changeStatus: domain.PriceStatusFailed, reason: "canceled_by_wb", metric: "canceled", outcome: "failed"}, true
@@ -450,45 +424,14 @@ func terminalPriceTaskResult(status int) (priceTaskTerminalResult, bool) {
 	}
 }
 
-func (s *RepricerService) resolvePartial(ctx context.Context, workspaceID uuid.UUID, token string, task sqlcgen.PriceUploadTask) (bool, error) {
-	goods, err := s.wbClient.ListPriceTaskHistoryGoods(ctx, token, task.WbTaskID, priceUploadChunkSize, 0)
-	if err != nil {
-		return false, err
-	}
-	if len(goods) == 0 {
-		return false, errors.New("partial task returned no per-good results")
-	}
-	failedNmIDs := make([]int64, 0)
-	failureReasons := make([]string, 0)
-	for _, g := range goods {
-		reason, failed := partialPriceGoodFailure(g)
-		if !failed {
-			continue
-		}
-		failedNmIDs = append(failedNmIDs, g.NmID)
-		failureReasons = append(failureReasons, reason)
-	}
-	return s.queries.FinalizePartialPriceUploadTask(ctx, task.ID, uuidToPgtype(workspaceID), failedNmIDs, failureReasons)
-}
-
 func partialPriceGoodFailure(g wb.PriceTaskGood) (string, bool) {
-	if g.Status == 3 {
+	if g.Status != 3 {
 		return "", false
 	}
 	if g.ErrorText != "" {
 		return g.ErrorText, true
 	}
 	return fmt.Sprintf("WB item status %d", g.Status), true
-}
-
-func (s *RepricerService) completeTask(ctx context.Context, workspaceID, taskUUID uuid.UUID, taskStatus, changeStatus, errText string) bool {
-	transitioned, err := s.queries.FinalizePriceUploadTask(ctx, uuidToPgtype(taskUUID), uuidToPgtype(workspaceID), taskStatus, changeStatus, truncatedText(errText))
-	if err != nil {
-		s.logger.Warn().Err(err).Str("task_id", taskUUID.String()).Msg("failed to finalize price upload task")
-		return false
-	}
-	s.aggregateSchedulesForTask(ctx, workspaceID, taskUUID)
-	return transitioned
 }
 
 func (s *RepricerService) aggregateSchedulesForTask(ctx context.Context, workspaceID, taskUUID uuid.UUID) {
@@ -511,7 +454,7 @@ func (s *RepricerService) bumpPoll(ctx context.Context, workspaceID uuid.UUID, t
 	if len(reason) > 500 {
 		reason = reason[:500]
 	}
-	if _, err := s.queries.BumpPriceUploadTaskPoll(ctx, task.ID, uuidToPgtype(workspaceID), task.PollCount, truncatedText(reason)); err != nil {
+	if _, err := s.queries.BumpPriceUploadTaskPoll(ctx, task.ID, uuidToPgtype(workspaceID), task.PollCount, truncatedText(reason), task.UpdatedAt); err != nil {
 		s.logger.Warn().Err(err).Msg("failed to bump price task poll count")
 	}
 	// An absent/failed poll is not evidence that WB rejected the write. Keep the

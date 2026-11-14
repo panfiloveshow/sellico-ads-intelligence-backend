@@ -74,8 +74,9 @@ type Querier interface {
 	CountOzonPriceScheduleEntriesByCabinet(ctx context.Context, arg CountOzonPriceScheduleEntriesByCabinetParams) (int64, error)
 	// CountOzonPriceWritesBySkuSince feeds the hard hourly write limit (Ozon
 	// rejects more than 10 price changes per product per hour). Only rows that
-	// did (or may still) reach Ozon count: pending + applied + rolled_back
-	// (a rollback is a real write too).
+	// did (or may still) reach Ozon count, including in-flight and unknown rows.
+	// This is a cabinet-local early check. The dispatch journal enforces the
+	// physical seller/product budget across cabinet aliases atomically.
 	CountOzonPriceWritesBySkuSince(ctx context.Context, arg CountOzonPriceWritesBySkuSinceParams) (int64, error)
 	CountOzonProductPrices(ctx context.Context, arg CountOzonProductPricesParams) (int64, error)
 	CountOzonSearchQueries(ctx context.Context, arg CountOzonSearchQueriesParams) (int64, error)

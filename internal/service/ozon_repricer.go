@@ -43,6 +43,7 @@ const (
 // live Ozon call.
 type ozonPriceWriter interface {
 	UpdatePrices(ctx context.Context, creds ozon.Credentials, items []ozon.PriceUpdate) ([]ozon.PriceUpdateResult, error)
+	ReadPriceSnapshots(ctx context.Context, creds ozon.Credentials, productIDs []int64) (map[int64]ozon.PriceSnapshot, error)
 }
 
 // OzonManualPriceInput is one manual price write coming from the API layer.
@@ -61,10 +62,11 @@ type OzonManualPriceInput struct {
 // repricer: floor clamp, step cap, cooldown, daily cap, and Ozon's hard
 // 10-changes-per-hour budget.
 type OzonRepricerService struct {
-	queries       *sqlcgen.Queries
-	sellerClient  ozonPriceWriter
-	encryptionKey []byte
-	logger        zerolog.Logger
+	queries               *sqlcgen.Queries
+	sellerClient          ozonPriceWriter
+	encryptionKey         []byte
+	logger                zerolog.Logger
+	managerPriceValidator ManagerPriceValidator
 }
 
 // NewOzonRepricerService wires the Ozon repricer.
@@ -81,7 +83,8 @@ func NewOzonRepricerService(queries *sqlcgen.Queries, sellerClient *ozon.SellerC
 
 // ozonFloorInputs is everything computeOzonFloor needs for one product.
 type ozonFloorInputs struct {
-	NetPriceRub         float64 // себестоимость pushed to Ozon (0 = unknown)
+	NetPriceRub         float64
+	NetPriceKnown       bool // explicit mirror value can be zero; native API zero remains unknown
 	CommissionFBOPct    float64
 	CommissionFBSPct    float64
 	AcquiringRub        float64 // Ozon reports the max acquiring fee in rubles
@@ -100,7 +103,10 @@ type ozonFloorInputs struct {
 // back to a relative floor — current × (1 − MaxDiscountPercent/100) — like
 // the WB engine. Returns (0, reason) when nothing can be computed.
 func computeOzonFloor(in ozonFloorInputs) (float64, string) {
-	if in.NetPriceRub > 0 {
+	if in.NetPriceKnown && (in.NetPriceRub < 0 || math.IsNaN(in.NetPriceRub) || math.IsInf(in.NetPriceRub, 0)) {
+		return 0, "invalid_net_price"
+	}
+	if in.NetPriceRub > 0 || in.NetPriceKnown {
 		commission := math.Max(in.CommissionFBOPct, in.CommissionFBSPct)
 		if commission <= 0 {
 			return 0, "missing_commission"
@@ -134,20 +140,33 @@ func computeOzonFloor(in ozonFloorInputs) (float64, string) {
 // NOTE: econ.MaxAllowedDrr is ignored here for now — TODO: feed it into the AI
 // autopilot context as a per-product ad-spend ceiling.
 func ozonEffectiveNetPrice(netPriceRub float64, econ *sqlcgen.OzonProductEconomic) float64 {
-	if netPriceRub > 0 {
-		return netPriceRub
+	cost, _ := ozonEffectiveCostBasis(netPriceRub, econ)
+	return cost
+}
+
+// ozonEffectiveCostBasis retains a known zero separately from missing data.
+// It uses the existing cost + other-costs convention; logistics is already
+// accounted for by Ozon's commission inputs in this legacy floor calculator.
+func ozonEffectiveCostBasis(netPriceRub float64, econ *sqlcgen.OzonProductEconomic) (float64, bool) {
+	if netPriceRub > 0 && !math.IsNaN(netPriceRub) && !math.IsInf(netPriceRub, 0) {
+		return netPriceRub, true
 	}
 	if econ == nil {
-		return 0
+		return 0, false
 	}
-	cost := pgNumericToFloat(econ.CostPriceRub)
-	if cost <= 0 {
-		return 0
+	value, err := econ.CostPriceRub.Float64Value()
+	if err != nil || !value.Valid || value.Float64 < 0 || math.IsNaN(value.Float64) || math.IsInf(value.Float64, 0) {
+		return 0, false
 	}
-	if other := pgNumericToFloat(econ.OtherCostsRub); other > 0 {
-		cost += other
+	cost := value.Float64
+	if econ.OtherCostsRub.Valid {
+		other, err := econ.OtherCostsRub.Float64Value()
+		if err != nil || !other.Valid || other.Float64 < 0 || math.IsNaN(other.Float64) || math.IsInf(other.Float64, 0) {
+			return 0, false
+		}
+		cost += other.Float64
 	}
-	return cost
+	return cost, !math.IsNaN(cost) && !math.IsInf(cost, 0)
 }
 
 // ozonPriceDecision is the engine verdict for one product.
@@ -246,6 +265,7 @@ func decideOzonCompetitorFollow(currentRub, floorRub, competitorMinRub, undercut
 
 // ozonPriceDecisionContext is persisted into ozon_price_changes.decision_context.
 type ozonPriceDecisionContext struct {
+	WriteProtocol string  `json:"write_protocol,omitempty"`
 	ActorType     string  `json:"actor_type"`
 	StrategyID    string  `json:"strategy_id,omitempty"`
 	StrategyType  string  `json:"strategy_type,omitempty"`
@@ -256,6 +276,7 @@ type ozonPriceDecisionContext struct {
 	UserID        string  `json:"user_id,omitempty"`
 	RollbackOf    string  `json:"rollback_of,omitempty"`
 	ScheduleID    string  `json:"schedule_id,omitempty"`
+	SchedulePhase string  `json:"schedule_phase,omitempty"`
 }
 
 // ozonPriceIntent is one pending live write of the auto path.
@@ -277,6 +298,23 @@ func (s *OzonRepricerService) RunForWorkspace(ctx context.Context, workspaceID u
 		return 0, fmt.Errorf("list active strategies: %w", err)
 	}
 	byCabinet := map[uuid.UUID][]domain.Strategy{}
+	var runErrors []error
+	blockedCabinets := map[uuid.UUID]bool{}
+	recoveryCabinets, err := s.queries.ListOzonPriceRecoveryCabinets(ctx, uuidToPgtype(workspaceID))
+	if err != nil {
+		return 0, fmt.Errorf("list Ozon price recovery cabinets: %w", err)
+	}
+	for _, id := range recoveryCabinets {
+		cabinetID := uuidFromPgtype(id)
+		cabinet, creds, recoverErr := s.resolveCabinet(ctx, workspaceID, cabinetID)
+		if recoverErr == nil {
+			recoverErr = s.reconcileCabinetPriceWrites(ctx, cabinet.ID, creds)
+		}
+		if recoverErr != nil {
+			blockedCabinets[cabinetID] = true
+			runErrors = append(runErrors, fmt.Errorf("reconcile Ozon price cabinet %s: %w", cabinetID, recoverErr))
+		}
+	}
 	for _, row := range rows {
 		strategy := strategyFromSqlc(row)
 		if !domain.IsOzonPriceStrategy(strategy.Type) {
@@ -285,12 +323,14 @@ func (s *OzonRepricerService) RunForWorkspace(ctx context.Context, workspaceID u
 		byCabinet[strategy.SellerCabinetID] = append(byCabinet[strategy.SellerCabinetID], strategy)
 	}
 	if len(byCabinet) == 0 {
-		return 0, nil
+		return 0, errors.Join(runErrors...)
 	}
 
 	written := 0
-	var runErrors []error
 	for cabinetID, strategies := range byCabinet {
+		if blockedCabinets[cabinetID] {
+			continue
+		}
 		count, cabErr := s.runCabinet(ctx, workspaceID, cabinetID, strategies)
 		written += count
 		if cabErr != nil {
@@ -353,6 +393,7 @@ func (s *OzonRepricerService) runCabinet(ctx context.Context, workspaceID, cabin
 				status = domain.OzonPriceStatusPending
 			}
 			contextJSON, _ := json.Marshal(ozonPriceDecisionContext{
+				WriteProtocol: "observed_v1",
 				ActorType:     "strategy",
 				StrategyID:    strategy.ID.String(),
 				StrategyType:  strategy.Type,
@@ -416,8 +457,10 @@ func (s *OzonRepricerService) evaluateProduct(ctx context.Context, cabinetID uui
 			econ = &e
 		}
 	}
+	costBasis, costKnown := ozonEffectiveCostBasis(pgNumericToFloat(row.NetPriceRub), econ)
 	floor, floorReason := computeOzonFloor(ozonFloorInputs{
-		NetPriceRub:         ozonEffectiveNetPrice(pgNumericToFloat(row.NetPriceRub), econ),
+		NetPriceRub:         costBasis,
+		NetPriceKnown:       costKnown,
 		CommissionFBOPct:    pgNumericToFloat(row.CommissionFboPct),
 		CommissionFBSPct:    pgNumericToFloat(row.CommissionFbsPct),
 		AcquiringRub:        pgNumericToFloat(row.AcquiringPct),
@@ -775,77 +818,10 @@ func ozonHourlyGuardReason(writesThisHour, budget int64) string {
 	return ""
 }
 
-// applyIntents ships pending intents through import/prices (chunked inside
-// the client), finalizes the audit rows per item and mirrors successes.
+// applyIntents preserves the shared owner for manual, strategy, calendar and
+// rollback writes. Dispatch/recovery is implemented in ozon_price_recovery.go.
 func (s *OzonRepricerService) applyIntents(ctx context.Context, cabinetID uuid.UUID, creds ozon.Credentials, intents []ozonPriceIntent) error {
-	updates := make([]ozon.PriceUpdate, 0, len(intents))
-	for _, intent := range intents {
-		updates = append(updates, ozon.PriceUpdate{
-			ProductID:   intent.SKU,
-			PriceRub:    intent.NewPriceRub,
-			OldPriceRub: intent.OldPriceRub,
-			MinPriceRub: intent.MinPriceRub,
-		})
-	}
-	results, writeErr := s.sellerClient.UpdatePrices(ctx, creds, updates)
-
-	outcomeBySKU := map[int64]ozon.PriceUpdateResult{}
-	for _, result := range results {
-		outcomeBySKU[result.ProductID] = result
-	}
-
-	var failed int
-	for _, intent := range intents {
-		status := domain.OzonPriceStatusApplied
-		var errText pgtype.Text
-		if outcome, ok := outcomeBySKU[intent.SKU]; ok {
-			if !outcome.Updated {
-				status = domain.OzonPriceStatusFailed
-				message := "ozon rejected the price update"
-				if len(outcome.Errors) > 0 {
-					message = truncateError(fmt.Sprintf("%v", outcome.Errors))
-				}
-				errText = textToPgtype(message)
-			}
-		} else {
-			// No per-item outcome — the request carrying it failed in transit.
-			status = domain.OzonPriceStatusFailed
-			message := "no result returned by ozon"
-			if writeErr != nil {
-				message = truncateError(writeErr.Error())
-			}
-			errText = textToPgtype(message)
-		}
-
-		if markErr := s.queries.MarkOzonPriceChangeResult(ctx, sqlcgen.MarkOzonPriceChangeResultParams{
-			ID: intent.ChangeID, Status: status, Error: errText,
-		}); markErr != nil {
-			s.logger.Warn().Err(markErr).Int64("sku", intent.SKU).Msg("failed to finalize ozon price change")
-		}
-		if status == domain.OzonPriceStatusApplied {
-			if mirrorErr := s.queries.UpdateOzonProductPriceMirror(ctx, sqlcgen.UpdateOzonProductPriceMirrorParams{
-				SellerCabinetID: uuidToPgtype(cabinetID),
-				Sku:             intent.SKU,
-				PriceRub:        floatToPgNumeric(intent.NewPriceRub),
-				OldPriceRub:     floatPtrToPgNumeric(intent.OldPriceRub),
-				MinPriceRub:     floatPtrToPgNumeric(intent.MinPriceRub),
-			}); mirrorErr != nil {
-				s.logger.Warn().Err(mirrorErr).Int64("sku", intent.SKU).Msg("failed to mirror applied ozon price")
-			}
-		} else {
-			failed++
-		}
-	}
-
-	s.logger.Info().
-		Str("cabinet_id", cabinetID.String()).
-		Int("applied", len(intents)-failed).
-		Int("failed", failed).
-		Msg("ozon repricer prices applied")
-	if writeErr != nil {
-		return fmt.Errorf("ozon import/prices: %w", writeErr)
-	}
-	return nil
+	return s.dispatchPriceIntents(ctx, cabinetID, creds, intents)
 }
 
 // --- manual bulk ---
@@ -860,36 +836,53 @@ func (s *OzonRepricerService) ApplyManual(ctx context.Context, workspaceID, cabi
 	if len(items) > ozonManualPriceItemsLimit {
 		return nil, apperror.New(apperror.ErrValidation, fmt.Sprintf("at most %d items per request", ozonManualPriceItemsLimit))
 	}
+	productIDs := make([]int64, 0, len(items))
+	seen := map[int64]bool{}
 	for _, item := range items {
-		if item.SKU <= 0 || item.PriceRub <= 0 {
+		_, priceErr := exactOzonPriceCents(item.PriceRub, true)
+		if item.SKU <= 0 || priceErr != nil || seen[item.SKU] {
 			return nil, apperror.New(apperror.ErrValidation, "every item needs a positive sku and price_rub")
 		}
-		if item.OldPriceRub != nil && *item.OldPriceRub < 0 {
-			return nil, apperror.New(apperror.ErrValidation, "old_price_rub must be non-negative")
+		seen[item.SKU] = true
+		productIDs = append(productIDs, item.SKU)
+		if item.OldPriceRub != nil {
+			if _, err := exactOzonPriceCents(*item.OldPriceRub, false); err != nil {
+				return nil, apperror.New(apperror.ErrValidation, "old_price_rub must be non-negative exact kopecks")
+			}
 		}
-		if item.MinPriceRub != nil && *item.MinPriceRub < 0 {
-			return nil, apperror.New(apperror.ErrValidation, "min_price_rub must be non-negative")
+		if item.MinPriceRub != nil {
+			if _, err := exactOzonPriceCents(*item.MinPriceRub, false); err != nil {
+				return nil, apperror.New(apperror.ErrValidation, "min_price_rub must be non-negative exact kopecks")
+			}
 		}
 	}
 	cabinet, creds, err := s.resolveCabinet(ctx, workspaceID, cabinetID)
 	if err != nil {
 		return nil, err
 	}
+	readCtx, cancelRead := context.WithTimeout(ctx, 30*time.Second)
+	currentPrices, readErr := s.sellerClient.ReadPriceSnapshots(readCtx, creds, productIDs)
+	cancelRead()
+	if readErr != nil {
+		return nil, errors.New("current Ozon prices unavailable; no price command sent")
+	}
+	for _, id := range productIDs {
+		if row, ok := currentPrices[id]; !ok || row.ProductID != id || row.PriceCents <= 0 {
+			return nil, apperror.New(apperror.ErrValidation, "current Ozon price missing; no price command sent")
+		}
+	}
 
 	now := time.Now().UTC()
-	contextJSON, _ := json.Marshal(ozonPriceDecisionContext{ActorType: "manual", UserID: userID.String()})
+	contextJSON, _ := json.Marshal(ozonPriceDecisionContext{ActorType: "manual", UserID: userID.String(), WriteProtocol: "observed_v1"})
 
 	result := make([]domain.OzonPriceChange, 0, len(items))
 	var intents []ozonPriceIntent
 	for _, item := range items {
-		var oldPrice, oldOldPrice pgtype.Numeric
-		var offerID pgtype.Text
-		if mirror, mirrorErr := s.queries.GetOzonProductPriceBySku(ctx, sqlcgen.GetOzonProductPriceBySkuParams{
-			SellerCabinetID: uuidToPgtype(cabinet.ID), Sku: item.SKU,
-		}); mirrorErr == nil {
-			oldPrice = mirror.PriceRub
-			oldOldPrice = mirror.OldPriceRub
-			offerID = mirror.OfferID
+		observed := currentPrices[item.SKU]
+		oldPrice := floatToPgNumeric(float64(observed.PriceCents) / 100)
+		var oldOldPrice pgtype.Numeric
+		if observed.OldPriceCents != nil {
+			oldOldPrice = floatToPgNumeric(float64(*observed.OldPriceCents) / 100)
 		}
 
 		blocked := s.hourlyWriteGuard(ctx, cabinet.ID, item.SKU, ozonHardHourlyWriteCap, now)
@@ -900,7 +893,7 @@ func (s *OzonRepricerService) ApplyManual(ctx context.Context, workspaceID, cabi
 		change, insertErr := s.queries.InsertOzonPriceChange(ctx, sqlcgen.InsertOzonPriceChangeParams{
 			SellerCabinetID: uuidToPgtype(cabinet.ID),
 			Sku:             item.SKU,
-			OfferID:         offerID,
+			OfferID:         textToPgtype(observed.OfferID),
 			OldPriceRub:     oldPrice,
 			NewPriceRub:     floatToPgNumeric(item.PriceRub),
 			OldOldPriceRub:  oldOldPrice,
@@ -955,7 +948,7 @@ func (s *OzonRepricerService) ApplyManual(ctx context.Context, workspaceID, cabi
 // --- rollback ---
 
 // Rollback restores the pre-change price of one applied change. It verifies
-// the current mirror price still equals the change's new price (a later write
+// the current vendor price still equals the change's new price (a later write
 // means the rollback target is gone), writes the old price back through the
 // audited manual path, and marks the original row rolled_back.
 func (s *OzonRepricerService) Rollback(ctx context.Context, workspaceID uuid.UUID, changeID uuid.UUID) (*domain.OzonPriceChange, error) {
@@ -980,17 +973,12 @@ func (s *OzonRepricerService) Rollback(ctx context.Context, workspaceID uuid.UUI
 	if oldPrice <= 0 {
 		return nil, apperror.New(apperror.ErrValidation, "price change has no previous price to restore")
 	}
-	newPrice := pgNumericToFloat(row.NewPriceRub)
-
-	// Fresh-state check against the local mirror: a later write (sync keeps
-	// the mirror current hourly) means this change is no longer the live price.
-	mirror, err := s.queries.GetOzonProductPriceBySku(ctx, sqlcgen.GetOzonProductPriceBySkuParams{
-		SellerCabinetID: uuidToPgtype(cabinet.ID), Sku: row.Sku,
-	})
-	if err != nil {
-		return nil, apperror.New(apperror.ErrValidation, "product price mirror is missing; sync the cabinet first")
-	}
-	if math.Abs(pgNumericToFloat(mirror.PriceRub)-newPrice) > 0.01 {
+	newCents, centsErr := exactOzonPriceCents(pgNumericToFloat(row.NewPriceRub), true)
+	readCtx, cancelRead := context.WithTimeout(ctx, 30*time.Second)
+	current, readErr := s.sellerClient.ReadPriceSnapshots(readCtx, creds, []int64{row.Sku})
+	cancelRead()
+	observed, found := current[row.Sku]
+	if centsErr != nil || readErr != nil || !found || observed.ProductID != row.Sku || observed.PriceCents != newCents {
 		return nil, apperror.New(apperror.ErrValidation, "current price no longer matches this change; rollback aborted")
 	}
 
@@ -1000,9 +988,10 @@ func (s *OzonRepricerService) Rollback(ctx context.Context, workspaceID uuid.UUI
 	}
 
 	contextJSON, _ := json.Marshal(ozonPriceDecisionContext{
-		ActorType:  "manual",
-		Reason:     "rollback",
-		RollbackOf: uuidFromPgtype(row.ID).String(),
+		WriteProtocol: "observed_v1",
+		ActorType:     "manual",
+		Reason:        "rollback",
+		RollbackOf:    uuidFromPgtype(row.ID).String(),
 	})
 	var oldOldPtr *float64
 	if row.OldOldPriceRub.Valid {
@@ -1026,21 +1015,22 @@ func (s *OzonRepricerService) Rollback(ctx context.Context, workspaceID uuid.UUI
 		return nil, fmt.Errorf("record rollback change: %w", err)
 	}
 
-	if applyErr := s.applyIntents(ctx, cabinet.ID, creds, []ozonPriceIntent{{
+	applyErr := s.applyIntents(ctx, cabinet.ID, creds, []ozonPriceIntent{{
 		ChangeID:    rollbackRow.ID,
 		SKU:         row.Sku,
 		NewPriceRub: oldPrice,
 		OldPriceRub: oldOldPtr,
-	}}); applyErr != nil {
-		return nil, applyErr
-	}
+	}})
 	fresh, err := s.queries.GetOzonPriceChangeByID(ctx, rollbackRow.ID)
 	if err != nil {
 		return nil, fmt.Errorf("reload rollback change: %w", err)
 	}
 	if fresh.Status != domain.OzonPriceStatusApplied {
 		change := ozonPriceChangeFromSqlc(fresh)
-		return &change, apperror.New(apperror.ErrValidation, fmt.Sprintf("rollback write failed: %s", pgTextValue(fresh.Error)))
+		if fresh.Status == domain.OzonPriceStatusFailed {
+			return &change, apperror.New(apperror.ErrValidation, "rollback was not applied; inspect the recorded price change")
+		}
+		return &change, applyErr
 	}
 	if markErr := s.queries.MarkOzonPriceChangeResult(ctx, sqlcgen.MarkOzonPriceChangeResultParams{
 		ID: row.ID, Status: domain.OzonPriceStatusRolledBack,

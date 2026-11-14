@@ -428,14 +428,14 @@ func TestGetCPOMinBids_ChunksAndRublesFloat(t *testing.T) {
 	assert.InDelta(t, 4.25, out[0].BidRub, 1e-9)
 }
 
-func TestGetAllSKUPromoRate_ParsesSelectedBidString(t *testing.T) {
+func TestActivateAllSKUPromo_ParsesSelectedBidString(t *testing.T) {
 	srv, reqs, mu := newPerfActionServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedReq) {
 		w.Write([]byte(`{"selectedBid":"7"}`))
 	})
 	defer srv.Close()
 
 	c := newTestPerfClient(srv.URL)
-	rate, err := c.GetAllSKUPromoRate(context.Background(), testCreds)
+	rate, err := c.ActivateAllSKUPromo(context.Background(), testCreds)
 	require.NoError(t, err)
 	assert.Equal(t, 7, rate)
 
@@ -446,8 +446,8 @@ func TestGetAllSKUPromoRate_ParsesSelectedBidString(t *testing.T) {
 	assert.Equal(t, "/api/client/campaign/all_sku_promo/activate", (*reqs)[0].path)
 }
 
-func TestGetAllSKUPromoRate_EmptyOrUnparseableErrors(t *testing.T) {
-	// Missing selectedBid → error (so the overview leaves rate_pct null).
+func TestActivateAllSKUPromo_EmptyOrUnparseableErrors(t *testing.T) {
+	// Activation without a selected rate must report that the result is incomplete.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/client/token" {
 			writeToken(w, "tok-1", 1800)
@@ -457,7 +457,7 @@ func TestGetAllSKUPromoRate_EmptyOrUnparseableErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := newTestPerfClient(srv.URL)
-	_, err := c.GetAllSKUPromoRate(context.Background(), testCreds)
+	_, err := c.ActivateAllSKUPromo(context.Background(), testCreds)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no selectedBid")
 
@@ -471,7 +471,7 @@ func TestGetAllSKUPromoRate_EmptyOrUnparseableErrors(t *testing.T) {
 	}))
 	defer srv2.Close()
 	c2 := newTestPerfClient(srv2.URL)
-	_, err = c2.GetAllSKUPromoRate(context.Background(), testCreds)
+	_, err = c2.ActivateAllSKUPromo(context.Background(), testCreds)
 	require.Error(t, err)
 }
 

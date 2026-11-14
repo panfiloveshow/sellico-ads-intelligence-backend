@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/adguard"
 )
 
 // UpdateCampaignBidsRequest represents bid updates for product cards in campaigns.
@@ -40,6 +41,9 @@ func (e *CampaignBidUpdateError) Unwrap() error { return e.Err }
 // CampaignBidUpdateOutcomeUnknown reports whether WB may have applied a bid
 // write even though the client did not receive a definitive success response.
 func CampaignBidUpdateOutcomeUnknown(err error) bool {
+	if adguard.IsUnknown(err) {
+		return true
+	}
 	var updateErr *CampaignBidUpdateError
 	return errors.As(err, &updateErr) && updateErr.OutcomeUnknown
 }
@@ -50,7 +54,7 @@ func campaignBidWriteError(respStatus int, responseReceived bool, err error) err
 	}
 	return &CampaignBidUpdateError{
 		Err:            err,
-		OutcomeUnknown: !responseReceived || respStatus >= 500,
+		OutcomeUnknown: !adguard.WasNotSent(err) && (!responseReceived || respStatus >= 500 || adguard.IsUnknown(err)),
 	}
 }
 

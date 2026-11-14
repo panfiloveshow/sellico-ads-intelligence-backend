@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -31,11 +30,13 @@ func (s *OzonRepricerService) CreateSchedule(ctx context.Context, workspaceID, c
 	if in.SKU <= 0 {
 		return nil, apperror.New(apperror.ErrValidation, "sku must be positive")
 	}
-	if in.ScheduledPriceRub <= 0 {
+	if _, err := exactOzonPriceCents(in.ScheduledPriceRub, true); err != nil {
 		return nil, apperror.New(apperror.ErrValidation, "scheduled_price_rub must be positive")
 	}
-	if in.RevertPriceRub != nil && *in.RevertPriceRub <= 0 {
-		return nil, apperror.New(apperror.ErrValidation, "revert_price_rub must be positive")
+	if in.RevertPriceRub != nil {
+		if _, err := exactOzonPriceCents(*in.RevertPriceRub, true); err != nil {
+			return nil, apperror.New(apperror.ErrValidation, "revert_price_rub must be positive exact kopecks")
+		}
 	}
 	if !in.StartsAt.After(now) {
 		return nil, apperror.New(apperror.ErrValidation, "starts_at must be in the future")
@@ -101,8 +102,10 @@ func (s *OzonRepricerService) scheduleFloorFor(ctx context.Context, cabinetID uu
 			}
 		}
 	}
+	costBasis, costKnown := ozonEffectiveCostBasis(pgNumericToFloat(row.NetPriceRub), econ)
 	floor, reason := computeOzonFloor(ozonFloorInputs{
-		NetPriceRub:      ozonEffectiveNetPrice(pgNumericToFloat(row.NetPriceRub), econ),
+		NetPriceRub:      costBasis,
+		NetPriceKnown:    costKnown,
 		CommissionFBOPct: pgNumericToFloat(row.CommissionFboPct),
 		CommissionFBSPct: pgNumericToFloat(row.CommissionFbsPct),
 		AcquiringRub:     pgNumericToFloat(row.AcquiringPct),
@@ -161,9 +164,9 @@ func (s *OzonRepricerService) CancelSchedule(ctx context.Context, workspaceID, e
 	if row.Status != domain.OzonScheduleStatusPending {
 		return apperror.New(apperror.ErrValidation, "only pending entries can be cancelled")
 	}
-	if _, err := s.queries.CancelOzonPriceScheduleEntry(ctx, row.ID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return apperror.New(apperror.ErrValidation, "only pending entries can be cancelled")
+	if err := s.queries.CancelUnstartedOzonPriceSchedule(ctx, row.ID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sqlcgen.ErrOzonScheduleStarted) {
+			return apperror.New(apperror.ErrValidation, "only unstarted pending entries can be cancelled; reconcile a dispatched price first")
 		}
 		return fmt.Errorf("cancel schedule entry: %w", err)
 	}
@@ -215,93 +218,92 @@ func (s *OzonRepricerService) ExecuteDueSchedules(ctx context.Context, now time.
 // (revert=false) or the revert price (revert=true), through the audited
 // manual path. Returns true when a write reached Ozon successfully.
 func (s *OzonRepricerService) executeScheduleEntry(ctx context.Context, entry sqlcgen.OzonPriceScheduleEntry, revert bool, now time.Time) (bool, error) {
-	entryID := uuidFromPgtype(entry.ID)
 	cabinetID := uuidFromPgtype(entry.SellerCabinetID)
-
+	phase := "apply"
+	if revert {
+		phase = "revert"
+	}
 	cabinet, creds, err := s.resolveScheduleCabinet(ctx, cabinetID)
 	if err != nil {
-		s.failScheduleEntry(ctx, entry.ID, revert, err.Error())
-		return false, nil // permanent per-entry failure, not an executor error
+		return false, err
 	}
-	// Freeze switch: a paused cabinet defers its calendar (entries keep their
-	// current status and fire on a later pass once unfrozen).
-	if cabinet.RepricerPausedUntil != nil && cabinet.RepricerPausedUntil.After(now) {
-		return false, nil
+	change, findErr := s.queries.OzonSchedulePriceChange(ctx, entry.ID, phase)
+	if findErr != nil && !errors.Is(findErr, pgx.ErrNoRows) {
+		return false, findErr
 	}
-
-	price := pgNumericToFloat(entry.ScheduledPriceRub)
-	reason := "schedule"
-	if revert {
-		price = pgNumericToFloat(entry.RevertPriceRub)
-		reason = "schedule revert"
-	}
-	if price <= 0 {
-		s.failScheduleEntry(ctx, entry.ID, revert, "schedule has no positive price to apply")
-		return false, nil
-	}
-
-	// Hard hourly budget: when the SKU has no write headroom the entry is
-	// left as is and retried on the next 15m pass.
-	if blocked := s.hourlyWriteGuard(ctx, cabinet.ID, entry.Sku, ozonHardHourlyWriteCap, now); blocked != "" {
-		s.logger.Warn().Str("schedule_entry_id", entryID.String()).Int64("sku", entry.Sku).Str("blocked", blocked).Msg("ozon schedule deferred by hourly budget")
-		return false, nil
-	}
-
-	var oldPrice pgtype.Numeric
-	if mirror, mirrorErr := s.queries.GetOzonProductPriceBySku(ctx, sqlcgen.GetOzonProductPriceBySkuParams{
-		SellerCabinetID: uuidToPgtype(cabinet.ID), Sku: entry.Sku,
-	}); mirrorErr == nil {
-		oldPrice = mirror.PriceRub
-	}
-
-	contextJSON, _ := json.Marshal(ozonPriceDecisionContext{
-		ActorType:  "schedule",
-		Reason:     reason,
-		ScheduleID: entryID.String(),
-	})
-	change, err := s.queries.InsertOzonPriceChange(ctx, sqlcgen.InsertOzonPriceChangeParams{
-		SellerCabinetID: uuidToPgtype(cabinet.ID),
-		Sku:             entry.Sku,
-		OfferID:         entry.OfferID,
-		OldPriceRub:     oldPrice,
-		NewPriceRub:     floatToPgNumeric(price),
-		Reason:          textToPgtype(reason),
-		Source:          domain.PriceSourceManual,
-		Status:          domain.OzonPriceStatusPending,
-		DecisionContext: contextJSON,
-	})
-	if err != nil {
-		return false, fmt.Errorf("record scheduled price change for sku %d: %w", entry.Sku, err)
-	}
-
-	applyErr := s.applyIntents(ctx, cabinet.ID, creds, []ozonPriceIntent{{
-		ChangeID:    change.ID,
-		SKU:         entry.Sku,
-		NewPriceRub: price,
-	}})
-
-	fresh, freshErr := s.queries.GetOzonPriceChangeByID(ctx, change.ID)
-	if freshErr != nil || fresh.Status != domain.OzonPriceStatusApplied {
-		message := "ozon rejected the scheduled price write"
-		if freshErr == nil && fresh.Error.Valid && fresh.Error.String != "" {
-			message = fresh.Error.String
-		} else if applyErr != nil {
-			message = truncateError(applyErr.Error())
+	paused := cabinet.RepricerPausedUntil != nil && cabinet.RepricerPausedUntil.After(now)
+	if errors.Is(findErr, pgx.ErrNoRows) {
+		if paused {
+			return false, nil
 		}
-		s.failScheduleEntry(ctx, entry.ID, revert, message)
+		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		prices, readErr := s.sellerClient.ReadPriceSnapshots(readCtx, creds, []int64{entry.Sku})
+		cancel()
+		observed, found := prices[entry.Sku]
+		if readErr != nil || !found || observed.ProductID != entry.Sku || observed.PriceCents <= 0 {
+			return false, s.queries.NoteOzonScheduleWaiting(ctx, entry.ID, phase, "Current Ozon price unavailable; no command sent")
+		}
+		if revert {
+			expected, valueErr := exactOzonPriceCents(pgNumericToFloat(entry.ScheduledPriceRub), true)
+			if valueErr != nil || observed.PriceCents != expected {
+				s.failScheduleEntry(ctx, entry.ID, revert, "Current Ozon price changed after the scheduled operation; revert not sent")
+				return false, nil
+			}
+		}
+		var oldPrice pgtype.Numeric
+		if observed.OldPriceCents != nil {
+			oldPrice = floatToPgNumeric(float64(*observed.OldPriceCents) / 100)
+		}
+		change, err = s.queries.CreateOzonScheduleCommand(ctx, entry.ID, phase,
+			floatToPgNumeric(float64(observed.PriceCents)/100), oldPrice, textToPgtype(observed.OfferID))
+		if errors.Is(err, sqlcgen.ErrOzonScheduleStarted) {
+			return false, nil // cancellation or another completed phase won the race
+		}
+		if errors.Is(err, sqlcgen.ErrOzonScheduleLegacy) {
+			return false, s.queries.NoteOzonScheduleWaiting(ctx, entry.ID, phase, "Legacy price command requires reconciliation; no new command sent")
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	if change.Status == domain.OzonPriceStatusPending {
+		if paused {
+			return false, nil
+		}
+		// A row with this new phase key has never been dispatched until its
+		// journal claim commits. Concurrent workers race on that one row.
+		err = s.applyIntents(ctx, cabinet.ID, creds, []ozonPriceIntent{{
+			ChangeID: change.ID, SKU: change.Sku, NewPriceRub: pgNumericToFloat(change.NewPriceRub),
+		}})
+	} else if change.Status == domain.OzonPriceStatusSubmitting || change.Status == domain.OzonPriceStatusVerifying || change.Status == domain.OzonPriceStatusSubmitUnknown {
+		if recoverErr := s.queries.RecoverOzonPriceClaims(ctx, entry.SellerCabinetID); recoverErr != nil {
+			return false, recoverErr
+		}
+		err = s.reconcilePriceIDs(ctx, cabinet.ID, creds, []pgtype.UUID{change.ID})
+	}
+	fresh, loadErr := s.queries.GetOzonPriceChangeByID(ctx, change.ID)
+	if loadErr != nil {
+		return false, loadErr
+	}
+	switch fresh.Status {
+	case domain.OzonPriceStatusApplied:
+		if finishErr := s.queries.FinishOzonSchedulePhase(ctx, entry.ID, fresh.ID, phase); finishErr != nil {
+			return false, finishErr
+		}
+		return true, nil
+	case domain.OzonPriceStatusFailed:
+		s.failScheduleEntry(ctx, entry.ID, revert, pgTextValue(fresh.Error))
+		return false, nil
+	default:
+		message := fmt.Sprintf("Price change %s: %s; verification pending, do not resend", uuidFromPgtype(fresh.ID), fresh.Status)
+		if noteErr := s.queries.NoteOzonScheduleWaiting(ctx, entry.ID, phase, message); noteErr != nil {
+			return false, noteErr
+		}
+		// The durable phase is the outcome. A transport/read failure leaves
+		// it waiting; the next executor pass can only reconcile the same ID.
+		_ = err
 		return false, nil
 	}
-
-	status := domain.OzonScheduleStatusApplied
-	if revert {
-		status = domain.OzonScheduleStatusReverted
-	}
-	if _, markErr := s.queries.MarkOzonPriceScheduleResult(ctx, sqlcgen.MarkOzonPriceScheduleResultParams{
-		ID: entry.ID, Status: status,
-	}); markErr != nil {
-		s.logger.Warn().Err(markErr).Str("schedule_entry_id", entryID.String()).Msg("failed to finalize ozon schedule entry")
-	}
-	return true, nil
 }
 
 // resolveScheduleCabinet loads one Ozon cabinet by id (no workspace gate —
@@ -418,8 +420,10 @@ func (s *OzonRepricerService) Health(ctx context.Context, workspaceID, cabinetID
 				econ = &e
 			}
 		}
+		costBasis, costKnown := ozonEffectiveCostBasis(pgNumericToFloat(row.NetPriceRub), econ)
 		floor, reason := computeOzonFloor(ozonFloorInputs{
-			NetPriceRub:      ozonEffectiveNetPrice(pgNumericToFloat(row.NetPriceRub), econ),
+			NetPriceRub:      costBasis,
+			NetPriceKnown:    costKnown,
 			CommissionFBOPct: pgNumericToFloat(row.CommissionFboPct),
 			CommissionFBSPct: pgNumericToFloat(row.CommissionFbsPct),
 			AcquiringRub:     pgNumericToFloat(row.AcquiringPct),

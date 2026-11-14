@@ -1863,6 +1863,9 @@ func (s *CampaignActionService) recordWBBidActionWithTarget(ctx context.Context,
 	var response []byte
 	if actionErr != nil {
 		status = "failed"
+		if wb.CampaignBidUpdateOutcomeUnknown(actionErr) {
+			status = "unknown"
+		}
 		response, _ = json.Marshal(map[string]string{"error": actionErr.Error()})
 	}
 	var createdBy pgtype.UUID

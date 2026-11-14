@@ -301,8 +301,8 @@ func TestSellicoEconomics_ConfiguredAndSyncOzon(t *testing.T) {
 	require.NoError(t, err)
 
 	client := &fakeSellicoEconomics{rows: []sellico.WBUnitEconomics{
-		{OfferID: "ART-1", CostPrice: 100, Source: "sellico"},
-		{OfferID: "ART-2", CostPrice: 250},
+		{OfferID: "ART-1", CostPrice: 100, Source: "sellico", Ready: true},
+		{OfferID: "ART-2", CostPrice: 250, Ready: true},
 		{OfferID: "", CostPrice: 50},     // skipped (no offer)
 		{OfferID: "ART-3", CostPrice: 0}, // skipped (no cost)
 	}}

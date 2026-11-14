@@ -1,0 +1,33 @@
+{
+    "version": "manager_price_approval_v1",
+    "operation_id": "664210fc-8524-40f7-a296-22beb08319c9",
+    "product_id": "01a1af96-bdff-7089-972c-5bd9eb83de7f",
+    "workspace_id": "8",
+    "user_id": "42",
+    "integration_id": "62500",
+    "proposal_fingerprint": "3deb03df687a414d738d63703f8d10c5c0b5dd6ff682447f24055b92ca96cad3",
+    "financial_review_hash": "01598d48c83ef00d55c611fe0b68a18f2f7478679a3865f7c1eb58f6412fc583",
+    "credential_binding": "a1ea3820b8e34cf8a284284df2f7ff3fc954d3e31d3a2bc415749e88e72695fa",
+    "executor_credentials_digest": "7e670a82b6a7876cd0a1e0eba5955f185a47dd0a2e91502d82d993a220ea7995",
+    "marketplace": "wb",
+    "seller_price_cents": 120000,
+    "issued_at": "2026-11-06T06:40:54+00:00",
+    "expires_at": "2026-11-06T06:45:54+00:00",
+    "wb_base_price_rub": 1200,
+    "before_wb": {
+        "nm_id": 10001,
+        "vendor_code": "",
+        "discount_percent": 0,
+        "club_discount_percent": 0,
+        "editable_size_price": false,
+        "wholesale_conditions": [],
+        "sizes": [
+            {
+                "size_id": 20001,
+                "price_cents": 100000,
+                "discounted_price_cents": 100000,
+                "club_price_cents": 100000
+            }
+        ]
+    }
+}

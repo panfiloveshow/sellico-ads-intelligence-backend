@@ -137,9 +137,9 @@ func (s *SellicoEconomicsSyncService) syncOzonCabinet(ctx context.Context, cabin
 	}
 	upserted := 0
 	for _, row := range rows {
-		// Ozon contract: offer_id required, cost_price guaranteed; the ready
-		// flag is a WB-only concept, so it is not checked here.
-		if row.OfferID == "" || row.CostPrice <= 0 {
+		// Both marketplaces export readiness. A partial calculation must not
+		// overwrite the last usable mirror; zero additionally needs its marker.
+		if row.OfferID == "" || !row.Ready || !row.HasUsableCostPrice() {
 			continue
 		}
 		source := row.Source
@@ -211,7 +211,7 @@ func buildEconomicsInputs(rows []sellico.WBUnitEconomics) []domain.ProductEconom
 		// explain missing evidence. Those rows are useful for presentation fields,
 		// but must not become trusted repricer economics until every source check
 		// has passed.
-		if !r.Ready || r.NmID <= 0 || r.CostPrice <= 0 {
+		if !r.Ready || r.NmID <= 0 || !r.HasUsableCostPrice() {
 			continue
 		}
 		cost := int64(math.Round(r.CostPrice))

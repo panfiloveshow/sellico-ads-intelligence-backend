@@ -672,6 +672,26 @@ type OzonPriceScheduleEntry struct {
 	RevertedAt        pgtype.Timestamptz `json:"reverted_at"`
 }
 
+type OzonPriceWriteAttempt struct {
+	ChangeID         pgtype.UUID        `json:"change_id"`
+	SellerCabinetID  pgtype.UUID        `json:"seller_cabinet_id"`
+	ProductID        int64              `json:"product_id"`
+	VendorAccountKey string             `json:"vendor_account_key"`
+	ResourceKey      pgtype.Text        `json:"resource_key"`
+	Status           string             `json:"status"`
+	PriceCents       int64              `json:"price_cents"`
+	OldPriceCents    pgtype.Int8        `json:"old_price_cents"`
+	MinPriceCents    pgtype.Int8        `json:"min_price_cents"`
+	Baseline         []byte             `json:"baseline"`
+	Observed         []byte             `json:"observed"`
+	ClaimedAt        pgtype.Timestamptz `json:"claimed_at"`
+	DispatchedAt     pgtype.Timestamptz `json:"dispatched_at"`
+	AcknowledgedAt   pgtype.Timestamptz `json:"acknowledged_at"`
+	VerifiedAt       pgtype.Timestamptz `json:"verified_at"`
+	LastObservedAt   pgtype.Timestamptz `json:"last_observed_at"`
+	Error            pgtype.Text        `json:"error"`
+}
+
 type OzonProduct struct {
 	ID              pgtype.UUID        `json:"id"`
 	SellerCabinetID pgtype.UUID        `json:"seller_cabinet_id"`

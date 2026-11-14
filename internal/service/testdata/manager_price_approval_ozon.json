@@ -1,0 +1,29 @@
+{
+    "version": "manager_price_approval_v1",
+    "operation_id": "82f08b95-3066-4aa9-9487-f019a9a77252",
+    "product_id": "01a1af96-bed9-70fe-bc65-c64ca2f424ce",
+    "workspace_id": "8",
+    "user_id": "42",
+    "integration_id": "62500",
+    "proposal_fingerprint": "290741dfaa436b63a6b9e0d3e3519fe4513266773fbed0ff576c75b38fbce921",
+    "financial_review_hash": "c7769f538a46300bc224d550d7a9146e6a60dc30666ffc37690778316e068158",
+    "credential_binding": "ae81736f363e295063eb03b838e10e95c18eb7bf7bcb266235ab7aacc8e39306",
+    "executor_credentials_digest": "7134099d7927b8cb98d16000a1cfbc8f6649e1e089df01a00f79aefb4e18c816",
+    "marketplace": "ozon",
+    "seller_price_cents": 120000,
+    "issued_at": "2026-11-06T06:40:54+00:00",
+    "expires_at": "2026-11-06T06:45:54+00:00",
+    "before_ozon": {
+        "product_id": 10001,
+        "offer_id": "PROPOSAL",
+        "price_cents": 100000,
+        "old_price_cents": 100000,
+        "min_price_cents": 50000,
+        "conditions": {
+            "marketing_price_cents": 100000,
+            "auto_action_enabled": false,
+            "auto_add_to_actions": false,
+            "has_actions": false
+        }
+    }
+}

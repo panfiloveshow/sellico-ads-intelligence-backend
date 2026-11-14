@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/adguard"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/pkg/metrics"
 )
 
@@ -405,14 +406,9 @@ func (c *PerfClient) GetCPOMinBids(ctx context.Context, creds Credentials, skus 
 // Ozon accepts on all_sku_promo/set_bid (percent).
 var allSKUPromoRates = map[int]bool{5: true, 7: true, 9: true}
 
-// GetAllSKUPromoRate reads the current whole-cabinet CPO («Оплата за заказ»)
-// rate: GET /api/client/campaign/all_sku_promo/activate returns
-// {"selectedBid":"5"} (selectedBid is a STRING percent). This activate endpoint
-// is the documented way to read the rate and is idempotent when the promo is
-// already active — it returns the current rate without changing anything.
-// Caveat: when the promo is OFF this call turns it ON at the current rate, so
-// only call it when the promo is already active or activation is intended.
-func (c *PerfClient) GetAllSKUPromoRate(ctx context.Context, creds Credentials) (int, error) {
+// ActivateAllSKUPromo enables the whole-cabinet CPO promo and returns the
+// selected rate reported by that mutation. It must never be used to read state.
+func (c *PerfClient) ActivateAllSKUPromo(ctx context.Context, creds Credentials) (int, error) {
 	body, err := c.doJSON(ctx, creds, http.MethodGet, "/api/client/campaign/all_sku_promo/activate", nil, nil)
 	if err != nil {
 		return 0, err
@@ -432,14 +428,6 @@ func (c *PerfClient) GetAllSKUPromoRate(ctx context.Context, creds Credentials) 
 		return 0, fmt.Errorf("ozon perf: parse all_sku_promo selectedBid %q: %w", resp.SelectedBid, err)
 	}
 	return pct, nil
-}
-
-// ActivateAllSKUPromo turns the whole-cabinet CPO promo on and returns the
-// resulting rate (percent). It is an alias of GetAllSKUPromoRate: the activate
-// endpoint both enables the promo and reports the rate, and is idempotent when
-// already active.
-func (c *PerfClient) ActivateAllSKUPromo(ctx context.Context, creds Credentials) (int, error) {
-	return c.GetAllSKUPromoRate(ctx, creds)
 }
 
 // SetAllSKUPromoRate sets the whole-cabinet CPO rate:
@@ -462,11 +450,9 @@ func (c *PerfClient) DeactivateAllSKUPromo(ctx context.Context, creds Credential
 	return err
 }
 
-// doJSON executes one authenticated Performance API call of any method with
-// rate limiting, retry and metrics. Writes here are idempotent (activate,
-// deactivate, absolute bid/budget values), so the same retry policy as reads
-// applies: 401 invalidates the token cache, 429 honors Retry-After, 5xx backs
-// off exponentially.
+// doJSON executes an authenticated Performance API call with rate limiting
+// and metrics. Reads retain their bounded retry policy. Mutations, including
+// CPO GET actions, enter the native journal and are sent at most once.
 func (c *PerfClient) doJSON(ctx context.Context, creds Credentials, method, path string, query url.Values, payload any) ([]byte, error) {
 	var bodyBytes []byte
 	if payload != nil {
@@ -486,6 +472,9 @@ func (c *PerfClient) doJSON(ctx context.Context, creds Credentials, method, path
 	fullURL := c.baseURL + path
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
+	}
+	if adguard.IsOzonMutation(method, path) {
+		return c.sendAdvertisingMutation(ctx, creds, method, path, fullURL, bodyBytes)
 	}
 
 	var lastErr error

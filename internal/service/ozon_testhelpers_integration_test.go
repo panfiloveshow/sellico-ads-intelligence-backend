@@ -3,11 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"runtime"
-	"sort"
-	"sync"
+	"math"
 	"testing"
 	"time"
 
@@ -20,147 +16,17 @@ import (
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/domain"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/integration/ozon"
 	sqlcgen "github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/repository/sqlc"
+	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/testdb"
 	"github.com/panfiloveshow/sellico-ads-intelligence-backend/internal/testutil"
 )
 
-var ozonSchemaOnce sync.Once
-
-// ozonEnsureSchema applies every *.up.sql migration once per process, tolerating
-// already-applied statements. The shared sellico_test database may be on an
-// older schema version; this brings it up to date (e.g. the ozon_* tables and
-// the seller_cabinets.marketplace column) without depending on the migration
-// tracking that testutil.NewTestDB assumes (which fails re-running the
-// non-idempotent 000001 base migration against a pre-provisioned DB).
-func ozonEnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	// Targeted, idempotent convergence for columns added AFTER the shared DB was
-	// first provisioned. Unlike re-running whole migration files (which reverts
-	// converged objects — an older idempotent file can DROP+re-ADD a constraint
-	// to a stale list), an "ADD COLUMN IF NOT EXISTS" cannot revert anything, so
-	// it is safe to run every time. Best-effort: on a truly fresh DB the table
-	// does not exist yet and this errors harmlessly before the full run below.
-	_, _ = pool.Exec(ctx, `ALTER TABLE ozon_cpo_products
-        ADD COLUMN IF NOT EXISTS offer_id TEXT,
-        ADD COLUMN IF NOT EXISTS name TEXT,
-        ADD COLUMN IF NOT EXISTS price_rub NUMERIC(12,2),
-        ADD COLUMN IF NOT EXISTS bid_price_rub NUMERIC(12,2),
-        ADD COLUMN IF NOT EXISTS image_url TEXT,
-        ADD COLUMN IF NOT EXISTS visibility_index TEXT`)
-
-	// 000060: «ДРР от общего оборота» in the AI impact feedback loop.
-	_, _ = pool.Exec(ctx, `ALTER TABLE ai_decisions
-        ADD COLUMN IF NOT EXISTS total_drr_before NUMERIC(8,2),
-        ADD COLUMN IF NOT EXISTS total_drr_after NUMERIC(8,2)`)
-
-	// If the ozon schema is already present the DB is converged — do nothing.
-	// Re-running the whole-file migrations here would roll back partially-
-	// applicable files (they mix already-existing objects with constraint
-	// updates) and silently revert converged schema, so skip entirely.
-	var present *string
-	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.ozon_price_schedule_entries')::text`).Scan(&present); err == nil && present != nil {
-		return nil
-	}
-	dir := ozonFindMigrationsDir()
-	if dir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			if ok, _ := filepath.Match("*.up.sql", e.Name()); ok {
-				files = append(files, e.Name())
-			}
-		}
-	}
-	sort.Strings(files)
-	for _, name := range files {
-		body, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return err
-		}
-		// Whole-file, best-effort convergence. Each migration file is atomic:
-		// files already applied to the shared DB error wholesale ("already
-		// exists") and are skipped; the not-yet-applied ozon_* files execute
-		// cleanly. A genuinely missing object surfaces later as a clear
-		// "relation/column does not exist" failure in a seeding helper.
-		_, _ = pool.Exec(ctx, string(body))
-	}
-	return nil
-}
-
-func ozonFindMigrationsDir() string {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		return ""
-	}
-	dir := filepath.Dir(filename)
-	for i := 0; i < 12; i++ {
-		candidate := filepath.Join(dir, "migrations")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-		dir = filepath.Dir(dir)
-	}
-	return ""
-}
-
-// newOzonTestDB connects to the shared local Postgres and returns a clean
-// (truncated) *testutil.TestDB. Unlike testutil.NewTestDB it does NOT re-run
-// the non-idempotent migrations: the sellico_test database is provisioned once
-// with the full schema, so this harness only truncates between tests. This
-// keeps the suite green when run repeatedly in one process (multiple NewTestDB
-// calls against an already-migrated DB would fail on CREATE TABLE).
+// Each legacy Ozon fixture now uses the same disposable, fully migrated
+// cluster as the newer database tests. It never reads TEST_DATABASE_URL and
+// never truncates a shared/local business database.
 func newOzonTestDB(t *testing.T) (*testutil.TestDB, func()) {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://sellico:sellico@localhost:5432/sellico_test?sslmode=disable"
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect to test database: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test database: %v (is PostgreSQL running?)", err)
-	}
-	var schemaErr error
-	ozonSchemaOnce.Do(func() { schemaErr = ozonEnsureSchema(ctx, pool) })
-	if schemaErr != nil {
-		pool.Close()
-		t.Fatalf("ensure schema: %v", schemaErr)
-	}
-	if err := ozonTruncateAll(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("truncate tables: %v", err)
-	}
-	db := &testutil.TestDB{Pool: pool, Queries: sqlcgen.New(pool)}
-	cleanup := func() {
-		_ = ozonTruncateAll(ctx, pool)
-		pool.Close()
-	}
-	return db, cleanup
-}
-
-func ozonTruncateAll(ctx context.Context, pool *pgxpool.Pool) error {
-	const q = `
-		DO $$
-		DECLARE r RECORD;
-		BEGIN
-			FOR r IN (
-				SELECT tablename FROM pg_tables
-				WHERE schemaname = 'public'
-				  AND tablename NOT LIKE 'schema_migrations%'
-			) LOOP
-				EXECUTE 'TRUNCATE TABLE public.' || quote_ident(r.tablename) || ' CASCADE';
-			END LOOP;
-		END $$;`
-	_, err := pool.Exec(ctx, q)
-	return err
+	pool := testdb.New(t)
+	return &testutil.TestDB{Pool: pool, Queries: sqlcgen.New(pool)}, func() {}
 }
 
 // This file provides the shared DB seeding harness and behaviour-equivalent
@@ -401,6 +267,37 @@ type fakePriceWriter struct {
 	err        error          // transport-level failure (no per-item results)
 	rejectSKUs map[int64]bool // SKUs to report Updated=false
 	calls      [][]ozon.PriceUpdate
+	pool       *pgxpool.Pool
+	prices     map[int64]ozon.PriceSnapshot
+}
+
+// Existing repricer fixtures describe the vendor's initial state with their
+// seeded mirror. Initialize once, then evolve this separate vendor map only
+// on successful fake writes. Recovery regressions use an independently
+// configured observedPriceWriter instead of this compatibility fixture.
+func (f *fakePriceWriter) ReadPriceSnapshots(ctx context.Context, _ ozon.Credentials, ids []int64) (map[int64]ozon.PriceSnapshot, error) {
+	if f.prices == nil {
+		f.prices = map[int64]ozon.PriceSnapshot{}
+	}
+	result := map[int64]ozon.PriceSnapshot{}
+	for _, id := range ids {
+		if _, ok := f.prices[id]; !ok && f.pool != nil {
+			var p ozon.PriceSnapshot
+			var old, minimum *int64
+			err := f.pool.QueryRow(ctx, `SELECT sku, COALESCE(offer_id,''), (price_rub*100)::bigint,
+			(old_price_rub*100)::bigint, (min_price_rub*100)::bigint
+			FROM ozon_product_prices WHERE sku=$1 ORDER BY synced_at DESC LIMIT 1`, id).
+				Scan(&p.ProductID, &p.OfferID, &p.PriceCents, &old, &minimum)
+			if err == nil {
+				p.OldPriceCents, p.MinPriceCents = old, minimum
+				f.prices[id] = p
+			}
+		}
+		if p, ok := f.prices[id]; ok {
+			result[id] = p
+		}
+	}
+	return result, nil
 }
 
 func (f *fakePriceWriter) UpdatePrices(_ context.Context, _ ozon.Credentials, items []ozon.PriceUpdate) ([]ozon.PriceUpdateResult, error) {
@@ -414,6 +311,18 @@ func (f *fakePriceWriter) UpdatePrices(_ context.Context, _ ozon.Credentials, it
 		if f.rejectSKUs[it.ProductID] {
 			res.Updated = false
 			res.Errors = []string{"rejected by ozon"}
+		} else {
+			p := f.prices[it.ProductID]
+			p.PriceCents = int64(math.Round(it.PriceRub * 100))
+			if it.OldPriceRub != nil {
+				v := int64(math.Round(*it.OldPriceRub * 100))
+				p.OldPriceCents = &v
+			}
+			if it.MinPriceRub != nil {
+				v := int64(math.Round(*it.MinPriceRub * 100))
+				p.MinPriceCents = &v
+			}
+			f.prices[it.ProductID] = p
 		}
 		out = append(out, res)
 	}
@@ -422,6 +331,9 @@ func (f *fakePriceWriter) UpdatePrices(_ context.Context, _ ozon.Credentials, it
 
 // newRepricer builds an OzonRepricerService wired to a fake price writer.
 func newRepricer(db *testutil.TestDB, writer ozonPriceWriter) *OzonRepricerService {
+	if fixture, ok := writer.(*fakePriceWriter); ok {
+		fixture.pool = db.Pool
+	}
 	return &OzonRepricerService{
 		queries:       db.Queries,
 		sellerClient:  writer,
@@ -493,7 +405,7 @@ func (f *fakePerfClient) SetSearchPromoBids(_ context.Context, _ ozon.Credential
 	f.cpoBidCalls++
 	return f.writeErr
 }
-func (f *fakePerfClient) GetAllSKUPromoRate(_ context.Context, _ ozon.Credentials) (int, error) {
+func (f *fakePerfClient) ActivateAllSKUPromo(_ context.Context, _ ozon.Credentials) (int, error) {
 	f.cpoActivateCalls++
 	return f.cpoRate, f.cpoRateErr
 }

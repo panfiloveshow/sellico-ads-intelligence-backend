@@ -18,8 +18,8 @@ import (
 var ErrPricesScopeMissing = errors.New("wb token missing prices scope")
 
 // PriceUploadOutcomeUnknownError means WB may have accepted the write, but the
-// client did not receive a definitive response. Retrying the exact values is
-// safe because the prices API reports duplicate uploads as HTTP 208.
+// client did not receive a definitive response. The caller must preserve the
+// journal and reconcile; HTTP 208 does not prove an unlimited retry window.
 type PriceUploadOutcomeUnknownError struct{ Err error }
 
 func (e *PriceUploadOutcomeUnknownError) Error() string { return e.Err.Error() }
@@ -116,13 +116,12 @@ type priceUploadResponse struct {
 	ErrorText string `json:"errorText"`
 }
 
-// ponytail: WB does not publish a stable schema for the task-status/goods/quarantine
-// envelopes; these mirror the documented fields (Dakword/WBSeller + openapi.wildberries.ru).
-// Verify field names against the live API on first integration and adjust here only.
+// Task and item status are different enums in the WB OpenAPI contract:
+// task 3 means processed; item 2 means success, item 3 means failure.
 type priceTaskStatusResponse struct {
-	Data struct {
+	Data *struct {
 		UploadID int64 `json:"uploadID"`
-		Status   int   `json:"status"`
+		Status   *int  `json:"status"`
 	} `json:"data"`
 	Error     bool   `json:"error"`
 	ErrorText string `json:"errorText"`
@@ -130,11 +129,12 @@ type priceTaskStatusResponse struct {
 
 type priceTaskGoodsResponse struct {
 	Data struct {
+		UploadID     int64 `json:"uploadID"`
 		HistoryGoods []struct {
 			NmID      int64  `json:"nmID"`
 			Price     int64  `json:"price"`
-			Discount  int    `json:"discount"`
-			Status    int    `json:"status"`
+			Discount  *int   `json:"discount"`
+			Status    *int   `json:"status"`
 			ErrorText string `json:"errorText"`
 		} `json:"historyGoods"`
 	} `json:"data"`
@@ -225,7 +225,7 @@ func (c *Client) UploadPriceTask(ctx context.Context, token string, items []Pric
 	if err != nil {
 		return 0, false, fmt.Errorf("marshal price upload: %w", err)
 	}
-	resp, body, reqErr := c.doPricesRequest(ctx, http.MethodPost, "/api/v2/upload/task", token, bytes.NewReader(payload))
+	resp, body, reqErr := c.doPricesRequest(priceRequestContext(withoutRateLimitRetry(ctx), 1<<20), http.MethodPost, "/api/v2/upload/task", token, bytes.NewReader(payload))
 
 	// 208 = duplicate upload; WB still returns a body with the existing task id.
 	dup := resp != nil && resp.StatusCode == http.StatusAlreadyReported
@@ -235,6 +235,9 @@ func (c *Client) UploadPriceTask(ctx context.Context, token string, items []Pric
 			return 0, false, &PriceUploadOutcomeUnknownError{Err: classified}
 		}
 		return 0, false, classified
+	}
+	if resp == nil || (resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAlreadyReported) {
+		return 0, dup, &PriceUploadOutcomeUnknownError{Err: errors.New("WB price upload returned an unexpected response status")}
 	}
 
 	var parsed priceUploadResponse
@@ -263,8 +266,11 @@ func (c *Client) GetPriceTaskBuffer(ctx context.Context, token string, uploadID 
 }
 
 func (c *Client) priceTaskStatus(ctx context.Context, token, base string, uploadID int64) (*PriceTaskStatus, error) {
+	if uploadID <= 0 {
+		return nil, errors.New("invalid WB upload id")
+	}
 	path := fmt.Sprintf("%s?uploadID=%d", base, uploadID)
-	resp, body, err := c.doPricesRequest(ctx, http.MethodGet, path, token, nil)
+	resp, body, err := c.doPricesRequest(priceRequestContext(ctx, 1<<20), http.MethodGet, path, token, nil)
 	if err != nil {
 		return nil, classifyPricesError(resp, err)
 	}
@@ -275,17 +281,30 @@ func (c *Client) priceTaskStatus(ctx context.Context, token, base string, upload
 	if parsed.Error {
 		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("wb price task status error: %s", parsed.ErrorText))
 	}
-	return &PriceTaskStatus{ID: parsed.Data.UploadID, Status: parsed.Data.Status}, nil
+	if parsed.Data == nil {
+		return nil, nil
+	}
+	if parsed.Data.UploadID != uploadID || parsed.Data.Status == nil {
+		return nil, errors.New("WB did not confirm the selected upload id and status")
+	}
+	status := *parsed.Data.Status
+	if (base == "/api/v2/buffer/tasks" && status != 1) || (base == "/api/v2/history/tasks" && (status < 3 || status > 6)) {
+		return nil, errors.New("unknown WB task status")
+	}
+	return &PriceTaskStatus{ID: parsed.Data.UploadID, Status: status}, nil
 }
 
 // ListPriceTaskHistoryGoods returns per-product results (incl. error text) for a
 // processed upload task. limit ≤ 1000.
 func (c *Client) ListPriceTaskHistoryGoods(ctx context.Context, token string, uploadID int64, limit, offset int) ([]PriceTaskGood, error) {
+	if uploadID <= 0 || offset < 0 {
+		return nil, errors.New("invalid WB task goods scope")
+	}
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
 	path := fmt.Sprintf("/api/v2/history/goods/task?uploadID=%d&limit=%d&offset=%d", uploadID, limit, offset)
-	resp, body, err := c.doPricesRequest(ctx, http.MethodGet, path, token, nil)
+	resp, body, err := c.doPricesRequest(priceRequestContext(ctx, 16<<20), http.MethodGet, path, token, nil)
 	if err != nil {
 		return nil, classifyPricesError(resp, err)
 	}
@@ -296,13 +315,19 @@ func (c *Client) ListPriceTaskHistoryGoods(ctx context.Context, token string, up
 	if parsed.Error {
 		return nil, apperror.New(apperror.ErrWBAPIError, fmt.Sprintf("wb price task goods error: %s", parsed.ErrorText))
 	}
+	if parsed.Data.UploadID != uploadID || parsed.Data.HistoryGoods == nil {
+		return nil, errors.New("WB did not confirm goods for the selected upload id")
+	}
 	goods := make([]PriceTaskGood, 0, len(parsed.Data.HistoryGoods))
 	for _, g := range parsed.Data.HistoryGoods {
+		if g.NmID <= 0 || g.Status == nil || (*g.Status != 2 && *g.Status != 3) || g.Discount == nil || *g.Discount < 0 || *g.Discount > 100 {
+			return nil, errors.New("incomplete WB task goods receipt")
+		}
 		goods = append(goods, PriceTaskGood{
 			NmID:      g.NmID,
 			Price:     g.Price,
-			Discount:  g.Discount,
-			Status:    g.Status,
+			Discount:  *g.Discount,
+			Status:    *g.Status,
 			ErrorText: g.ErrorText,
 		})
 	}

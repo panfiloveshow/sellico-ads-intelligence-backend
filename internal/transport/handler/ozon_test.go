@@ -283,6 +283,7 @@ type fakeOzonRepricer struct {
 	heatmapFn          func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku int64, metric string) (*domain.OrdersHeatmap, error)
 	listPriceChangesFn func(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, limit, offset int32) ([]domain.OzonPriceChange, int64, error)
 	rollbackFn         func(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error)
+	reconcilePriceFn   func(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error)
 	createScheduleFn   func(ctx context.Context, workspaceID, cabinetID uuid.UUID, in domain.OzonPriceScheduleInput) (*domain.OzonPriceScheduleEntry, error)
 	cancelScheduleFn   func(ctx context.Context, workspaceID, entryID uuid.UUID) error
 	setPauseFn         func(ctx context.Context, workspaceID, cabinetID uuid.UUID, hours int) (*time.Time, error)
@@ -301,6 +302,13 @@ func (f *fakeOzonRepricer) Rollback(ctx context.Context, workspaceID, changeID u
 		return &domain.OzonPriceChange{}, nil
 	}
 	return f.rollbackFn(ctx, workspaceID, changeID)
+}
+
+func (f *fakeOzonRepricer) ReconcilePriceChange(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error) {
+	if f.reconcilePriceFn == nil {
+		return &domain.OzonPriceChange{}, nil
+	}
+	return f.reconcilePriceFn(ctx, workspaceID, changeID)
 }
 
 func (f *fakeOzonRepricer) ApplyManual(ctx context.Context, workspaceID, cabinetID uuid.UUID, items []service.OzonManualPriceInput, userID uuid.UUID) ([]domain.OzonPriceChange, error) {

@@ -23,6 +23,7 @@ import (
 type ozonRepricerServicer interface {
 	ListPriceChanges(ctx context.Context, workspaceID, cabinetID uuid.UUID, sku *int64, limit, offset int32) ([]domain.OzonPriceChange, int64, error)
 	Rollback(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error)
+	ReconcilePriceChange(ctx context.Context, workspaceID, changeID uuid.UUID) (*domain.OzonPriceChange, error)
 	ApplyManual(ctx context.Context, workspaceID, cabinetID uuid.UUID, items []service.OzonManualPriceInput, userID uuid.UUID) ([]domain.OzonPriceChange, error)
 	ResolveWorkspaceCabinet(ctx context.Context, workspaceID, cabinetID uuid.UUID) error
 	CreateSchedule(ctx context.Context, workspaceID, cabinetID uuid.UUID, in domain.OzonPriceScheduleInput) (*domain.OzonPriceScheduleEntry, error)
@@ -79,6 +80,30 @@ func (h *OzonHandler) ListPriceChanges(w http.ResponseWriter, r *http.Request) {
 	dto.WriteJSONWithMeta(w, http.StatusOK, items, &envelope.Meta{Page: pg.Page, PerPage: pg.PerPage, Total: total})
 }
 
+// ReconcilePriceChange only reads Ozon and updates the recorded observation.
+// It cannot dispatch or release an unacknowledged product hold.
+func (h *OzonHandler) ReconcilePriceChange(w http.ResponseWriter, r *http.Request) {
+	if !h.requireRepricer(w) {
+		return
+	}
+	workspaceID, ok := middleware.WorkspaceIDFromContext(r.Context())
+	if !ok {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing workspace id")
+		return
+	}
+	changeID, err := parseNonNilUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		dto.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid price change id")
+		return
+	}
+	change, err := h.repricer.ReconcilePriceChange(r.Context(), workspaceID, changeID)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	dto.WriteJSON(w, http.StatusOK, change)
+}
+
 // RollbackPriceChange handles POST /ozon/price-changes/{id}/rollback.
 func (h *OzonHandler) RollbackPriceChange(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRepricer(w) {
@@ -95,7 +120,7 @@ func (h *OzonHandler) RollbackPriceChange(w http.ResponseWriter, r *http.Request
 		return
 	}
 	change, err := h.repricer.Rollback(r.Context(), workspaceID, changeID)
-	if err != nil {
+	if err != nil && change == nil {
 		writeAppError(w, err)
 		return
 	}

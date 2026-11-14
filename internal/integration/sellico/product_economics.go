@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,21 +16,32 @@ import (
 // (the same export for OZON integrations) are keyed by OfferID (артикул) and may
 // also carry an Ozon SKU. Costs are in rubles.
 type WBUnitEconomics struct {
-	NmID              int64
-	OfferID           string // Ozon items only
-	SKU               int64  // Ozon items only, optional
-	CostPrice         float64
-	CommissionPercent *float64
-	TaxPercent        *float64
-	SppPercent        *float64
-	CustomerPrice     *float64
-	LogisticsCost     *float64
-	OtherCosts        *float64
-	MaxAllowedDRR     *float64
-	MarginBeforeAds   *float64
-	CalculatedAt      *time.Time
-	Source            string
-	Ready             bool
+	NmID                  int64
+	OfferID               string // Ozon items only
+	SKU                   int64  // Ozon items only, optional
+	CostPrice             float64
+	CommissionPercent     *float64
+	TaxPercent            *float64
+	SppPercent            *float64
+	CustomerPrice         *float64
+	LogisticsCost         *float64
+	OtherCosts            *float64
+	MaxAllowedDRR         *float64
+	MarginBeforeAds       *float64
+	CalculatedAt          *time.Time
+	Source                string
+	Ready                 bool
+	ExplicitZeroCostPrice bool
+}
+
+// HasUsableCostPrice preserves the difference between an explicit zero and a
+// missing/default cost. Ready describes the publisher's calculation, not a
+// permission to change bids or prices.
+func (r WBUnitEconomics) HasUsableCostPrice() bool {
+	if math.IsNaN(r.CostPrice) || math.IsInf(r.CostPrice, 0) {
+		return false
+	}
+	return r.CostPrice > 0 || (r.CostPrice == 0 && r.ExplicitZeroCostPrice && r.Ready && r.Source == "sellico-products-unit-economics")
 }
 
 // ListWBUnitEconomics fetches cost/commission/tax by nmID for one Sellico
@@ -66,20 +78,21 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 
 	var payload struct {
 		Items []struct {
-			NmID              json.Number  `json:"nm_id"`
-			OfferID           string       `json:"offer_id"`
-			SKU               *json.Number `json:"sku"`
-			CostPrice         json.Number  `json:"cost_price"`
-			CommissionPercent *json.Number `json:"commission_percent"`
-			TaxPercent        *json.Number `json:"tax_percent"`
-			SppPercent        *json.Number `json:"spp_percent"`
-			CustomerPrice     *json.Number `json:"customer_price"`
-			LogisticsCost     *json.Number `json:"logistics_cost"`
-			OtherCosts        *json.Number `json:"other_costs"`
-			MaxAllowedDRR     *json.Number `json:"max_allowed_drr"`
-			MarginBeforeAds   *json.Number `json:"margin_before_ads"`
-			CalculatedAt      string       `json:"calculated_at"`
-			Ready             bool         `json:"ready"`
+			NmID                  json.Number  `json:"nm_id"`
+			OfferID               string       `json:"offer_id"`
+			SKU                   *json.Number `json:"sku"`
+			CostPrice             json.Number  `json:"cost_price"`
+			CommissionPercent     *json.Number `json:"commission_percent"`
+			TaxPercent            *json.Number `json:"tax_percent"`
+			SppPercent            *json.Number `json:"spp_percent"`
+			CustomerPrice         *json.Number `json:"customer_price"`
+			LogisticsCost         *json.Number `json:"logistics_cost"`
+			OtherCosts            *json.Number `json:"other_costs"`
+			MaxAllowedDRR         *json.Number `json:"max_allowed_drr"`
+			MarginBeforeAds       *json.Number `json:"margin_before_ads"`
+			CalculatedAt          string       `json:"calculated_at"`
+			Ready                 bool         `json:"ready"`
+			ExplicitZeroCostPrice bool         `json:"explicit_zero_cost_price"`
 		} `json:"items"`
 		Source        string      `json:"source"`
 		IntegrationID json.Number `json:"integration_id"`
@@ -113,10 +126,14 @@ func (c *Client) ListWBUnitEconomics(ctx context.Context, serviceToken, path, in
 			continue
 		}
 		cost, err := it.CostPrice.Float64()
-		if err != nil || cost <= 0 {
+		if err != nil {
 			continue
 		}
-		row := WBUnitEconomics{NmID: nm, OfferID: offerID, CostPrice: cost, Source: strings.TrimSpace(payload.Source), Ready: it.Ready}
+		row := WBUnitEconomics{NmID: nm, OfferID: offerID, CostPrice: cost, Source: strings.TrimSpace(payload.Source), Ready: it.Ready,
+			ExplicitZeroCostPrice: it.ExplicitZeroCostPrice}
+		if !row.HasUsableCostPrice() {
+			continue
+		}
 		if it.SKU != nil {
 			if v, err := it.SKU.Int64(); err == nil && v > 0 {
 				row.SKU = v

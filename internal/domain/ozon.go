@@ -117,6 +117,7 @@ const (
 	OzonBidStatusPending    = "pending"
 	OzonBidStatusApplied    = "applied"
 	OzonBidStatusFailed     = "failed"
+	OzonBidStatusUnknown    = "unknown"
 	OzonBidStatusRolledBack = "rolled_back"
 	OzonBidStatusShadow     = "shadow"
 )
@@ -146,11 +147,14 @@ type OzonBidChange struct {
 // Ozon price-change audit constants (ozon_price_changes.status; sources
 // reuse PriceSourceStrategy/PriceSourceManual plus BidSourceAI).
 const (
-	OzonPriceStatusPending    = "pending"
-	OzonPriceStatusApplied    = "applied"
-	OzonPriceStatusFailed     = "failed"
-	OzonPriceStatusRolledBack = "rolled_back"
-	OzonPriceStatusShadow     = "shadow"
+	OzonPriceStatusPending       = "pending"
+	OzonPriceStatusSubmitting    = "submitting"
+	OzonPriceStatusVerifying     = "verifying"
+	OzonPriceStatusSubmitUnknown = "submit_unknown"
+	OzonPriceStatusApplied       = "applied"
+	OzonPriceStatusFailed        = "failed"
+	OzonPriceStatusRolledBack    = "rolled_back"
+	OzonPriceStatusShadow        = "shadow"
 )
 
 // OzonPriceChange is one audited Ozon price write (strategy, manual or AI).

@@ -40,13 +40,14 @@ WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
 
 -- CountOzonPriceWritesBySkuSince feeds the hard hourly write limit (Ozon
 -- rejects more than 10 price changes per product per hour). Only rows that
--- did (or may still) reach Ozon count: pending + applied + rolled_back
--- (a rollback is a real write too).
+-- did (or may still) reach Ozon count, including in-flight and unknown rows.
+-- This is a cabinet-local early check. The dispatch journal enforces the
+-- physical seller/product budget across cabinet aliases atomically.
 -- name: CountOzonPriceWritesBySkuSince :one
 SELECT COUNT(*) FROM ozon_price_changes
 WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND sku = sqlc.arg('sku')
-  AND status IN ('pending', 'applied', 'rolled_back')
+  AND status IN ('pending', 'submitting', 'verifying', 'submit_unknown', 'applied', 'rolled_back')
   AND created_at >= sqlc.arg('since');
 
 -- CountOzonStrategyDecisionsBySkuSince feeds the strategy cooldown and daily
@@ -57,7 +58,7 @@ SELECT COUNT(*) FROM ozon_price_changes
 WHERE seller_cabinet_id = sqlc.arg('seller_cabinet_id')
   AND sku = sqlc.arg('sku')
   AND source = 'strategy'
-  AND status IN ('pending', 'applied', 'shadow')
+  AND status IN ('pending', 'submitting', 'verifying', 'submit_unknown', 'applied', 'shadow')
   AND created_at >= sqlc.arg('since');
 
 -- name: UpdateOzonProductPriceMirror :exec

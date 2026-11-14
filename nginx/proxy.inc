@@ -42,6 +42,14 @@ location = /docs {
     proxy_pass $api;
 }
 
+# Private Products price dispatch — HMAC is checked by the API.
+location = /internal/v1/prices/dispatch-authorizations {
+    limit_req zone=api_general burst=60 nodelay;
+    limit_req_status 429;
+    proxy_cache off;
+    proxy_pass $api;
+}
+
 # All other API routes — general rate limit
 location /api/ {
     limit_req zone=api_general burst=60 nodelay;

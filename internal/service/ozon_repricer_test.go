@@ -196,7 +196,7 @@ func TestOzonEffectiveNetPrice_NoData(t *testing.T) {
 	if cost := ozonEffectiveNetPrice(0, nil); cost != 0 {
 		t.Fatalf("cost = %v, want 0 without any source", cost)
 	}
-	// A row without a positive cost_price is unusable even when present.
+	// A missing cost_price remains unknown even when other costs are present.
 	if cost := ozonEffectiveNetPrice(0, &sqlcgen.OzonProductEconomic{OtherCostsRub: floatToPgNumeric(50)}); cost != 0 {
 		t.Fatalf("cost = %v, want 0 when cost_price is absent", cost)
 	}

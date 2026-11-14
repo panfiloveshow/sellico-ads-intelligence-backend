@@ -20,42 +20,52 @@ type RateLimitOpts struct {
 type PermissionChecker = middleware.PermissionChecker
 
 type RouterDeps struct {
-	CORSAllowOrigins         []string
-	RateLimit                RateLimitOpts
-	JWTSecret                string
-	MembershipChecker        middleware.MembershipChecker
-	WorkspaceResolver        middleware.WorkspaceResolver
-	Authenticator            middleware.Authenticator
-	PermissionChecker        middleware.PermissionChecker
-	DocsHandler              *handler.DocsHandler
-	HealthHandler            *handler.HealthHandler
-	AuthHandler              *handler.AuthHandler
-	WorkspaceHandler         *handler.WorkspaceHandler
-	SellerCabinetHandler     *handler.SellerCabinetHandler
-	AdsReadHandler           *handler.AdsReadHandler
-	CampaignHandler          *handler.CampaignHandler
-	PhraseHandler            *handler.PhraseHandler
-	BidHandler               *handler.BidHandler
-	ProductHandler           *handler.ProductHandler
-	PositionHandler          *handler.PositionHandler
-	SERPHandler              *handler.SERPHandler
-	RecommendationHandler    *handler.RecommendationHandler
-	ExportHandler            *handler.ExportHandler
-	ExtensionHandler         *handler.ExtensionHandler
-	AuditLogHandler          *handler.AuditLogHandler
-	JobRunHandler            *handler.JobRunHandler
-	EventsHandler            *handler.EventsHandler
-	WorkspaceSettingsHandler *handler.WorkspaceSettingsHandler
-	StrategyHandler          *handler.StrategyHandler
-	CampaignActionHandler    *handler.CampaignActionHandler
-	SemanticsHandler         *handler.SemanticsHandler
-	CompetitorHandler        *handler.CompetitorHandler
-	DeliveryHandler          *handler.DeliveryHandler
-	SEOHandler               *handler.SEOHandler
-	ProductEventHandler      *handler.ProductEventHandler
-	ProductEconomicsHandler  *handler.ProductEconomicsHandler
-	PriceHandler             *handler.PriceHandler
-	OzonHandler              *handler.OzonHandler
+	CORSAllowOrigins                    []string
+	RateLimit                           RateLimitOpts
+	JWTSecret                           string
+	MembershipChecker                   middleware.MembershipChecker
+	WorkspaceResolver                   middleware.WorkspaceResolver
+	Authenticator                       middleware.Authenticator
+	PermissionChecker                   middleware.PermissionChecker
+	ManagerAccessVerifier               middleware.ManagerAccessVerifier
+	ManagerAdsHandler                   *handler.ManagerAdsHandler
+	ManagerAdAdvancedHandler            *handler.ManagerAdAdvancedHandler
+	ManagerAdContextHandler             *handler.ManagerAdContextHandler
+	ManagerAdOperationsHandler          *handler.ManagerAdOperationsHandler
+	ManagerAdExecutionControlHandler    *handler.ManagerAdExecutionControlHandler
+	ManagerPriceExecutionControlHandler *handler.ManagerPriceExecutionControlHandler
+	ManagerLegacyPriceReviewHandler     *handler.ManagerLegacyPriceReviewHandler
+	LegacyPriceDispatchHandler          *handler.LegacyPriceDispatchHandler
+	ManagerPriceHandler                 *handler.ManagerPriceHandler
+	DocsHandler                         *handler.DocsHandler
+	HealthHandler                       *handler.HealthHandler
+	AuthHandler                         *handler.AuthHandler
+	WorkspaceHandler                    *handler.WorkspaceHandler
+	SellerCabinetHandler                *handler.SellerCabinetHandler
+	AdsReadHandler                      *handler.AdsReadHandler
+	CampaignHandler                     *handler.CampaignHandler
+	PhraseHandler                       *handler.PhraseHandler
+	BidHandler                          *handler.BidHandler
+	ProductHandler                      *handler.ProductHandler
+	PositionHandler                     *handler.PositionHandler
+	SERPHandler                         *handler.SERPHandler
+	RecommendationHandler               *handler.RecommendationHandler
+	ExportHandler                       *handler.ExportHandler
+	ExtensionHandler                    *handler.ExtensionHandler
+	AuditLogHandler                     *handler.AuditLogHandler
+	JobRunHandler                       *handler.JobRunHandler
+	EventsHandler                       *handler.EventsHandler
+	WorkspaceSettingsHandler            *handler.WorkspaceSettingsHandler
+	StrategyHandler                     *handler.StrategyHandler
+	CampaignActionHandler               *handler.CampaignActionHandler
+	SemanticsHandler                    *handler.SemanticsHandler
+	CompetitorHandler                   *handler.CompetitorHandler
+	DeliveryHandler                     *handler.DeliveryHandler
+	SEOHandler                          *handler.SEOHandler
+	ProductEventHandler                 *handler.ProductEventHandler
+	ProductEconomicsHandler             *handler.ProductEconomicsHandler
+	PriceHandler                        *handler.PriceHandler
+	OzonHandler                         *handler.OzonHandler
 }
 
 // notImplemented is a placeholder handler returning 501 Not Implemented.
@@ -108,6 +118,12 @@ func NewRouter(deps RouterDeps) chi.Router {
 		r.Get("/health/ready", notImplemented)
 	}
 
+	// Private service attestation; its handler authenticates the exact body with
+	// a separate HMAC credential. A browser/personal bearer cannot grant it.
+	if deps.LegacyPriceDispatchHandler != nil {
+		r.Post("/internal/v1/prices/dispatch-authorizations", deps.LegacyPriceDispatchHandler.Authorize)
+	}
+
 	// --- /api/v1 group ---
 	r.Route("/api/v1", func(v1 chi.Router) {
 		var rateLimitMiddleware func(http.Handler) http.Handler
@@ -155,6 +171,103 @@ func NewRouter(deps RouterDeps) chi.Router {
 			if rateLimitMiddleware != nil {
 				protected.Use(rateLimitMiddleware)
 			}
+
+			// Manager reads require a fresh personal CRM identity and exact store mapping.
+			protected.Group(func(manager chi.Router) {
+				manager.Use(middleware.ManagerWorkspaceHeaders)
+				manager.Use(tenantMiddleware)
+				manager.Use(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.view", "integrations.view"))
+				if deps.ManagerAdsHandler != nil {
+					manager.Get("/manager/ads/campaigns", deps.ManagerAdsHandler.Campaigns)
+				} else {
+					manager.Get("/manager/ads/campaigns", notImplemented)
+				}
+				if deps.ManagerAdAdvancedHandler != nil {
+					manager.Get("/manager/ads/attribution", deps.ManagerAdAdvancedHandler.Attribution)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/operations/{id}/resolution/prepare", deps.ManagerAdAdvancedHandler.PrepareResolution)
+					manager.Get("/manager/ads/operations/{id}/resolution/{resolutionId}", deps.ManagerAdAdvancedHandler.ResolutionReceipt)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/operations/{id}/resolution/{resolutionId}/approve", deps.ManagerAdAdvancedHandler.ApproveResolution)
+					manager.Post("/manager/ads/operations/{id}/resolution/{resolutionId}/cancel", deps.ManagerAdAdvancedHandler.CancelResolution)
+				} else {
+					manager.Get("/manager/ads/attribution", notImplemented)
+					manager.Post("/manager/ads/operations/{id}/resolution/prepare", notImplemented)
+					manager.Get("/manager/ads/operations/{id}/resolution/{resolutionId}", notImplemented)
+					manager.Post("/manager/ads/operations/{id}/resolution/{resolutionId}/approve", notImplemented)
+					manager.Post("/manager/ads/operations/{id}/resolution/{resolutionId}/cancel", notImplemented)
+				}
+				if deps.ManagerAdContextHandler != nil {
+					manager.Get("/manager/ads/campaigns/{id}/context", deps.ManagerAdContextHandler.Context)
+					manager.Get("/manager/ads/campaigns/{id}/bid-context", deps.ManagerAdContextHandler.ProductBidContext)
+					manager.Get("/manager/ads/campaigns/{id}/budget-context", deps.ManagerAdContextHandler.CampaignBudgetContext)
+				} else {
+					manager.Get("/manager/ads/campaigns/{id}/context", notImplemented)
+					manager.Get("/manager/ads/campaigns/{id}/bid-context", notImplemented)
+					manager.Get("/manager/ads/campaigns/{id}/budget-context", notImplemented)
+				}
+				if deps.ManagerLegacyPriceReviewHandler != nil {
+					legacyReviews := manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "products.view", "unit_economics.view"))
+					legacyReviews.Get("/manager/prices/legacy-journal/context", deps.ManagerLegacyPriceReviewHandler.Context)
+					legacyReviews.Get("/manager/prices/legacy-reviews/{id}", deps.ManagerLegacyPriceReviewHandler.Receipt)
+					legacyReviews.Post("/manager/prices/legacy-reviews/{id}/cancel", deps.ManagerLegacyPriceReviewHandler.Cancel)
+					legacyReviews.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage", "unit_economics.calculate")).Post("/manager/prices/legacy-reviews", deps.ManagerLegacyPriceReviewHandler.Prepare)
+					legacyReviews.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage", "unit_economics.calculate")).Post("/manager/prices/legacy-reviews/{id}/approve", deps.ManagerLegacyPriceReviewHandler.Approve)
+				} else {
+					manager.Get("/manager/prices/legacy-journal/context", notImplemented)
+					manager.Get("/manager/prices/legacy-reviews/{id}", notImplemented)
+					manager.Post("/manager/prices/legacy-reviews/{id}/cancel", notImplemented)
+					manager.Post("/manager/prices/legacy-reviews", notImplemented)
+					manager.Post("/manager/prices/legacy-reviews/{id}/approve", notImplemented)
+				}
+				if deps.ManagerPriceExecutionControlHandler != nil {
+					priceControls := manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "products.view", "unit_economics.view"))
+					priceControls.Get("/manager/prices/execution-controls/context", deps.ManagerPriceExecutionControlHandler.Context)
+					priceControls.Get("/manager/prices/execution-controls/{id}", deps.ManagerPriceExecutionControlHandler.Receipt)
+					priceControls.Post("/manager/prices/execution-controls/{id}/cancel", deps.ManagerPriceExecutionControlHandler.Cancel)
+					priceControls.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage", "unit_economics.calculate")).Post("/manager/prices/execution-controls", deps.ManagerPriceExecutionControlHandler.Prepare)
+					priceControls.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage", "unit_economics.calculate")).Post("/manager/prices/execution-controls/{id}/approve", deps.ManagerPriceExecutionControlHandler.Approve)
+				} else {
+					manager.Get("/manager/prices/execution-controls/context", notImplemented)
+					manager.Get("/manager/prices/execution-controls/{id}", notImplemented)
+					manager.Post("/manager/prices/execution-controls/{id}/cancel", notImplemented)
+					manager.Post("/manager/prices/execution-controls", notImplemented)
+					manager.Post("/manager/prices/execution-controls/{id}/approve", notImplemented)
+				}
+				if deps.ManagerAdExecutionControlHandler != nil {
+					manager.Get("/manager/ads/execution-controls/context", deps.ManagerAdExecutionControlHandler.Context)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/execution-controls", deps.ManagerAdExecutionControlHandler.Prepare)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/execution-controls/{id}/approve", deps.ManagerAdExecutionControlHandler.Approve)
+					manager.Post("/manager/ads/execution-controls/{id}/cancel", deps.ManagerAdExecutionControlHandler.Cancel)
+					manager.Get("/manager/ads/execution-controls/{id}", deps.ManagerAdExecutionControlHandler.Receipt)
+				} else {
+					manager.Get("/manager/ads/execution-controls/context", notImplemented)
+					manager.Post("/manager/ads/execution-controls", notImplemented)
+					manager.Post("/manager/ads/execution-controls/{id}/approve", notImplemented)
+					manager.Post("/manager/ads/execution-controls/{id}/cancel", notImplemented)
+					manager.Get("/manager/ads/execution-controls/{id}", notImplemented)
+				}
+				if deps.ManagerAdOperationsHandler != nil {
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/operations", deps.ManagerAdOperationsHandler.Prepare)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/bid-operations", deps.ManagerAdOperationsHandler.PrepareBid)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/budget-operations", deps.ManagerAdOperationsHandler.PrepareBudget)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "marketing.manage")).Post("/manager/ads/operations/{id}/approve", deps.ManagerAdOperationsHandler.Approve)
+					manager.Post("/manager/ads/operations/{id}/cancel", deps.ManagerAdOperationsHandler.Cancel)
+					manager.Get("/manager/ads/operations/{id}", deps.ManagerAdOperationsHandler.Receipt)
+				} else {
+					manager.Post("/manager/ads/operations", notImplemented)
+					manager.Post("/manager/ads/bid-operations", notImplemented)
+					manager.Post("/manager/ads/budget-operations", notImplemented)
+					manager.Post("/manager/ads/operations/{id}/approve", notImplemented)
+					manager.Post("/manager/ads/operations/{id}/cancel", notImplemented)
+					manager.Get("/manager/ads/operations/{id}", notImplemented)
+				}
+				if deps.ManagerPriceHandler != nil {
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "products.view", "unit_economics.view", "unit_economics.calculate", "marketing.manage")).Post("/manager/prices/operations", deps.ManagerPriceHandler.Apply)
+					manager.With(middleware.RequireManagerPermissions(deps.ManagerAccessVerifier, "unit_economics.view")).Get("/manager/prices/operations/{id}", deps.ManagerPriceHandler.Receipt)
+				} else {
+					manager.Post("/manager/prices/operations", notImplemented)
+					manager.Get("/manager/prices/operations/{id}", notImplemented)
+				}
+			})
 
 			// Workspaces — create/list (no tenant scope needed)
 			if deps.WorkspaceHandler != nil {
@@ -565,6 +678,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 						oz.With(managePermission).Post("/sync", deps.OzonHandler.TriggerSync)
 						// Phase 4: repricer (price changes audit, manual bulk, rollback)
 						oz.Get("/price-changes", deps.OzonHandler.ListPriceChanges)
+						oz.Post("/price-changes/{id}/reconcile", deps.OzonHandler.ReconcilePriceChange)
 						oz.With(managePermission).Post("/price-changes/{id}/rollback", deps.OzonHandler.RollbackPriceChange)
 						oz.With(managePermission).Post("/prices/bulk", deps.OzonHandler.BulkPrices)
 						oz.With(managePermission).Post("/repricer/run", deps.OzonHandler.TriggerRepricerRun)

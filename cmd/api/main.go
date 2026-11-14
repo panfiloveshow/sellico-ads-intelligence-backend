@@ -42,9 +42,9 @@ func main() {
 	}
 	defer deps.Close()
 
-	wbClient := wb.NewClient(cfg, deps.Logger)
+	wbClient := wb.NewClient(cfg, deps.Logger).WithAdGuard(deps.Queries)
 	ozonSellerClient := ozon.NewSellerClient(cfg, deps.Logger)
-	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger)
+	ozonPerfClient := ozon.NewPerfClient(cfg, deps.Logger).WithAdGuard(deps.Queries)
 	asynqRedisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse api redis uri: %v\n", err)
@@ -160,6 +160,11 @@ func main() {
 	ozonSyncService := service.NewOzonSyncService(deps.Queries, ozonSellerClient, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonCampaignActionsService := service.NewOzonCampaignActionsService(deps.Queries, ozonPerfClient, []byte(cfg.EncryptionKey), deps.Logger)
 	ozonRepricerService := service.NewOzonRepricerService(deps.Queries, ozonSellerClient, []byte(cfg.EncryptionKey), deps.Logger)
+	if cfg.ManagerPriceExecutionEnabled {
+		validator := service.NewManagerPriceFinancialValidator(cfg.ProductsAPIBaseURL)
+		service.WithManagerWBPriceValidator(validator)(repricerService)
+		ozonRepricerService.WithManagerPriceValidator(validator)
+	}
 	// AI manager in the API process serves listings + copilot approvals; the
 	// LLM client is only used by the worker, so it may be disabled here.
 	ozonAIManager := service.NewOzonAIManagerService(deps.Queries, ozonPerfClient, ozonCampaignActionsService, llm.NewClient(llm.Config{
@@ -240,8 +245,18 @@ func main() {
 	}
 
 	router := transport.NewRouter(transport.RouterDeps{
-		CORSAllowOrigins:  cfg.CORSAllowOrigins,
-		PermissionChecker: crmPermissionChecker,
+		CORSAllowOrigins:                    cfg.CORSAllowOrigins,
+		PermissionChecker:                   crmPermissionChecker,
+		ManagerAccessVerifier:               sellicoClient,
+		ManagerAdsHandler:                   handler.NewManagerAdsHandler(service.NewManagerAdsService(deps.Queries, sellicoClient)),
+		ManagerAdAdvancedHandler:            handler.NewManagerAdAdvancedHandler(service.NewManagerAdAdvancedService(deps.Queries, sellicoClient, cfg.ManagerAdExecutionEnabled)),
+		ManagerAdContextHandler:             handler.NewManagerAdContextHandler(service.NewManagerAdContextService(deps.Queries, sellicoClient, wbClient, ozonPerfClient, []byte(cfg.EncryptionKey))),
+		ManagerAdExecutionControlHandler:    handler.NewManagerAdExecutionControlHandler(service.NewManagerAdExecutionControlService(deps.Queries, sellicoClient, service.NewManagerAdContextService(deps.Queries, sellicoClient, wbClient, ozonPerfClient, []byte(cfg.EncryptionKey)), cfg.ManagerAdAccountControlEnabled)),
+		ManagerAdOperationsHandler:          handler.NewManagerAdOperationsHandler(service.NewManagerAdOperationsService(deps.Queries, sellicoClient, service.NewManagerAdContextService(deps.Queries, sellicoClient, wbClient, ozonPerfClient, []byte(cfg.EncryptionKey)), cfg.ManagerAdExecutionEnabled)),
+		ManagerPriceExecutionControlHandler: handler.NewManagerPriceExecutionControlHandler(service.NewManagerPriceExecutionControlService(deps.Queries, sellicoClient, wbClient, ozonSellerClient, []byte(cfg.EncryptionKey), cfg.ManagerPriceAccountControlEnabled)),
+		ManagerLegacyPriceReviewHandler:     handler.NewManagerLegacyPriceReviewHandler(service.NewManagerLegacyPriceReviewService(deps.Queries, sellicoClient, wbClient, ozonSellerClient, []byte(cfg.EncryptionKey), cfg.ManagerLegacyPriceReviewEnabled)),
+		ManagerPriceHandler:                 handler.NewManagerPriceHandler(service.NewManagerPriceExecutor(deps.Queries, sellicoClient, repricerService, ozonRepricerService, cfg.ManagerPriceExecutionEnabled)),
+		LegacyPriceDispatchHandler:          handler.NewLegacyPriceDispatchHandler(service.NewLegacyPriceDispatchService(deps.Queries, cfg.LegacyPriceDispatchEnabled), cfg.PriceDispatchGateSecret),
 		RateLimit: transport.RateLimitOpts{
 			RequestsPerSecond: cfg.RateLimitRPS,
 			Burst:             cfg.RateLimitBurst,

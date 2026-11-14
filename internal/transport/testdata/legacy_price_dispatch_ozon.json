@@ -1,0 +1,4 @@
+{
+    "body": "{\"version\":\"legacy_price_dispatch_v1\",\"origin\":\"products\",\"command_id\":\"a5d36305-7c87-41fc-9cc3-026128173afd\",\"sent_at\":1794018385,\"marketplace\":\"ozon\",\"method\":\"POST\",\"account_key\":\"ozon:efa7521711f58faaa3c1181a2b60bb9a4716311dce77ba10971383e79d619198\",\"endpoint\":\"/v1/product/import/prices\",\"payload_sha256\":\"331ec8fc18044fc65ac55127fa89141886237f0d37dc818e2578712f192954f4\"}",
+    "signature": "v1=31547900466034f9c04e420c806556ed5239ed50756c2f325c8830cc34143bec"
+}
