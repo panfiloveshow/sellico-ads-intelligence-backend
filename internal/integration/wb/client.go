@@ -635,7 +635,7 @@ func (c *Client) doRequestInnerURL(ctx context.Context, method, url, token strin
 			responseReader = io.LimitReader(resp.Body, policy.maxResponseBytes+1)
 		}
 		respBody, err := io.ReadAll(responseReader)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, nil, fmt.Errorf("read response body: %w", err)
 		}

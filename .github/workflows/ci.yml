@@ -47,7 +47,7 @@ jobs:
           cache: true
 
       - name: Validate OpenAPI YAML
-        run: ruby -e 'require "yaml"; YAML.load_file("openapi/openapi.yaml"); puts "openapi yaml ok"'
+        run: ruby -e 'require "yaml"; YAML.load_file("openapi/openapi.yaml", aliases: true); puts "openapi yaml ok"'
 
       - name: OpenAPI ↔ router drift check
         run: go run ./tools/check-openapi-drift

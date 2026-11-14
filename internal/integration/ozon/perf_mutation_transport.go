@@ -61,7 +61,7 @@ func (c *PerfClient) sendAdvertisingMutation(ctx context.Context, creds Credenti
 		status = resp.StatusCode
 		var readErr error
 		raw, readErr = io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil || len(raw) > 2*1024*1024 {
 			sendErr = errors.New("Ozon advertising response unreadable or oversized")
 			status = 0

@@ -91,6 +91,15 @@ jobs:
           script: |
             set -euo pipefail
             cd "${DEPLOY_PATH:-/opt/sellico}"
+            echo "--- Disk usage before prune ---"; df -h / /tmp 2>/dev/null || true
+            rm -f backups/.*.partial.* /tmp/tmp.*/*.tar.gz 2>/dev/null || true
+            docker container prune -f || true
+            docker image prune -af --filter "until=1h" || true
+            docker builder prune -af || true
+            if [ "$(df -Pk / | awk 'NR==2{print $4}')" -lt 2097152 ]; then
+              ls -1t backups/*.dump 2>/dev/null | tail -n +3 | xargs -r rm -f || true
+            fi
+            echo "--- Disk usage after prune ---"; df -h / /tmp 2>/dev/null || true
             tmpdir="$(mktemp -d)"
             trap 'rm -rf "$tmpdir"' EXIT
             archive_url="https://github.com/${GITHUB_REPOSITORY}/archive/${GITHUB_SHA}.tar.gz"

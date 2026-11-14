@@ -266,10 +266,24 @@ func verifiedManagerRecord(row sqlcgen.ManagerPriceCommand, nativeContext []byte
 	return c, nil
 }
 
+func wbDiscountInt32(d int) (int32, bool) {
+	if d < 0 || d > 100 {
+		return 0, false
+	}
+	return int32(d), true // #nosec G115 -- bounded to [0, 100] above
+}
+
 func managerWBRowMatches(c ApprovedPriceCommand, row sqlcgen.PriceChange) bool {
-	return c.BeforeWB != nil && row.Source == domain.PriceSourceManual && row.WbProductID == c.BeforeWB.NmID &&
+	if c.BeforeWB == nil {
+		return false
+	}
+	disc, ok := wbDiscountInt32(c.BeforeWB.DiscountPercent)
+	if !ok {
+		return false
+	}
+	return row.Source == domain.PriceSourceManual && row.WbProductID == c.BeforeWB.NmID &&
 		row.OldPriceRub == c.BeforeWB.Sizes[0].PriceCents/100 && row.NewPriceRub == c.WBBasePriceRub &&
-		row.OldDiscountPercent == int32(c.BeforeWB.DiscountPercent) && row.NewDiscountPercent == int32(c.BeforeWB.DiscountPercent)
+		row.OldDiscountPercent == disc && row.NewDiscountPercent == disc
 }
 func managerOzonRowMatches(c ApprovedPriceCommand, row sqlcgen.OzonPriceChange) bool {
 	p := c.BeforeOzon
@@ -332,9 +346,13 @@ func (s *RepricerService) ApplyApprovedManagerPrice(ctx context.Context, workspa
 		return nil, err
 	}
 	before := c.BeforeWB
+	beforeDisc, ok := wbDiscountInt32(before.DiscountPercent)
+	if !ok {
+		return nil, errors.New("WB discount percent out of range")
+	}
 	_, claimed, created, err := s.queries.CreateManagerWBPriceCommand(ctx, record, sqlcgen.CreatePriceChangeParams{
 		WorkspaceID: record.WorkspaceID, SellerCabinetID: record.SellerCabinetID, WbProductID: before.NmID, OldPriceRub: before.Sizes[0].PriceCents / 100,
-		NewPriceRub: c.WBBasePriceRub, OldDiscountPercent: int32(before.DiscountPercent), NewDiscountPercent: int32(before.DiscountPercent),
+		NewPriceRub: c.WBBasePriceRub, OldDiscountPercent: beforeDisc, NewDiscountPercent: beforeDisc,
 		Source: domain.PriceSourceManual, WbStatus: domain.PriceStatusPending, Reason: "personally approved exact manager price", DecisionContext: decision, CreatedBy: record.ActorID}, uuidToPgtype(uuid.New()))
 	if err != nil {
 		return nil, err

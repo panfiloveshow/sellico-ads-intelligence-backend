@@ -857,7 +857,8 @@ func (q *Queries) ClaimSelectedPendingPriceChanges(ctx context.Context, workspac
 	if len(ids) == 0 || len(ids) > 1000 {
 		return nil, errors.New("bounded selected WB commands required")
 	}
-	return q.claimPendingPrices(ctx, workspaceID, sellerCabinetID, submissionBatchID, int32(len(ids)), ids)
+	boundedLimit := int32(len(ids)) // #nosec G115 -- len(ids) is bounded to [1, 1000] above
+	return q.claimPendingPrices(ctx, workspaceID, sellerCabinetID, submissionBatchID, boundedLimit, ids)
 }
 
 func (q *Queries) claimPendingPrices(ctx context.Context, workspaceID, sellerCabinetID, submissionBatchID pgtype.UUID, limit int32, ids []pgtype.UUID) ([]PriceChange, error) {
